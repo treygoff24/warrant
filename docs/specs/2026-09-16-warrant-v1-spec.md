@@ -246,7 +246,7 @@ warrant/
   allowed_signers       a documentation copy of the trust root; never the verification input (HC5)
 ```
 
-The directory is visible, not hidden, because the contract is meant to be read by agents that list a repository, and because a hidden directory reads as tooling rather than as architecture. The name is a section 20 decision.
+The directory is visible, not hidden, because the contract is meant to be read by agents that list a repository, and because a hidden directory reads as tooling rather than as architecture. The name is decision D1.
 
 On the machine running Warrant:
 

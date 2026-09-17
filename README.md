@@ -11,7 +11,7 @@ Specification under review. There is no code in this repository yet. The first c
 Read in this order:
 
 1. `docs/vision.md`: what Warrant is and the lines it will not cross.
-2. `docs/specs/2026-09-16-warrant-v1-spec.md`: the v1 specification, draft 0.1, with the decision criteria it was written under, the alternatives it rejected and why, and the decisions still open.
+2. `docs/specs/2026-09-16-warrant-v1-spec.md`: the v1 specification, draft 0.2. Start with section 1.7 for the complete Atlas experience; `docs/specs/2026-09-17-warrant-v0.2-changes.md` explains the revision in plain language.
 3. `docs/research/`: the primary-source research the spec cites.
 4. `docs/design/`: the requirements brief from agent builders and the earlier quality-tooling research that fed the spec.
 

@@ -7,7 +7,7 @@ Three layers, by kind: governing documents rule (the vision, the spec once ratif
 ## What governs
 
 1. The vision: `docs/vision.md`. The product's argument, its nouns, and the lines it will not cross. Every spec section descends from it; read the two together.
-2. The spec: `docs/specs/2026-09-16-warrant-v1-spec.md`, draft 0.1. Under review by Trey, Astra, and Fable; nothing in it is ratified until the live-state file says so. Section 0 is how it was written, 1.5 the hard constraints, 19 the pins, 20 the decisions (ruled and open), 21 the milestones, 23 what was rejected and why.
+2. The spec: `docs/specs/2026-09-16-warrant-v1-spec.md`, draft 0.2. Under review by Trey, Astra, and Fable; nothing in it is ratified until the live-state file says so. Section 1.7 is the first complete Atlas experience, 1.5 the hard constraints, 19 the candidate pins, 20 the decisions, 21 the build sequence, and 23 the rejections. For the revision's product changes, read `docs/specs/2026-09-17-warrant-v0.2-changes.md`.
 3. The live-state file: `docs/plans/live-state.md`. State, not orders. Update it at every session closeout.
 4. The work graph: beads. `bd ready` on arrival. House rules are in `CLAUDE.md`.
 

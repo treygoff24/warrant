@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec "${DELEGATE_AUDIT:-$HOME/.local/bin/delegate-audit}" "$@"

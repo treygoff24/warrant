@@ -1,0 +1,48 @@
+# OS / editor
+.DS_Store
+~$*
+
+# build output
+/target/
+**/target/
+node_modules/
+dist/
+coverage/
+*.profraw
+
+# env: never committed
+.env
+.env.*
+!.env.example
+
+# AI tooling config: local only
+.claude/
+.codex/
+.cursor/
+.agents/
+.factory/
+.impeccable/
+.papercuts.jsonl
+.clawpatch/
+.desloppify/
+.fallow/
+.deslop/
+.serena/
+.opencode/
+HANDOFF.md
+
+# continuity scratch
+/thoughts/
+/.verify/
+/.worktrees/
+
+# local-only corpora and scratch
+.local/
+/tmp/
+
+# Beads / Dolt runtime (bd manages .beads/.gitignore for the rest)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+.beads/interactions.jsonl

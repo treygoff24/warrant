@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "warrant",
+  "project_id": "cdcf3d4b-2fd0-48ff-b169-a86e910a04aa"
+}

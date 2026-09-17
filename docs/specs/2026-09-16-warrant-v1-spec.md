@@ -204,9 +204,9 @@ Each seam names the borrowed tool, the reason, and the alternatives that lost. T
 | Snapshot identity and integration | git object model through the `gix` crate, falling back to the git binary for `merge-tree --write-tree` where `gix` lacks it | Git already content-addresses trees; a worktree hashed into a tree is comparable to any commit; `merge-tree --write-tree` produces an integrated candidate without touching the worktree | Own hashing scheme (would not be comparable to commits); libgit2 via `git2` (C dependency, no merge-tree); mtime-based change detection (lies) |
 | TypeScript syntax and bindings | `oxc_parser`, `oxc_ast`, `oxc_semantic` | Rust-native, fast, gives per-file symbols, scopes, references, and export and import bindings; already proven in the predecessor | tree-sitter for TypeScript (no binding resolution); SWC (heavier, less semantic surface); the TypeScript compiler as the only parser (Node dependency on every check) |
 | Module resolution | `oxc_resolver`, qualified against `tsc --traceResolution` on the frozen corpus | Handles tsconfig paths, package exports, conditions, symlinks; parity with the compiler is measured, not assumed | Own resolver (the predecessor's early mistake); tsc-only (slow, Node on the fast path) |
-| Compiler-authority symbol references | TypeScript 7's native compiler through its LSP, or `@typescript/typescript6` plus an SCIP indexer, decided by spike S1 | The compiler is the only source that knows type-derived references; which surface to use is unproven as of 2026-09-16 | Reimplementing type inference (no) |
+| Compiler-authority symbol references | A small Node indexer over the exact `typescript@7.0.2` package's `typescript/unstable/async` client, emitting a Warrant-owned, versioned canonical index; the native compiler's LSP as the fallback; the published SCIP artifact as a third candidate; decided by spike S1 | The compiler is the only source that knows type-derived references; TypeScript 7 ships no supported programmatic API, so whatever surface wins is exact-pinned and stays behind a spike | Reimplementing type inference (no); a hypothetical `@typescript/api` package (no such stable surface exists as of 2026-09-16); treating `unstable/*` exports as stable |
 | Structural pattern contracts | ast-grep rules through the `ast-grep-core` and `ast-grep-config` crates over tree-sitter grammars | A pattern-enforced contract is an ast-grep rule with Warrant metadata; users already know the YAML | Semgrep (Python, licensing of the engine for embedding); CodeQL (license); hand-rolled matchers |
-| Evidence from other tools | SARIF 2.1.0 through `serde-sarif`; JSON reporters for knip, Fallow, tsc, vitest, jest, Stryker; coverage as istanbul JSON and lcov | Normalize location and provenance, not meaning; every serious tool emits one of these | Writing detectors Warrant does not need to own |
+| Evidence from other tools | SARIF 2.1.0 through `serde-sarif`; versioned adapters for the JSON reporters of knip, Fallow, vitest, jest, and Stryker, and for TypeScript's diagnostics and `--traceResolution` text (there is no first-party JSON reporter for `tsc`); coverage as istanbul JSON and lcov | Normalize location and provenance, not meaning; every serious tool emits one of these; the adapter, not the format, is the versioned instrument | Writing detectors Warrant does not need to own |
 | Receipts and rulings | in-toto Attestation Statement v1 with one Warrant predicate type per kind; RFC 8785 canonical JSON; detached SSH signatures (sshsig) under one namespace per kind; signing only ever by `ssh-keygen`, verification in-process with the `ssh-key` crate and `ssh-keygen -Y verify` as the oracle | Existing verification tooling, human-readable, works with the key Trey already has; the trust root's own `namespaces=` matching gives kind-scoped delegation for free | GPG (UX); Sigstore keyless (identity infrastructure; a later option for teams); signed commits as the approval channel (approves a tree, not a scoped statement) |
 | Model store and query surface | SQLite through `rusqlite` (bundled), opened read-only for queries with an authorizer | One file per snapshot, every agent speaks SQL, no server | In-memory only (no query surface); a graph database (weight); JSON dumps (no queries) |
 | Policy shape | YAML with a published JSON Schema, validated with `schemars`-generated schemas | Diffable, signable, readable by agents and humans; the schema is the lint | Rego (a second language); Cedar (permission model does not fit graph obligations; kept as a candidate for widening analysis); a TypeScript DSL (harder to sign and diff); CUE and Dhall (adoption) |
@@ -436,11 +436,14 @@ The capability report is embedded in the model, printed by `warrant model --capa
 {
   "integration": "lang-ts",
   "version": "0.1.0",
-  "instruments": { "oxc_parser": "…", "oxc_resolver": "…", "typescript": "7.0.2 (parity-qualified)" },
+  "instruments": { "oxc_parser": "0.150.0", "oxc_semantic": "0.150.0", "oxc_resolver": "11.24.3" },
+  "resolution_oracle": "typescript@7.0.2 --traceResolution",
+  "compiler_reference_instrument": null,
   "resolution_authority": "parity-qualified",
+  "resolution_modes_qualified": ["bundler"],
   "symbol_level": "binding",
   "type_only_distinction": true,
-  "supports": ["esm-import", "esm-reexport", "cjs-require-literal", "dynamic-import-literal", "tsconfig-paths", "package-exports", "project-references"],
+  "supports": ["esm-import", "esm-reexport", "cjs-require-literal", "dynamic-import-literal", "tsconfig-paths", "package-exports", "package-imports", "project-references"],
   "unsupported": [
     { "construct": "dynamic-import-nonliteral", "treatment": "unresolved-dynamic" },
     { "construct": "reflection-registration", "treatment": "requires-declaration" },
@@ -450,7 +453,7 @@ The capability report is embedded in the model, printed by `warrant model --capa
 }
 ```
 
-`resolution_authority` is one of `native` (the language's own compiler produced the resolution), `parity-qualified` (a faster resolver whose agreement with the compiler was measured on the frozen corpus for the configuration features this repository uses), `unqualified` (the repository uses configuration features outside the qualified set), or `syntax-only`. `symbol_level` is `none`, `binding`, or `compiler`. An `unqualified` authority sets `analysis: incomplete` with reason `resolution-unqualified` unless a ruling accepts it for a named configuration feature; this is W02's compatibility profile made explicit.
+`resolution_authority` is one of `native` (the language's own compiler produced the resolution), `parity-qualified` (a faster resolver whose agreement with the compiler was measured on the frozen corpus for the configuration features this repository uses), `unqualified` (the repository uses configuration features outside the qualified set), or `syntax-only`. `resolution_oracle` and `compiler_reference_instrument` are two different claims and are never collapsed into one `typescript` string: the first names the compiler invocation the resolver was qualified against, the second names the instrument that supplied compiler-level references, or `null` while the graph is binding-level. `resolution_modes_qualified` lists the `moduleResolution` modes (`bundler`, `node16`, `nodenext`) that spike S6 qualified for this repository; a mode appears there only after qualification, never from the resolver's feature list. `symbol_level` is `none`, `binding`, or `compiler`. An `unqualified` authority sets `analysis: incomplete` with reason `resolution-unqualified` unless a ruling accepts it for a named configuration feature; this is W02's compatibility profile made explicit.
 
 ### 6.2 Storage
 
@@ -488,7 +491,7 @@ In v1 the TypeScript integration builds a binding-level graph from oxc: every ex
 
 ### 6.6 Spike S1: compiler-authority references
 
-Question: which surface of the TypeScript 7 toolchain should supply compiler-level references and definitions in batch, without a permanent dependency on an unstable API? Candidates: the native compiler's language server queried over LSP for `documentSymbol`, `references`, and `definition`; the `@typescript/typescript6` compatibility package driving a SCIP indexer (`scip-typescript`) to produce an index Warrant reads; and the tsgolint bridge as a pattern for invoking the Go compiler. Exit criteria: on the frozen corpus, for one hundred sampled exported symbols with hand-verified consumer lists, precision and recall both at or above 0.98; a full index of a repository the size of Atlas completing within the gate's instrument time limit; no network; a pinned, recorded instrument identity. Fallback if none passes: binding-level stays, and contracts that need more are labeled. The spike's report goes in `docs/research/` and its decision in section 20.
+Question: which surface of the TypeScript 7 toolchain should supply compiler-level references and definitions in batch, without a permanent dependency on an unstable API? As of 2026-09-16, `typescript@7.0.2` is the stable native compiler and it ships no supported programmatic API; the package exports `typescript/unstable/sync` and `typescript/unstable/async` clients that Microsoft labels unstable (`docs/research/2026-09-16-typescript-analysis-stack.md`). Candidates, in the order the research ranks them: a small Node indexer over the exact `typescript@7.0.2` package's `unstable/async` client that emits a Warrant-owned, versioned canonical index (TypeScript's remote object handles never cross into Rust; only the index does); the native compiler's language server over LSP for `documentSymbol`, `references`, and `definition` (stable protocol, no bulk-index request, one round trip per symbol); and the published `@sourcegraph/scip-typescript@0.4.0` artifact, which resolves `typescript@^5.6.2`, plus, as a separate instrument, a source-pinned build against TypeScript 6. A TypeScript 5 or 6 result never establishes TypeScript 7 authority, whatever it scores. Exit criteria: on the frozen corpus, for one hundred sampled exported symbols with hand-verified consumer lists, precision and recall both at or above 0.98; a full index of a repository the size of Atlas completing within the gate's instrument time limit; the index bytes identical across two runs from clean caches; request count, bytes transferred, and peak memory recorded; every unsupported construct stated explicitly; no network; a pinned, recorded instrument identity including the platform compiler package and its binary digest. Fallback if none passes: binding-level stays, and contracts that need more are labeled. The spike's report goes in `docs/research/` and its decision in section 20 (D10).
 
 ### 6.7 The Rust integration
 
@@ -496,7 +499,9 @@ The second integration exists to prove the seam is not TypeScript-shaped and to 
 
 ### 6.8 Parity qualification
 
-`warrant instrument qualify lang-ts` runs the repository's pinned TypeScript compiler with `--traceResolution` (through a Node sidecar that runs and exits) over the frozen corpus and the current repository, compares every resolution to `oxc_resolver`'s, and writes a parity report listing the tsconfig features exercised and the agreement rate. The integration's capability report is `parity-qualified` only for the feature set the report covers; a repository that uses a feature outside that set is `unqualified` until qualification is rerun with the corpus extended. The predecessor's `doctor compare` did this ad hoc; here it is the mechanism that decides the authority label, and its report is an instrument artifact with a digest in the receipt.
+`warrant instrument qualify lang-ts` is spike S6 made permanent. It runs the repository's pinned TypeScript compiler (`typescript@7.0.2`, `--noEmit --pretty false --traceResolution`, through a Node sidecar that runs and exits) once per owning tsconfig, including each referenced project of a solution-style build under its own config, over the frozen corpus and the current repository. Before that, `lang-ts` enumerates every literal module-bearing construct with oxc (ESM imports and re-exports, `import type`, `import = require`, literal `require`, literal dynamic `import()`, triple-slash type references, project references), recording importer, specifier, syntax kind, type-only flag, and byte span. A versioned adapter parses the trace, normalizes paths according to the project's `preserveSymlinks` setting while keeping both the reported and canonical path, and rejects any trace block it cannot bind to exactly one enumerated edge. `oxc_resolver` then resolves the same edges under the owning config with the importer format, condition names, extension set, package fields, and project references `lang-ts` derived. The comparison is per edge, keyed by (project, importer, span, specifier, resolution mode): a pass is zero disagreements in resolved-versus-unresolved outcome and zero disagreements in the final target after normalization; extra, missing, ambiguous, or unparsed edges are failures, never averaged away. The whole run repeats from clean caches and the canonical edge sets must match. The report is a feature-coverage matrix, and the integration's capability report is `parity-qualified` only for the features and `moduleResolution` modes the matrix covers with zero disagreement on the same platform; a repository that uses a feature outside that set is `unqualified` until the corpus is extended and qualification rerun. A project-level disagreement is never hidden inside a repository-wide percentage.
+
+Two divergences are known at spec time and are the first rows of the matrix. `oxc_resolver` still falls back to `baseUrl/<specifier>` when no `paths` mapping matches, which TypeScript 6 removed as a lookup root; `lang-ts` disables that fallback for configurations on TypeScript 6 or later before qualification is attempted. And `oxc_resolver` exposes no named `node16` or `nodenext` mode; its declaration resolver claims the `bundler` algorithm, and the generic resolver takes condition names from the caller. `lang-ts` derives conditions per importer format and qualifies each mode separately, and `resolution_modes_qualified` in the capability report says which ones passed. The resolver's changelog shows active convergence with `tsc`, which is evidence of movement, not of parity; qualification is the only claim Warrant makes. The predecessor's `doctor compare` did this ad hoc; here it is the mechanism that decides the authority label, and its report is an instrument artifact with a digest in the receipt.
 
 ### 6.9 The query surface
 
@@ -516,6 +521,8 @@ The second integration exists to prove the seam is not TypeScript-shaped and to 
 
 - An in-memory graph only (the predecessor's `petgraph` model). It could not be queried by agents, could not be reused across commands, and had no identity. `petgraph` is still used inside evaluation for SCC and path algorithms over data loaded from SQLite.
 - Compiler-only analysis (tsc for everything). Correct and slow, with a Node process on every lane check; it remains the authority path for references (spike S1) and the parity oracle for resolution.
+- Treating the `typescript/unstable/*` exports as a stable API, or waiting for a stable one. The exports are exact-pinned behind a spike and an instrument lock; a version bump is an instrument change and is classified as one.
+- Using the published `scip-typescript` artifact as TypeScript 7 authority. It resolves TypeScript 5; a 5.x or 6.x index is a different instrument with a different authority label.
 - tree-sitter for TypeScript. No binding resolution; it is the right lowest layer for languages without an integration and for ast-grep patterns, and the wrong one for a program model.
 - Inferring registrations from function names (`register*`, `use*`). Exactly the guess the vision forbids; declarations replace inference.
 - A graph database. One more server, one more query language, no agents that speak it natively.
@@ -884,7 +891,7 @@ Warrant relates evidence to obligations; it does not manufacture evidence. This 
 - `graph`: a static observation from the program model (an edge, a symbol, an entrypoint). Basis `observed-static` or `declared`.
 - `pattern`: an ast-grep match or non-match within a scope.
 - `test-receipt`: a record produced by `warrant attest run` that a command ran on an exact snapshot and what it reported.
-- `report`: an instrument's output (SARIF or a known JSON reporter) imported and bound to a snapshot.
+- `report`: an instrument's output (SARIF or a known JSON reporter) bound to a snapshot by the receipt that produced it, because no instrument's format carries a tree id of its own.
 - `observation`: a receipt that something was observed on a named deployed revision, produced by a runner that signs it.
 - `exception`: a valid exception ruling (section 11.4).
 - `judgment`: a typed model answer from the judgment lane. Judgments can satisfy no compliance obligation and can only set `approval: required` or attach advice (HC1).
@@ -910,23 +917,26 @@ Test evidence has a class, and an obligation names the class it requires: `local
   "exit_code": 0,
   "stdout_digest": "sha256:…",
   "stderr_digest": "sha256:…",
+  "report_files": [ { "path": "reports/vitest.json", "digest": "sha256:…", "adapter": "vitest-json@0.1.0" } ],
   "duration_ms": 41230,
-  "instruments": [ { "name": "vitest", "version": "…", "source": "package-lock" } ],
+  "instruments": [ { "name": "vitest", "version": "5.0.1", "source": "package-lock", "integrity": "sha512-…" } ],
   "started_at": "2026-09-16T21:10:02Z",
   "finished_at": "2026-09-16T21:10:43Z",
   "signature": null
 }
 ```
 
-The receipt records the tree id at the start of the run and verifies it again at the end; a tree that changed during the run produces a receipt with `snapshot_unstable: true`, which satisfies nothing. Environment values are recorded only for an allowlist of names in the manifest; other names are recorded as present or absent, never with values (W25's "without leaking source or secrets"). Stdout and stderr contents are stored in the cache by digest for `warrant explain` to show, and only their digests enter the receipt.
+The receipt records the tree id at the start of the run and verifies it again at the end; a tree that changed during the run produces a receipt with `snapshot_unstable: true`, which satisfies nothing. `report_files` digests every report the command wrote (declared with `--report <path>`), which is how an instrument's output becomes bound to a tree: the receipt is the binding, not anything inside the report. Environment values are recorded only for an allowlist of names in the manifest; other names are recorded as present or absent, never with values (W25's "without leaking source or secrets"). Stdout and stderr contents are stored in the cache by digest for `warrant explain` to show, and only their digests enter the receipt.
 
 An `evidence` obligation is satisfied by a receipt whose tag, class (at or above the minimum), and unit match and whose tree id equals the snapshot being evaluated. A receipt for any other tree is `stale` and is listed as such in the evidence facet, with the tree it was for, so that an agent can see exactly which proof another agent's change invalidated (story D, W22). Section 13.3 defines the one case in which a lane's receipt carries over to an integrated candidate.
 
 ### 9.3 Instrument reports
 
-`warrant evidence import --instrument <name> [--snapshot <kind>] <file>` binds an instrument's output to a snapshot. SARIF 2.1.0 is the preferred format; the known JSON reporters of knip, Fallow, tsc, ESLint, oxlint, vitest, jest, and Stryker are mapped by small adapters that are themselves versioned instruments. Import records the file's digest, the instrument's identity from the lock, and the tree id, and stores each result as an evidence row keyed by instrument, rule id, and location. A report that is truncated, fails to parse, or does not name the tree it was produced for is `report-truncated` or `report-unbound` and sets the analysis facet incomplete when a contract requires that instrument.
+None of knip, Fallow, dependency-cruiser, Stryker, vitest, or jest puts a git tree id in its ordinary output, so a report cannot bind itself to a snapshot and `--snapshot` on a later import cannot prove which tree produced a file. Binding therefore comes from one of two places: the `warrant attest run` receipt that ran the instrument and digested its report (`report_files`, section 9.2), or, for reports produced elsewhere, a signed external attestation (an in-toto Statement from the CI runner) whose subject is the tree and whose predicate carries the report digest. `warrant evidence import --instrument <name> --receipt <id> <file>` and `--attestation <statement>` are the two forms; a report imported with neither is `report-unbound` and satisfies nothing (W24).
 
-Contracts reference instrument evidence through `evidence` requirements that describe the absence or presence of results in a scope, for example `{ kind: report, instrument: knip, rule: "unused-export", absent: true, scope: { modules: ["core.*"] } }` or `{ kind: report, instrument: stryker, metric: "mutationScore", at_least: 0.8, unit: "apps/worker" }`. Meaning is not normalized across instruments (W12): a knip result and a Fallow result about the same symbol are two evidence rows that corroborate, not one deduplicated row, and the explanation shows both.
+SARIF 2.1.0 is the preferred format. The JSON outputs of knip, Fallow, ESLint, oxlint, vitest, jest, and Stryker, and the text of TypeScript's diagnostics (`--pretty false`) and `--traceResolution`, are mapped by small adapters that are themselves versioned instruments; no formal JSON Schema was verified for knip, vitest, or jest, so each adapter's fixture set is the qualification contract for its format, and a format change shows up as a fixture failure before it shows up as a wrong verdict. Import records the raw file's digest (what gets signed and compared), the instrument's identity from the lock, the adapter version, and the tree id, and stores each result as a canonical evidence row keyed by instrument, rule id, and location; raw digest and canonical rows are kept apart so that a re-normalization never changes what was attested. Each adapter also knows its instrument's exit-code contract (Fallow exits 1 on a successful run with findings, which is not a failure) so that "the tool crashed" and "the tool found something" are never confused. A report that is truncated or fails to parse is `report-truncated` and sets the analysis facet incomplete when a contract requires that instrument.
+
+Contracts reference instrument evidence through `evidence` requirements that describe the absence or presence of results in a scope, for example `{ kind: report, instrument: knip, rule: "unused-export", absent: true, scope: { modules: ["core.*"] } }` or `{ kind: report, instrument: stryker, metric: "mutationScore", at_least: 0.8, unit: "apps/worker" }`. A metric such as `mutationScore` is a derived value: the Stryker report schema carries mutant statuses, not the scalar, and the adapter computes it under a pinned formula (`mutation-testing-metrics@3.8.4`) that is part of the adapter's identity. Meaning is not normalized across instruments (W12): a knip result and a Fallow result about the same symbol are two evidence rows that corroborate, not one deduplicated row, and the explanation shows both.
 
 ### 9.4 The instruments lock
 
@@ -935,13 +945,30 @@ Contracts reference instrument evidence through `evidence` requirements that des
 ```yaml
 schema_version: warrant.instruments/1
 instruments:
-  - { name: typescript, kind: npm, version: "7.0.2", role: parity-oracle, required: true, timeout_s: 600 }
-  - { name: knip, kind: npm, version: "…", role: report, required: false, invocation: ["npx", "knip", "--reporter", "json"] }
-  - { name: fallow, kind: binary, version: "…", digest: "sha256:…", role: report, required: false }
+  - name: typescript
+    kind: npm
+    version: "7.0.2"
+    integrity: "sha512-…"              # registry integrity of the package
+    lock_digest: "sha256:…"            # digest of the resolved dependency lock that installed it
+    platform_package: "@typescript/native-preview-linux-x64"   # illustrative; the platform package typescript@7.0.2 selected
+    platform_binary_digest: "sha256:…"
+    roles: [parity-oracle, diagnostics]
+    adapters: { traceResolution-text: "0.1.0", diagnostics-text: "0.1.0" }
+    required: true
+    timeout_s: 600
+  - { name: knip, kind: npm, version: "6.36.0", integrity: "sha512-…", role: report, adapter: "knip-json@0.1.0", invocation: ["npx", "knip", "--reporter", "json"], required: false }
+  - { name: fallow, kind: npm, version: "3.27.0", integrity: "sha512-…", role: report, adapter: "fallow-json@0.1.0", findings_exit_codes: [1], required: false }
+  - { name: stryker, kind: npm, package: "@stryker-mutator/core", version: "10.0.0", role: report, adapter: "stryker-json@0.1.0", schema: "mutation-testing-report-schema@3.8.4", metrics: "mutation-testing-metrics@3.8.4", required: false }
+  - { name: vitest, kind: npm, version: "5.0.1", role: test-runner, adapter: "vitest-json@0.1.0" }
+  - { name: jest, kind: npm, version: "30.5.1", role: test-runner, adapter: "jest-json@0.1.0" }
+  - { name: dependency-cruiser, kind: npm, version: "18.3.1", role: census-importer }
+  - { name: tree-sitter-typescript, kind: grammar, version: "0.23.2", role: pattern-grammar }
   - { name: ast-grep-rules, kind: embedded, version: "warrant-0.1.0" }
-  - { name: lang-ts, kind: integration, version: "0.1.0", qualified_on: "corpus:2026-09-16" }
+  - { name: lang-ts, kind: integration, version: "0.1.0", qualified_on: "corpus:2026-09-16", modes_qualified: [bundler] }
   - { name: nextjs-routes, kind: adapter, version: "0.1.0" }
 ```
+
+An npm entry records the registry integrity, the digest of the resolved dependency lock that installed it, the runtime version actually observed at run time, the platform binary digest where the package selects one, the output schema identity where one exists, and the adapter version; the receipt copies whichever of these the run touched. Two installs with the same `version` and different `lock_digest` are different instruments, because a transitive dependency can change what a report says.
 
 `warrant instrument status` compares the lock to what is installed and what the receipts say ran. A required instrument that is missing, or present at a different identity, sets `analysis: incomplete` with `instrument-missing` or `instrument-mismatch` (HC8). There is no flag that downgrades this to a warning; the fix is to install the pinned version or to change the lock through a ruling.
 
@@ -1414,7 +1441,7 @@ measurable:
   contracts: [style.no-default-exports, style.no-god-files, style.function-length]
   evidence:
     - { instrument: fallow, metric: duplication-blocks, at_most: 0, scope: { modules: ["core.*"] }, consequence: review }
-    - { instrument: stryker, metric: mutationScore, at_least: 0.8, unit: apps/worker, consequence: review }
+    - { instrument: stryker, metric: mutationScore, at_least: 0.8, unit: apps/worker, consequence: review }   # derived by the adapter under its pinned formula (section 9.3)
 
 signals:
   suppressions-added: review
@@ -1560,12 +1587,12 @@ Every unproven seam is a spike with a question, a corpus, and an exit criterion,
 
 | Spike | Question | Exit criterion |
 |---|---|---|
-| S1 (section 6.6) | Which TypeScript 7 surface supplies compiler-authority references in batch | A report comparing the candidates on the frozen corpus with counts, timings, and the unresolved-construct list; D10 records the choice |
+| S1 (section 6.6) | Which TypeScript 7 surface supplies compiler-authority references in batch: the `unstable/async` sidecar, LSP, or the published SCIP artifact | Precision and recall at or above 0.98 on hand-verified samples, index bytes identical across two clean runs, request count, bytes, and peak memory recorded, every unsupported construct stated; a TypeScript 5 or 6 result never establishes TypeScript 7 authority; D10 records the choice |
 | S2 | Does `gix` merge produce the tree and conflict set `git merge-tree --write-tree --merge-base` produces | Identical tree ids and conflict sets over a corpus with renames, directory renames, mode changes, and binary conflicts; on any divergence git is the only producer of integrated candidates and `gix` is a reader |
 | S3 | Can `gix` hash a working tree and an index to the tree `git write-tree` produces | Identical tree ids over the corpus including untracked, modified, ignored, symlinked, and executable files; until it passes, the temporary-index shell-out is the specified path |
 | S4 | Does in-process `ssh-key` verification agree with `ssh-keygen -Y verify` | Fixtures signed by `ssh-keygen` across ed25519, ecdsa, and rsa keys verify identically, and the same tampered inputs (bytes, namespace, principal, validity window, revocation) are rejected by both; the fixtures become the conformance suite |
 | S5 | Do `RLIMIT_AS` and `RLIMIT_CPU` bind a child spawned from Rust on macOS | Measured; the receipt records `limits: not-applied` with the reason where they do not |
-| S6 | Does `oxc_resolver` reach parity with `tsc --traceResolution` on the corpus (section 6.8) | Zero resolved-edge disagreements on every corpus project, or the project is `unqualified` and says so |
+| S6 | Does `oxc_resolver` reach parity with `tsc --traceResolution` on the corpus (section 6.8) | Zero target or outcome disagreements for every enumerated edge in every corpus project, with missing, extra, ambiguous, and unparsed edges counted as failures; a feature-and-mode coverage matrix; each project qualified only for the modes it exercises; any disagreement leaves that project `unqualified` and says so |
 
 ## 18. Repository layout and conventions
 
@@ -1618,14 +1645,14 @@ Documents are dated in their file names and carry a status line. Research report
 
 ## 19. Build-start facts
 
-Pins and facts below were verified on 2026-09-16 by the research lanes named in section 25, from the registries and repositories directly; every version is re-verified at M0 and recorded in `Cargo.lock` and `warrant/instruments.lock`, and the receipt records what actually ran. Items marked [verify: ts-stack] are filled from `docs/research/2026-09-16-typescript-analysis-stack.md`; nothing else is open.
+Pins and facts below were verified on 2026-09-16 by the research lanes named in section 25, from the registries and repositories directly; every version is re-verified at M0 and recorded in `Cargo.lock` and `warrant/instruments.lock`, and the receipt records what actually ran. Nothing in this section is open.
 
 ### 19.1 Toolchain
 
 - Rust stable was 1.98.1 on 2026-09-16. Edition 2024, which selects Cargo resolver 3 and its MSRV-aware resolution. `rust-version = "1.90"` for `core`, `authority`, `snapshot`, `evidence`, and `cli` (the floor tree-sitter 0.27 sets); `rust-version = "1.96"` for `lang-ts` (the floor oxc sets). The MSRV moves only in minor releases and never above stable minus two; a CI job builds on the pinned MSRV toolchain.
 - git 2.40 or newer on PATH (the release that gave `merge-tree --write-tree` its `--merge-base` option); the receipt records the git version that ran.
 - OpenSSH 9.1 or newer on any machine that verifies rulings (`-O verify-time` with the `Z` suffix); the signer's `ssh-keygen` is whatever the signer has, and signing needs only 8.1.
-- Node, as a check-time sidecar only (R5), for `tsc --traceResolution` parity runs and for instruments that are npm packages; never resident, never on the fast path.
+- Node, as a check-time sidecar only (R5): absent from the oxc fast path, required for the compiler-authority sidecar (S1), for `--traceResolution` parity runs (S6), and for instruments that are npm packages; never resident, never on the fast path.
 
 ### 19.2 Crates
 
@@ -1633,8 +1660,10 @@ Pins and facts below were verified on 2026-09-16 by the research lanes named in 
 |---|---|---|---|
 | Git reads, diffs, worktrees, signatures | `gix` | 0.87.1 | MIT OR Apache-2.0 |
 | Model store | `rusqlite` (`bundled`, `hooks`, `limits`, `functions`) | 0.40.2 | MIT |
-| TypeScript syntax and bindings | `oxc_parser`, `oxc_ast`, `oxc_semantic`, `oxc_span`, `oxc_allocator` | 0.150.0 [verify: ts-stack, pin as one set] | MIT |
-| TypeScript resolution | `oxc_resolver` | 11.24.3 [verify: ts-stack] | MIT |
+| TypeScript syntax and bindings | `oxc_parser`, `oxc_ast`, `oxc_semantic`, `oxc_span`, `oxc_allocator` | 0.150.0, pinned as one set (the project versions them together and breaks APIs between minors) | MIT |
+| TypeScript resolution | `oxc_resolver` | 11.24.3 | MIT |
+| TypeScript grammar for patterns | `tree-sitter-typescript` | 0.23.2 (an instrument input, recorded in the lock) | MIT |
+| SCIP reader | `scip` | 0.10.0, only if the SCIP candidate survives S1 | Apache-2.0 |
 | Rust inventory | `cargo_metadata` | 0.23.1 | MIT |
 | Rust syntax | `syn` (full) | 3.0.6, pinned to major 3 | MIT OR Apache-2.0 |
 | Pattern contracts | `ast-grep-core`, `ast-grep-config`, `ast-grep-language` | 0.45.3 | MIT |
@@ -1662,12 +1691,12 @@ Choices inside the table that are mine rather than the report's: `jiff` over `ch
 
 - `git`, for `merge-tree --write-tree --merge-base` (only git's ORT can claim "the tree git would have produced") and, until spike S3 passes, `GIT_INDEX_FILE=<tmp> git add -A && git write-tree` for hashing a working tree.
 - `ssh-keygen`, for signing only, on the signer's machine, and as the conformance oracle for verification.
-- TypeScript's compiler, as a Node sidecar for parity qualification (`--traceResolution`) and, per spike S1, possibly as the compiler-authority reference source. Version [verify: ts-stack; TypeScript 7 native and the 5.x or 6.x compatibility package].
+- TypeScript's compiler: `typescript@7.0.2`, the stable native compiler (it installs `tsc`; the executable comes from the platform package the main package selects, which the receipt records with its binary digest), as the parity oracle (`--traceResolution`), the diagnostics source, and, per spike S1, the compiler-authority sidecar through its `unstable/async` client. `typescript@6.0.3` is the last JavaScript-based compiler; `@typescript/typescript6@6.0.2` is the compatibility wrapper that resolves it, used only inside S1's source-pinned SCIP candidate; `typescript@5.9.3` is recorded only if a 5.x instrument ever runs. `@typescript/native-preview` (latest `7.0.0-dev.20260707.2` at research time) is a development build and is not selected. `@sourcegraph/scip-typescript@0.4.0` is an S1 candidate only; its published artifact resolves `typescript@^5.6.2`.
 - `rust-analyzer`, as a process (`rust-analyzer scip`), pinned by release (2026-09-14 at research time), read through the `scip` crate; absent means "missing instrument," never silently skipped.
 
 ### 19.4 Instruments ingested as evidence, initial lock
 
-TypeScript [verify: ts-stack], knip [verify: ts-stack], Fallow [verify: ts-stack], dependency-cruiser (census importer only) [verify: ts-stack], Stryker [verify: ts-stack], vitest and jest JSON reporters [verify: ts-stack]. Every entry in `warrant/instruments.lock` carries name, version, binary or package digest, and the arguments Warrant passes; section 9.4 has the format.
+`typescript@7.0.2` (diagnostics and trace adapters), `knip@6.36.0`, `fallow@3.27.0` (exit 1 means findings, not failure), `dependency-cruiser@18.3.1` (census importer only), `@stryker-mutator/core@10.0.0` with `mutation-testing-report-schema@3.8.4` and `mutation-testing-metrics@3.8.4` as the adapter's schema and metric identity, `vitest@5.0.1`, and `jest@30.5.1`. No formal JSON Schema was verified for knip, vitest, or jest; their adapters' fixtures are the format contract. Every entry in `warrant/instruments.lock` carries name, version, registry integrity, dependency-lock digest, platform binary digest where one exists, adapter version, and the arguments Warrant passes; section 9.4 has the format.
 
 ### 19.5 Judgment backend facts
 
@@ -1729,7 +1758,7 @@ Port list from Specgate: `src/parser/` and `src/resolver/` as the starting point
 
 ## 22. Risks
 
-- TypeScript 7 removes the general compiler API. The binding-level graph does not depend on it; spike S1 is where the exposure lives, and the fallback is labeled contracts. Monitored by the research report and re-verified at M1.
+- TypeScript 7 ships no supported programmatic API; the `unstable/*` exports it does ship can change under a pin. The binding-level graph does not depend on them; spike S1 is where the exposure lives, and the fallback is labeled binding-level contracts plus the LSP, which is a stable protocol.
 - oxc's release cadence breaks the integration. Pinned exactly; upgrades go through `instrument upgrade` with a corpus report, which is the same discipline we ask of users.
 - Binding-level references are not enough for the contracts Atlas needs. Mitigation: every contract states its limits; the census and the self-test reveal what cannot be seen; S1 is sequenced before Atlas's effect contracts are made blocking.
 - The widening classifier produces `uncertain` too often and every change needs a signature. Mitigation: `restructuring` is proven by obligation-set equality, which covers most refactors; `stats` reports the uncertain rate; the classifier grows dimensions where the rate is high.
@@ -1753,7 +1782,7 @@ Rejected because five properties of the predecessor are each the negation of a v
 
 - Snapshots: own hashing; mtime; descending submodules (4.6).
 - Inventory: first-match-wins; unknown-as-source; framework knowledge in the core (5.8).
-- Model: in-memory only; compiler-only; tree-sitter for TypeScript; name-based inference of registrations; a graph database (6.10).
+- Model: in-memory only; compiler-only; tree-sitter for TypeScript; name-based inference of registrations; a graph database; `unstable/*` as stable; the published SCIP artifact as TypeScript 7 authority (6.10).
 - Policy: Rego; Cedar as the language; a code DSL; built-in layer taxonomies; severity levels (7.9).
 - Findings: severities; autofix in v1; positional identity (8.7).
 - Evidence: running tests; boolean "passed"; normalized meaning; auto-updating instruments (9.6).

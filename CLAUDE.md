@@ -18,3 +18,4 @@ Do not let `bd` tooling re-inject its managed CLAUDE.md or AGENTS.md block; this
 ## Beads Dolt remote (local setup, once per clone)
 
 The Dolt remote is the same repository as git `origin` and is kept out of tracked files because this repository is public. After cloning, run `bd dolt remote add origin "git+$(git remote get-url origin)"` once; then `bd dolt push` and `bd dolt pull` sync the work graph.
+The beads pre-commit hook warns "no Dolt remote configured" because it reads `config.yaml`, where the remote is deliberately absent; the warning is expected and `bd dolt push` still works.

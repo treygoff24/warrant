@@ -46,3 +46,6 @@ HANDOFF.md
 .beads-credential-key
 .beads/proxieddb/
 .beads/interactions.jsonl
+
+# delegate runtime state (per-workspace registry, runs, mail)
+.delegate/

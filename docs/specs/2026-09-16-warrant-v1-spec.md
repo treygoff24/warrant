@@ -1,6 +1,6 @@
 # Warrant v1 specification
 
-Version: 0.2 draft, 2026-09-17. Status: revised by Astra after Trey's approval of the review direction; awaiting Fable review and final ratification by Trey, Astra, and Fable. Approval to revise is not approval to build. Owners: Trey Goff, Fable, and Astra. Fable wrote draft 0.1; the research trail and section numbers remain stable. The plain-language revision summary is `docs/specs/2026-09-17-warrant-v0.2-changes.md`.
+Version: 0.3 draft, 2026-09-17. Status: incorporates Astra and Fable's co-design review and Trey's R14-R16 decisions; pending final ratification. Approval to revise is not approval to build. Owners: Trey Goff, Fable, and Astra. Fable wrote draft 0.1, Astra revised draft 0.2, and both contributed to this draft. The research trail and section numbers remain stable. The plain-language co-design summary is `docs/specs/2026-09-17-warrant-v0.3-changes.md`; the earlier revision summary remains available beside it.
 
 ## Read the vision first
 
@@ -102,6 +102,7 @@ Deferred from v1 with a path, not refused:
 
   The initial optional advice interface stays; expanding it must earn its cost. Required human review driven by model thresholds is deferred pending D3.
 - Importers and report readers not needed by the first adopter. This is a demand test, not a blanket dependency cut (sections 9.3, 15.3).
+- Warrant-managed trust-root changes and scoped signer delegation. The first signer uses existing protected key administration; v1 rulings are amendments and exceptions (R15).
 
 ### 1.4 Users
 
@@ -119,7 +120,7 @@ Deferred from v1 with a path, not refused:
   The compliance facet uses the model, approved policy, and deterministic evidence only. Initial model output is advice. Any later model-triggered approval requirement must be separately adopted and explicitly described as blocking acceptance (D3).
 - HC2. Gate acceptance requires all four facts.
 
-  Every applicable acceptance obligation has snapshot-bound evidence or a valid signed exception, required analysis is complete, required evidence is satisfied, and no approval is pending. Otherwise the gate exits nonzero.
+  Every applicable acceptance obligation has snapshot-bound evidence or a valid signed exception to an evaluated violation, required analysis is complete, required evidence is satisfied, and no approval is pending. An exception cannot turn missing analysis, missing execution, invalid authentication, or unstable source into proof. A human can amend the requirements, with the reduced claim visible, but cannot bypass unchanged requirements into an accepted receipt. Otherwise the gate exits nonzero.
 - HC3. Unread is not absent.
 
   A file the inventory could not read, a construct an integration could not analyze, a report that was truncated, or a required instrument that was missing sets `analysis: incomplete` and is listed with its reason.
@@ -171,7 +172,7 @@ A capability is complete when: it is reachable from the CLI and, where applicabl
 Atlas supplies the real repository; the names below are acceptance-story examples, not assertions about paths verified in the current Atlas checkout. M0 pins an Atlas revision and records the actual symbols and tests. The complete experience has these observable results:
 
 1. A minimal census inventories the repository and proposes the existing module boundaries. A person decides the intended owners, public interfaces, and contracts. Current behavior is not automatically approved architecture.
-2. An agent asks, in ordinary words, "add grouped undo to a meeting debrief." Warrant identifies the relevant command owner, existing undo registration and compensation interfaces, a representative existing implementation, consumers and transports, and required tests, with source references and clear evidence labels. Ambiguous ownership or incomplete retrieval is visible; no match is not a finding that no owner exists.
+2. An agent receives architectural context before deciding how to implement "add grouped undo to a meeting debrief," through a verified supported harness adapter or an explicit context query (section 12.6). Warrant identifies the relevant command owner, existing undo registration and compensation interfaces, a representative existing implementation, consumers and transports, and required tests, with source references and clear evidence labels. Ambiguous ownership, unavailable delivery, or incomplete retrieval is visible; no match is not a finding that no owner exists.
 3. The agent describes a proposed second undo dispatcher. Warrant shows the existing responsibility and its consumers as a reuse candidate. It distinguishes an observed interface conflict from an inferred design overlap. A legitimate new responsibility remains possible; the tool does not forbid novelty by resemblance.
 4. The agent edits using its existing workflow. Warrant's advisory checks follow affected imports and registrations, name broken contracts, and state what it cannot determine. A named authorization call is only a call occurrence, never proof that unauthorized effects are prevented.
 5. Existing test tools run in the approved evidence environment against the exact candidate. Warrant checks their reports and required evidence, including the real-database race, readback, authorization-denial, and failure-path cases named by the approved Atlas contracts. Each result says what the tests exercised, not that all possible behavior was proven.
@@ -185,6 +186,19 @@ The same experience must work without a model service, a task registry, or a pla
 Warrant owns architectural vocabulary, inventory completeness, evidence requirements, policy comparison, the four-fact verdict, and the binding and verification of receipts. Git supplies source identity and combines branches outside Warrant. Compilers and parsers supply code facts; ast-grep supplies structural matches; existing tests, Fallow, coverage and mutation tools supply their own measurements. An existing isolated runner executes candidate-controlled commands. SSH tools sign records. SQLite stores the queryable map. Planning skills, Beads, and agent workflows decide and track work without a Warrant-specific integration.
 
 The first product includes the full path in section 1.7, not every possible adapter. Sections describing future-compatible formats do not turn optional expansions into release prerequisites. Section 21 states the dependency order for building Warrant itself; it defines no planning feature inside the product.
+
+### 1.9 The four opening examples and what helps detect them
+
+The vision's opening failures need different mechanisms. A green structural check does not establish that none of them exists.
+
+| Example | Before the edit | After the edit | Remaining limit |
+|---|---|---|---|
+| A second cache | Context and proposal retrieval name an existing owner or interface as a reuse candidate. | A new module, store, or public symbol can trigger a conceptual-expansion signal. | Duplication inside allowed boundaries need not violate a structural contract or create a signal. Different names can defeat retrieval; S7 measures those misses. |
+| A third validator | Declared responsibilities, aliases, and same-shape matches suggest existing implementations. | Conceptual-expansion signals and relevant borrowed duplicate-code evidence can prompt review. | Same shape is not same purpose, and different code can serve the same purpose. Neither resemblance nor a count proves duplication. |
+| A helper nobody calls | Context can show existing consumers and interfaces, but cannot know who will consume unwritten code. | Borrowed unused-code evidence, such as an applicable Fallow or knip result, is consumed through an evidence requirement. | Only the detector's supported symbols and entrypoints are covered. Dynamic or unresolved consumers can invalidate an unused-code inference. |
+| `authorize` never on the request path | Context names the capability's required authorization behavior and evidence, not just a function to mention. | Structural checks report call occurrences; named denial and failure tests help detect behavior that bypasses the intended control. | Binding-level references do not prove guarding control flow. A passing test establishes only its exercised cases; test adequacy remains unproved. |
+
+Ordinary dependency, interface, effect, and state contracts catch supported boundary violations, not every form of conceptual duplication. Evidence and capability contracts connect the other checks to explicit obligations. Retrieval qualification (S7), actual before-decision delivery (section 12.6), and the early outcome checkpoint (R14) test the upstream promise. Passing Warrant is never a claim that the code contains no slop.
 
 ## 2. Domain vocabulary
 
@@ -288,7 +302,7 @@ Each seam names the borrowed tool, the reason, and the alternatives that lost. T
 | Compiler-authority symbol references | A small Node indexer over the exact `typescript@7.0.2` package's `typescript/unstable/async` client, emitting a Warrant-owned, versioned canonical index; the native compiler's LSP as the fallback; the published SCIP artifact as a third candidate; decided by spike S1 | The compiler is the only source that knows type-derived references; TypeScript 7 ships no supported programmatic API, so whatever surface wins is exact-pinned and stays behind a spike | Reimplementing type inference (no); a hypothetical `@typescript/api` package (no such stable surface exists as of 2026-09-16); treating `unstable/*` exports as stable |
 | Structural pattern contracts | ast-grep rules through the `ast-grep-core` and `ast-grep-config` crates over tree-sitter grammars | A pattern-enforced contract is an ast-grep rule with Warrant metadata; users already know the YAML | Semgrep (Python, licensing of the engine for embedding); CodeQL (license); hand-rolled matchers |
 | Evidence from other tools | SARIF through `serde-sarif`; qualified readers for the first repository's test, Fallow, type, coverage, and mutation reports. Section 9.3 governs additional readers | Preserve tool meaning and verify provenance; reuse shared readers when that reduces total work | Rebuilding detectors; committing to every reporter before a consumer needs it |
-| Receipts and rulings | in-toto Attestation Statement v1 with one Warrant predicate type per kind; RFC 8785 canonical JSON; detached SSH signatures (sshsig) under one namespace per kind; signing only ever by `ssh-keygen`, verification in-process with the `ssh-key` crate and `ssh-keygen -Y verify` as the oracle | An existing schema and store convention, human-readable, works with the key Trey already has; the trust root's own `namespaces=` matching gives kind-scoped delegation for free. Verification is Warrant's own with `ssh-keygen -Y verify` as the oracle: the Statement is a schema, not a verifier, and a detached sshsig is not a DSSE or Sigstore bundle (section 11.2) | GPG (UX); Sigstore keyless (identity infrastructure; a later option for teams); signed commits as the approval channel (approves a tree, not a scoped statement) |
+| Receipts and rulings | in-toto Attestation Statement v1 with one Warrant predicate type per kind; RFC 8785 canonical JSON; detached SSH signatures (sshsig) under one namespace per kind; signing only ever by `ssh-keygen`, verification in-process with the `ssh-key` crate and `ssh-keygen -Y verify` as the oracle | An existing schema and store convention, human-readable, works with the key Trey already has; the trust root's own `namespaces=` matching gives kind restrictions for free. Verification is Warrant's own with `ssh-keygen -Y verify` as the oracle: the Statement is a schema, not a verifier, and a detached sshsig is not a DSSE or Sigstore bundle (section 11.2) | GPG (UX); Sigstore keyless (identity infrastructure; a later option for teams); signed commits as the approval channel (approves a tree, not a scoped statement) |
 | Model store and query surface | SQLite through `rusqlite` (bundled), opened read-only for queries with an authorizer | One file per snapshot, every agent speaks SQL, no server | In-memory only (no query surface); a graph database (weight); JSON dumps (no queries) |
 | Policy shape | YAML with a published JSON Schema, validated with `schemars`-generated schemas | Diffable, signable, readable by agents and humans; the schema is the lint | Rego (a second language); Cedar (permission model does not fit graph obligations; kept as a candidate for widening analysis); a TypeScript DSL (harder to sign and diff); CUE and Dhall (adoption) |
 | Optional model advice | System One's state-plus-typed-questions shape; a needed backend behind a small adapter | Keeps model suggestions structured and separate from observed facts. Usefulness and calibration are unproven until measured | A required hosted service; a broad provider platform before useful advice is demonstrated |
@@ -350,7 +364,7 @@ Warrant runs as a single process that exits. Parallelism is a bounded `rayon` po
 
 ### 3.7 Trust boundaries
 
-Four roles matter. They may use existing CI or local isolation; Warrant does not build a runner platform.
+Four roles matter. They may use existing CI or local isolation; Warrant does not build a runner platform. The agent side is untrusted: source, tests, configuration, reports, and local tools may be edited or fabricated. Candidate code still runs on the execution side, so moving it to another account alone does not make its reports or that account's credentials trustworthy. The protected controller must observe execution without exposing its credential or acceptance authority to those commands.
 
 - The agent controls its own working environment.
 
@@ -367,7 +381,9 @@ Four roles matter. They may use existing CI or local isolation; Warrant does not
 
 The approved-policy anchor is an independently supplied record naming the admitted policy and instrument/configuration identities. The gate verifies the signed chain from that anchor to any proposed replacement. A candidate's `--base` value, repository trust-root copy, or edited CI configuration cannot select the authority against which it is judged. D5 chooses the concrete deployment before an authoritative Atlas gate can be claimed.
 
-Residual limits: a compromised trusted runner or signer, a signer who approves without understanding, and a faithfully executed test that does not test the intended behavior. Merely putting a trust-root file under another user's ownership does not protect a gate running arbitrary agent commands as the agent's own user. Such a deployment is advisory, not authoritative.
+A candidate first deployment uses an existing isolated worker launched by a protected controller. The controller runs no candidate code, holds the evidence-producer credential, materializes approved inputs, captures results, and authenticates them. The worker has no signing credential, reads immutable source, and can reach only admitted inputs and services. The protected gate may share the controller's trusted installation, while the human signing key remains separate. A human-managed service plus an existing container runner is one candidate, not a selected or proven estate deployment. D5 qualification checks the actual boundary, not the number of accounts or the presence of a read-only mount. Creating accounts, services, or infrastructure needs its own human authorization after the R14 checkpoint.
+
+Residual limits: a compromised trusted controller or signer, a signer who approves without understanding, and a faithfully executed test that does not test the intended behavior. Merely putting a trust-root file under another user's ownership does not protect a gate running arbitrary agent commands as the agent's own user. Such a deployment is advisory, not authoritative.
 
 ## 4. Snapshots
 
@@ -548,7 +564,7 @@ The capability report is embedded in the model, printed by `warrant model --capa
 
 `resolution_authority` is `native`, `parity-qualified`, `unqualified`, or `syntax-only`. Native names the compiler/build-system source of the particular fact; parity-qualified names measured agreement for specific configuration features on the frozen corpus. Neither implies compiler-level references. `resolution_oracle` names the qualification invocation, while `compiler_reference_instrument` names the reference producer or is null. Qualified modes appear only after S6's measured result, never from a dependency's advertised feature list. `symbol_level` is `none`, `binding`, or `compiler`.
 
-An unqualified requirement makes analysis incomplete. An `accept-limit` ruling may explicitly narrow the acceptance requirement for a named feature, but it does not turn the unsupported claim into satisfied evidence. The original gap, the signed disposition, and the reduced denominator remain visible. Full analysis means complete for those declared requirements, never that the accepted gap was technically solved.
+An unqualified requirement makes analysis incomplete. A typed `accepted-limitation` amendment may explicitly narrow the acceptance requirement for a named feature, but it does not turn the unsupported claim into satisfied evidence. The original gap, the signed disposition, expiry, and the reduced denominator remain visible. Full analysis means complete for those declared requirements, never that the accepted gap was technically solved.
 
 ### 6.2 Storage
 
@@ -699,11 +715,11 @@ A selector that matches nothing at the snapshot is a lint error (`empty-selector
 
 ### 7.4 Contract kinds
 
-Common fields on every contract: `id`, `kind`, `intent`, `owner`, `authority` (`ruling:<id>` or `draft`), `class` (default `invariant`), `expires` (required when `class: migration`), `claim`, `requires_capabilities`, `enforcement` (`static`, `pattern`, `evidence`, `mixed`), `limits`, `on_violation` (`fail`, `review`, `note`; defaults `fail` for invariants, `review` for preferences, `fail` for migrations), `supersedes` and `overrides` (named contract ids). Short examples omit repeated common fields; the published schema requires them or supplies the explicitly documented defaults.
+Common fields on every contract: `id`, `kind`, `intent`, `owner`, `authority` (`ruling:<id>` or `draft`), `class` (default `invariant`), `expires` (required when `class: migration`), `claim`, `requires_capabilities`, `enforcement` (`static`, `pattern`, `evidence`, `mixed`), `limits`, `on_violation` (`fail`, `review`, `note`; defaults `fail` for invariants, `note` for preferences under R16, `fail` for migrations), `supersedes` and `overrides` (named contract ids). Short examples omit repeated common fields; the published schema requires them or supplies the explicitly documented defaults.
 
 The claim vocabulary is closed and versioned with the evaluator. Initial claims include `declared-ownership`, `resolved-dependency-boundary`, `observed-consumer-boundary`, `recognized-write-boundary`, `required-structure`, and `tested-behavior`. Their required capabilities include `module-resolution`, `binding-references`, `recognized-call-sites`, `structural-match`, and authenticated test-case results for named scenarios. Each contract kind has a fixed mapping from claim to required capabilities; a user cannot lower that mapping by editing a field. Compiler references are a separate capability and do not imply control flow or taint flow. A contract requesting an unsupported proof is `enforcement-unsupported`, including under `enforcement: mixed` or `pattern`.
 
-An observation-only preference with `on_violation: note` creates advice, not an acceptance obligation. Invariants cannot use `note`. Removing an acceptance requirement by converting it to advice is a widening change. Exceptions and accepted limitations stay visible as human dispositions, not as stronger technical proof.
+An observation-only preference with `on_violation: note` creates visible, counted advice, not an acceptance obligation. It remains in the check and verdict's advice output, including omitted counts when bounded. A human may explicitly choose `fail` or `review` for a preference; either promotion is a signed, classified policy amendment. Invariants cannot use `note`. Removing an acceptance requirement by converting it to advice is a widening change. Exceptions and accepted limitations stay visible as human dispositions, not as stronger technical proof.
 
 `module`. Declares a module, where it lives, what it owns, and its interface.
 
@@ -928,7 +944,7 @@ For a repository shaped like Atlas, the whole architecture in section 1.5 of tha
 
   Expressive, and exactly the wrong thing: policy that is code is harder to sign, to diff semantically, and to keep out of the agent's pen.
 - Built-in layer taxonomies ("domain, application, infrastructure"). W's "not a rigid taxonomy" objection stands; layers are one shape of `dependency` contract, not a primitive.
-- Severity levels. The predecessor had `error`, `warning`, `info` per rule; `warning` is how incomplete analysis became success. Warrant has `on_violation` with three consequences, none of which is "print and pass."
+- Treating missing required analysis as a warning. Advice-only preferences may print without blocking, but required analysis and evidence cannot silently become advice.
 
 ## 8. Evaluation and findings
 
@@ -999,7 +1015,7 @@ Findings that share a cause are grouped: one primary, the rest as symptoms with 
 
 ### 8.5 Signals
 
-Signals are reviewable indicators that are neither findings nor facets. They are computed by comparing the candidate to its base, they carry numbers and locations, and they never carry a score (HC9). The profile decides whether a signal is `note` or `review` (which sets `approval: required`).
+Signals are reviewable indicators that are neither findings nor facets. They are computed by comparing the candidate to its base, they carry numbers and locations, and they never carry a score (HC9). The profile decides whether a signal is `note` or `review` (which sets `approval: required`). An advisory check may select its source base. When a signal can affect authoritative acceptance, the gate's protected configuration supplies the comparison base; the candidate cannot choose itself as the base to hide a change. A required comparison without its base is incomplete, not zero change.
 
 Metric-gaming signals (W13) include widened exclusions, reclassified source or tests, and removed tests from required units. Language-specific patterns count changed assertions, suppressions, and type escapes. Where an external complexity instrument supports the comparison, a signal can show complexity moved between functions rather than removed. Each is an observation to interpret, not proof of intent to game a metric.
 
@@ -1079,7 +1095,7 @@ Test evidence describes its environment: `local` (isolated local logic), `mocked
 The execution contract is checked by the protected runner controller, not asserted by candidate flags:
 
 1. Materialize exactly the selected source in an isolated execution root and run with that root as the working directory. Index or commit selection must not execute against unrelated dirty worktree bytes. The runner constrains candidate reads to that source and the declared dependency, generated-input, and service inputs. Existing isolation provides this boundary; Warrant does not implement a sandbox.
-2. Bind the dependency artifacts actually installed, generated inputs, fixtures, migrations, command/configuration identity, environment profile, and service identities or setup recipes. A lockfile alone does not identify installed bytes. A `--class integration` label or an environment-variable name is not evidence that a real database was used.
+2. Bind the dependency artifacts actually installed, generated inputs, fixtures, migrations, command/configuration identity, environment profile, and service identities or setup recipes. A lockfile alone does not identify installed bytes. An authenticated immutable image or materialization record may bind several input classes together; it names the covered content and derivations rather than omitting those identities. A `--class integration` label or an environment-variable name is not evidence that a real database was used.
 3. Keep captured source immutable to the tested process, or use an approved runner mechanism that detects source mutation during execution, including a change restored before exit. Build outputs go to separate writable locations and are digested when they feed analysis or tests. Comparing the source before and after alone is insufficient.
 4. Capture fresh reports from that execution, bind their digests and actual case outcomes, and reject missing, malformed, truncated, skipped, or zero-case results where the obligation requires executed passing cases. The gate admits only reports whose producer signature and runner profile match its protected configuration. Candidate code must not possess the producer credential.
 
@@ -1283,7 +1299,7 @@ When stdout is a terminal, or with `--format human`, the verdict renders as the 
 
 ### 11.1 The ruling record
 
-A ruling is the only way policy changes, an exception is granted, a trust root changes, an instrument is adopted, or a gate is overridden. It is an in-toto Statement, like a receipt, so that one canonicalization, one signature carrier, and one verification path serve both. Its subject is the thing the ruling is about (the policy digest it binds to, the tree it overrides, the trust root it replaces), and its `predicateType` names the kind, so the kind is inside the signed bytes and cannot be relabeled after signing.
+A ruling changes approved policy or accepts specific known violations. v1 has two kinds, `amendment` and `exception` (R15). It is an in-toto Statement, like a receipt, so one canonicalization, signature carrier, and verification path serve both. Its subject binds the relevant policy digest and its predicate names the scope and kind inside the signed bytes. A ruling cannot be relabeled after signing. Trust-root administration is outside Warrant; no ruling bypasses the four-fact acceptance requirement.
 
 ```json
 {
@@ -1292,13 +1308,17 @@ A ruling is the only way policy changes, an exception is granted, a trust root c
   "predicateType": "https://warrant.dev/attestation/ruling/exception/v1",
   "predicate": {
     "id": "r_2026-09-18-clone-exception-3",
-    "statement": "The two implementations of retry backoff in worker/ingest and worker/send are intentionally separate until the ingest rewrite lands; consolidating now would couple their release cadence.",
-    "scope": { "modules": ["worker.ingest", "worker.send"] },
-    "findings": ["f_3n9q…", "f_8k2w…"],
-    "applies_to_count": 2,
-    "disposition": "temporary-debt",
-    "candidate_range": { "exact_tree": "sha1:71ab…" },
-    "expires": "2026-12-01T00:00:00Z",
+    "items": [{
+      "statement": "These retry-backoff implementations remain separate until the ingest rewrite; consolidating now would couple their release cadence.",
+      "owner": "trey",
+      "scope": { "modules": ["worker.ingest", "worker.send"] },
+      "findings": ["f_3n9q…", "f_8k2w…"],
+      "occurrences_digest": "sha256:…",
+      "applies_to_count": 2,
+      "disposition": "temporary-debt",
+      "candidate_range": { "exact_tree": "sha1:71ab…" },
+      "expires": "2026-12-01T00:00:00Z"
+    }],
     "supersedes": null,
     "rendered_digest": "sha256:…",
     "signer": "trey",
@@ -1309,32 +1329,31 @@ A ruling is the only way policy changes, an exception is granted, a trust root c
 }
 ```
 
-Kinds, each with its predicate type suffix and its sshsig namespace:
+The two kinds have distinct predicate types and sshsig namespaces:
 
 | Kind | Predicate type | Namespace |
 |---|---|---|
 | `amendment` | `ruling/policy/v1` | `warrant-ruling-policy@<domain>` |
 | `exception` | `ruling/exception/v1` | `warrant-ruling-exception@<domain>` |
-| `trust-root` | `ruling/trust/v1` | `warrant-ruling-trust@<domain>` |
-| `instrument` | `ruling/instrument/v1` | `warrant-ruling-instrument@<domain>` |
-| `override` | `ruling/override/v1` | `warrant-ruling-override@<domain>` |
-| `delegation` | `ruling/delegation/v1` | `warrant-ruling-trust@<domain>` |
-| `accept-limit` | `ruling/accept-limit/v1` | `warrant-ruling-policy@<domain>` |
 
-One namespace per kind is what lets the trust root scope a principal to kinds with OpenSSH's own `namespaces=` pattern list and no Warrant code: a delegate admitted for `warrant-ruling-exception@<domain>` cannot sign a policy change, and `ssh-keygen` itself rejects the attempt (`docs/research/2026-09-16-signing-and-attestation.md`, section 4.2, observed). `delegation` shares the trust namespace because admitting a signer is a trust change; `accept-limit` shares the policy namespace because accepting an unqualified authority changes what the policy means.
+OpenSSH's `namespaces=` matching prevents an exception-only key from signing a policy amendment (`docs/research/2026-09-16-signing-and-attestation.md`, section 4.2, observed). Keeping these namespaces does not require a Warrant delegation system. Unsupported ruling kinds fail validation rather than being treated as amendments.
 
-Kinds in detail: `amendment` (policy changes; carries `policy_digest_before` and `policy_digest_after` and the classified change list it approves), `exception` (section 11.4), `trust-root` (carries the new allowed-signers content), `instrument` (adopts a lock change; carries the upgrade report digest), `override` (bypasses a gate for a named candidate; `expires` at most seven days out; rendered prominently in every verdict while valid), `delegation` (grants a principal the right to sign rulings within a scope, with expiry), `accept-limit` (accepts an `unqualified` resolution authority or an unsupported construct for a named feature, with expiry).
+An `amendment` carries `policy_digest_before`, `policy_digest_after`, the classified changes, candidate scope, and a typed payload. `policy-change` changes rules; `instrument-adoption` also binds the before/after instrument identities and upgrade report; `accepted-limitation` names the unsupported feature, original gap, reduced requirement and denominator, and expiry. Combining changes retains every applicable payload requirement. A limitation is a visible change in the claim, never evidence that the original claim was proved. At expiry the limitation authorizes nothing and cannot silently leave the reduced requirement active.
+
+An `exception` contains a nonempty `items` array, even for one item. Each item enumerates evaluated findings, their occurrence identity and count, scope, applicable policy, disposition, reason, candidate range, and required expiry or review date (section 11.4). The shared Statement subject binds the applicable policy; items cannot select another policy. One signature covers the exact array, not future items sharing a cause. This is the same schema for a single exception and an onboarding batch.
 
 `drafted_by` is informational. `signer` must verify against the protected trust root. `candidate_range` supports an exact source tree or `descendant_of_commit` with an actual commit id. Trees have no ancestry. An ancestry-scoped ruling requires an independently verified candidate commit-to-tree binding and ancestry check; a bare supplied tree cannot satisfy it, and branch names are labels, not authority. Policy amendments can cover later code under the same rules without repeatedly signing each tree. Exceptions also bind finding identity, count, scope, and the applicable policy.
 
-`expires` is required for temporary debt, overrides, delegation, and accepted limits. `created_at` is informational. `signed_at` is written by the trusted signing tool inside signed bytes; expiry uses the protected gate clock. This prevents an agent from choosing signing time but does not provide an independently trusted timestamp. A compromised signing key can sign a false date; revocation applies regardless of claimed `signed_at`, and affected rulings require fresh approval from an uncompromised authority.
+`expires` is required for temporary-debt items and accepted-limitation payloads. `created_at` is informational. `signed_at` is written by the trusted signing tool inside signed bytes; expiry uses the protected gate clock. This prevents an agent from choosing signing time but does not provide an independently trusted timestamp. A compromised signing key can sign a false date; revocation applies regardless of claimed `signed_at`, and affected rulings require fresh approval from an uncompromised authority.
 
 ### 11.2 Draft, render, sign, verify
 
-- `warrant rule draft --kind <kind> ...` writes `warrant/rulings/<id>.json` with `status: draft` and no signature. Any principal, including an agent, can run it.
+- `warrant rule draft --kind amendment|exception ...` prepares unsigned rulings.
+
+  It writes a new file with `status: draft`; any principal, including an agent, can run it. `--kind exception --from <receipt>` creates an exact itemized batch of known findings for human review (section 11.4); it does not approve them.
 - `warrant rule render <id>` prints the effect summary the signer reads:
 
-  for an amendment, the classified policy diff with each change's direction; for an exception, the findings covered, their explanations, and the count bound; for an instrument, the corpus report; for a trust-root change, the principals added and removed. The render is deterministic and its digest is recorded in the signed record as `rendered_digest`, so that "what did I read when I signed" is answerable later.
+  for an amendment, the classified policy diff and every typed payload, including an instrument's corpus report or a limitation's original gap and reduced claim; for an exception, each covered finding, reason, occurrence and count bound, disposition, and expiry or review date. It shows the total and any truncation rather than hiding batch items behind their shared cause. The render is deterministic and its digest is recorded in the signed record as `rendered_digest`, so that "what did I read when I signed" is answerable later.
 - `warrant rule sign <id> --key <path>` is human-only signing.
 
   The trusted signing tool sets signed time, canonicalizes the record, renders its effects and classification from those bytes, and asks the human to confirm. It invokes `ssh-keygen -Y sign` with the kind's namespace and writes the detached signature. Warrant never implements private-key operations, and the signing environment never executes candidate code or plugins. Agents never receive the key or access to its signing service.
@@ -1345,21 +1364,27 @@ Kinds in detail: `amendment` (policy changes; carries `policy_digest_before` and
 
 Any byte change to a signed record invalidates it. There is no edit; there is a new record with `supersedes` set, signed again. The old record stays in the repository as history.
 
+One supported handoff uses Git to transport the draft and signed record. The human fetches the proposed revision and reads the named draft blobs without checking out or executing candidate code; a trusted Warrant installation renders and signs those exact inputs, and the human returns the final record and detached signature. The signing environment uses trusted Git configuration and never loads candidate hooks or plugins. A commit signature alone is not the ruling signature. An agent-posted paragraph is a convenient preview, not a substitute for the trusted signing render. This is a workflow using existing tools, not a required shared directory or a fixed number of commits inside Warrant.
+
 Signing and verification go through one interface, the envelope, with one v1 implementation: `sshsig-detached`, the canonical file plus `<id>.json.sig`, produced by `ssh-keygen` and verified in-process with `ssh-key`. The interface is `sign(bytes, kind) -> signature artifact` and `verify(bytes, artifact, trust root, kind) -> principal or failure`, and each record's signature index names the envelope that carries it. DSSE (a JSON envelope whose payload is the same Statement bytes under `payloadType: application/vnd.in-toto+json`), cosign bundles, and GitHub `actions/attest` are conforming envelopes for a later version over the same predicate; a verifier that lacks an envelope reports `envelope-unsupported`, never `failed`, and the predicate never changes shape per envelope. What v1 does not claim: that a Warrant record verifies with in-toto, cosign, or `gh attestation verify` as shipped. It verifies with `warrant verify` and with `ssh-keygen -Y verify`, and the documentation says so in those words (D14).
 
-### 11.3 Trust roots and delegation
+### 11.3 Trust roots and human administration
 
-The trust root is an OpenSSH `allowed_signers` file: one line per principal with the key and a `namespaces=` pattern list naming the kinds that principal may sign (`warrant-ruling-*@<domain>` for a full signer, `warrant-ruling-exception@<domain>` for a delegate, `warrant-receipt@<domain>` for a gate runner), with `valid-after` and `valid-before` where rotation is planned. Beside it sits an optional `revoked_keys` file in OpenSSH's revoked-keys format. Both are supplied to the gate by `--trust-root` or `WARRANT_TRUST_ROOT`, defaulting to `${XDG_CONFIG_HOME:-~/.config}/warrant/allowed_signers` on the gate user, from a location the candidate cannot write (HC5): a file on the CI runner owned by a user the agent is not, a secret materialized at job start by a workflow file that branch protection keeps agents from editing, or the signer's own machine when the signer runs the gate. The copy at `warrant/allowed_signers` is documentation; `warrant gate` refuses to read it as the root and says so, and a mismatch between the repository copy and the gate's root is reported as a signal so that tampering with the copy is visible rather than silently ignored. The gate needs OpenSSH 9.1 or newer for the `verify-time` option; section 19 records the floor.
+The trust root is an OpenSSH `allowed_signers` file: one line per principal with the key and a `namespaces=` pattern list naming the kinds that principal may sign (`warrant-ruling-*@<domain>` for a full signer, `warrant-ruling-exception@<domain>` for an exception-only signer, `warrant-receipt@<domain>` for a gate runner), with `valid-after` and `valid-before` where rotation is planned. Beside it sits an optional `revoked_keys` file in OpenSSH's revoked-keys format. Both are supplied to the gate by `--trust-root` or `WARRANT_TRUST_ROOT`, defaulting to `${XDG_CONFIG_HOME:-~/.config}/warrant/allowed_signers` on the gate user, from a location the candidate cannot write (HC5): a file on the CI runner owned by a user the agent is not, a secret materialized at job start by a workflow file that branch protection keeps agents from editing, or the signer's own machine when the signer runs the gate. The copy at `warrant/allowed_signers` is documentation; `warrant gate` refuses to read it as the root and says so, and a mismatch between the repository copy and the gate's root is reported as a signal so that tampering with the copy is visible rather than silently ignored. The gate needs OpenSSH 9.1 or newer for the `verify-time` option; section 19 records the floor.
 
-Changing the root is a `trust-root` ruling signed by a principal in the current root; the gate verifies it against the root it already holds, applies it, and writes the new root back to its own copy, so the chain bootstraps from one out-of-band file and every later change is a signed, visible, supersedable record. Rotation is two lines: the old key with `valid-before`, the new with `valid-after`; old rulings still verify because key validity is evaluated at their `signed_at`. Delegation is a `delegation` ruling by a root principal that admits another principal for a scope (a set of modules and ruling kinds) and an expiry; the gate enforces the scope, so a delegate's exception outside its modules is invalid even though the signature is good. Emergency overrides exist (`override`), are bounded by expiry, and are rendered at the top of every verdict while they are in force, because a hidden override is worse than a failed gate.
+The human administers this protected root, revocation list, and approved-policy anchor through existing system or CI controls. Warrant does not rewrite its own trust root, enroll accounts, or manage scoped delegation in v1. Every verification uses the current admitted configuration and records its identity; candidate files cannot install a new root or resurrect a revoked key. Rotation can retain the old key with `valid-before` and admit the new key with `valid-after`. Historical key-window checks use signed time, while current revocation still overrides a claimed earlier date. Configuration changes belong in the operator's existing audit history, not an agent-editable repository copy.
+
+There is no `override` ruling or bypass-to-green mode. A human may ship without Warrant acceptance, but the receipt remains blocked under the unmet requirements. A signed amendment can deliberately change those requirements, and a valid exception can accept a known violation; the resulting record shows the changed rules or disposition. Neither action turns absent execution, incomplete analysis, an invalid signature, or unstable source into a verified fact. Full trust-root transition and scoped-delegation workflows are deferred until a real multi-signer use requires them.
 
 ### 11.4 Exceptions
 
-An exception is a ruling that satisfies a specific obligation for specific findings. It carries a disposition: `false-positive` (the finding is wrong; the contract or the integration should be fixed, and the exception records the defect), `accepted-design` (the finding is right and the design is intended; carries a `review_at` date), or `temporary-debt` (the finding is right and will be fixed; `expires` is required). Identity binds to finding ids (section 8.6) and, for findings that count instances (clones, capability instances), to `applies_to_count`: a third clone does not inherit a two-clone exception (W16).
+An exception item satisfies a specific evaluated obligation for enumerated findings by human disposition, not by stronger technical evidence. It carries a disposition: `false-positive` (the finding is wrong; the contract or integration should be fixed, and the item records the defect), `accepted-design` (the finding is right and intended; carries a `review_at` date), or `temporary-debt` (the finding is right and will be fixed; `expires` is required). Identity binds to finding ids (section 8.6), scope, an occurrence-evidence digest, and `applies_to_count`. The occurrence digest binds the canonical checked subjects and matched evidence, not only display line numbers or the count. A third clone does not inherit a two-clone exception, and a replacement occurrence does not inherit one merely because the count stayed two. Identity mapping must preserve the covered meaning within the supported check; uncertainty requires fresh review (W16).
 
 The gate evaluates exceptions on its own clock. An expired exception satisfies nothing and is listed under `approval.items` as `expired-exception`. `warrant rule stats` reports exceptions by disposition and age, exceptions whose findings have disappeared (candidates for pruning by a superseding ruling), exceptions whose scope widened (a finding that now covers more instances than the count bound), and growth over time.
 
-There is no baseline (HC7). Importing inherited debt at onboarding is a batch of `temporary-debt` exceptions with owners and expiry, produced by `warrant census` as drafts and signed as one ruling, and it looks different from fixing the debt in every report. A measured floor (a mutation score, a coverage figure, a bundle size) is not a baseline: it is an `evidence` requirement with a threshold, it satisfies only that evidence obligation, and no threshold ever stands in for a finding's acceptance (HC7).
+There is no baseline (HC7). `warrant rule draft --kind exception --from <receipt>` can draft an onboarding batch, grouped by cause for reading but containing individually enumerated findings, occurrence identities, counts, reasons, owners, scope, and expiry. The human completes missing reasons and selects the intended items; an incomplete item cannot be signed. One signature binds the exact nonempty item array and applicable policy. Re-running the command never refreshes an old signature or accepts future findings. An expired or inapplicable item covers nothing even when other items remain valid. Every report distinguishes accepted debt from fixed code.
+
+A measured floor (a mutation score, a coverage figure, a bundle size) is an ordinary `evidence` requirement with a threshold. It satisfies only that measurement obligation, never a finding's acceptance. Missing or stale required execution remains missing or stale; reducing the evidence requirement requires an explicit policy amendment rather than an exception pretending the test ran.
 
 ### 11.5 The policy-widening classifier
 
@@ -1393,7 +1418,7 @@ A new Warrant or instrument identity requires explicit adoption even if the froz
 | Edit `warrant/allowed_signers` in the repository | The gate ignores it; the root comes from outside (HC5); the mismatch is a reported signal | |
 | Edit a signed ruling's JSON, or reformat it | Signature verification fails; bytes are compared, never re-serialized | |
 | Choose a draft date to make a ruling look current | Trusted signing sets signed time; current gate time enforces expiry and current revocation still applies | A compromised signer or signing key can lie about signing time; there is no independent timestamp proof |
-| Sign an exception with a delegate key and label it a policy amendment | The namespace is per kind; the trust root's `namespaces=` list scopes the key; `ssh-keygen` refuses | |
+| Sign an exception with an exception-only key and label it a policy amendment | The namespace is per kind; the trust root's `namespaces=` list scopes the key; `ssh-keygen` refuses | |
 | Copy an old signed ruling to cover a new finding | Finding ids, count bounds, `candidate_range`, and `policy_digest` are inside the signed bytes | |
 | Write "approved by Trey" anywhere | Nothing reads prose for approval | |
 | Fabricate a test receipt | Every gate-credited class requires authenticated provenance from an admitted protected runner, exact execution bindings, and parsed report results | An authenticated runner can still run an inadequate test; recomputing hashes proves no execution |
@@ -1416,7 +1441,7 @@ A new Warrant or instrument identity requires explicit adoption even if the froz
 - A user and role database inside Warrant. W15 says use an existing trusted mechanism; the allowed-signers file and the CI runner's secret store are that mechanism.
 - One namespace for every ruling kind (`warrant-ruling@v1`, the first draft of this section).
 
-  Per-kind namespaces cost nothing and give kind-scoped delegation with OpenSSH's own `namespaces=` matching; the first draft would have needed Warrant code to enforce what the trust root can already say.
+  Per-kind namespaces cost nothing and give kind restrictions with OpenSSH's own `namespaces=` matching; the first draft would have needed Warrant code to enforce what the trust root can already say.
 - DSSE envelopes as the v1 default.
 
   A DSSE payload cannot be verified by stock `ssh-keygen`, and the detached sshsig beside a canonical file can. DSSE's reason to exist, signing the payload bytes rather than a re-encoding, is met here another way, because verification compares bytes and never re-serializes (section 10.4). DSSE is a conforming envelope over the same Statement behind the envelope interface (section 11.2), for teams that already verify DSSE bundles, and D14 records the choice.
@@ -1424,6 +1449,8 @@ A new Warrant or instrument identity requires explicit adoption even if the froz
 
   They prove a signature predates a revocation without trusting either clock, which matters only after a key compromise, when re-signing the rulings that still matter is the right response anyway; a token field is reserved in the signature index for later.
 - A drafter-supplied `signed_at`. It is the backdating hole git has (validity is checked at the committer's own timestamp) and it costs one line to close.
+- Seven ruling kinds for the first signer. R15 retains amendments and itemized exceptions; typed amendment payloads preserve instrument and limitation requirements without separate approval systems.
+- An emergency green receipt for an unevaluated candidate. A human's decision to ship is not evidence that unchanged acceptance requirements were met.
 
 ## 12. Interfaces for agents
 
@@ -1439,24 +1466,24 @@ The CLI returns architectural answers, diagnostics, and verifiable records. MCP 
 | `warrant query <question> \| --sql` | Architectural facts from the model | nothing |
 | `warrant context <description> \| --paths \| --symbols` | Relevant architecture before an edit | cache only |
 | `warrant propose --description \| --patch \| --paths` | Architectural impact of one proposed change | temporary snapshot/cache only |
-| `warrant check [--changed] [--index] [--compare <receipt>]` | Advisory verdict or finding comparison | cache, check receipt |
+| `warrant check [--snapshot <snapshot>] [--changed] [--index] [--base <snapshot>] [--compare <receipt>]...` | Advisory verdict with optional named source or result comparisons | cache, check receipt |
 | `warrant gate --candidate <snapshot> --gate-config <protected-config>` | Authenticated full verdict on supplied source | protected receipt store |
 | `warrant explain <finding \| cause> [--show-source]` | Evidence, affected consumers, and possible remedies | nothing |
 | `warrant verify <receipt>` | Verification result with skipped checks explicit | nothing |
 | `warrant policy compile \| lint \| effective \| diff` | Rule compilation, explanation, or comparison | cache only |
-| `warrant rule draft \| render \| sign \| verify \| list \| stats` | Ruling records and explanations | named draft/signature outputs; signing is human-only |
+| `warrant rule draft \| render \| sign \| verify \| list \| stats` | Amendments or itemized exceptions; `draft --kind exception --from <receipt>` supports exact batches | named draft/signature outputs; signing is human-only |
 | `warrant attest run -- <cmd>` | Evidence recorded from an existing tool | execution outputs, receipt |
 | `warrant evidence import \| list` | Bound evidence or explicitly untrusted import | cache |
 | `warrant instrument status \| qualify \| upgrade` | Identity checks or before/after reports; upgrade does not adopt a version | cache, named report output |
-| `warrant census observe \| propose \| import` | Observed architecture or unapproved policy proposals; import only for supported formats | cache; new proposal file on explicit request |
+| `warrant census observe \| propose \| import` | Observation without existing policy; starter manifest and policy proposals; import only for supported formats | cache; new proposal files on explicit request |
 | `warrant map [--scope] [--diff]` | Mermaid or JSON view of the same model | nothing unless caller redirects |
 | `warrant serve --mcp` | Stdio access to advisory/read operations | cache, check receipts only |
-| `warrant hook <harness> [--install]` | Thin diagnostic hook for a supported harness | harness config only on explicit install |
+| `warrant hook <harness> [--install]` | Supported before-decision context delivery and diagnostic feedback, with coverage and availability explicit | harness config only on explicit install |
 | `warrant selftest \| self-qualify` | Installed-control checks or build comparison on the frozen corpus | isolated fixture outputs, report |
 | `warrant judgment advise` | Optional, explicitly enabled typed model advice | advice cache; may use network |
 | `warrant schema <name>` and `warrant capabilities` | Schema and implemented features, including unsupported adapters | nothing |
 
-No command edits application source, creates work items, installs packages, merges branches, or adopts policy. Census and ruling commands write proposals to a caller-selected new file and refuse an existing destination. Source changes for `propose --patch` and self-test are confined to disposable analysis fixtures. The `attest` command runs caller-supplied tools only under the execution distinction in section 9.2; it does not gain permission to run them as the human signer or gate controller.
+A command not on this list needs a section 20 ruling to exist. No command edits application source, creates work items, installs packages, merges branches, or adopts policy. Census and ruling commands write proposals to caller-selected new files and refuse existing destinations. Source changes for `propose --patch` and self-test are confined to disposable analysis fixtures. The `attest` command runs caller-supplied tools only under the execution distinction in section 9.2; it does not gain permission to run them as the human signer or gate controller.
 
 ### 12.2 The output contract
 
@@ -1470,9 +1497,15 @@ No command edits application source, creates work items, installs packages, merg
 
 ### 12.3 Context
 
-`warrant context` accepts a description, paths, or symbols and answers what already exists and what governs it. It does not store the description as a task. The initial retrieval path works offline: exact symbols and paths, declared responsibility names and aliases, intent text, then graph neighbors and relevant examples. Optional semantic retrieval can suggest candidates, but never certifies ownership or changes compliance.
+`warrant context` accepts a description, paths, or symbols and answers what already exists and what governs it. It uses the description for retrieval without persisting it as a task or prompt log. The initial retrieval path works offline: exact symbols and paths, declared responsibility names and aliases, intent text, then graph neighbors and relevant examples. Optional semantic retrieval can suggest candidates, but never certifies ownership or changes compliance.
+
+Prompt text, paths, and source stay local unless the user explicitly enables an identified service and its allowed data scope through runtime configuration. Editable repository metadata alone cannot authorize export. A method that calls a service names it in `retrieval.methods`; cached model facts do not require storing prompt text. The harness or caller may retain its own transcript, which is outside Warrant's storage promise.
 
 Every candidate has a reason for inclusion and source references. Declared owners, observed consumers, authenticated test observations, and inferences have different labels. A representative example points to actual source and the evidence available for it; similarity alone does not make it a recommended implementation. Tests on older source are identified as historical examples, not current proof.
+
+Results identify the requested source and policy separately from those actually used, plus the model-input identity (section 3.5). `model_status: current` means the model matches the requested snapshot, policy, dependencies, and analysis configuration, not necessarily the caller's worktree. `stale` labels a last-known result when those inputs differ or freshness cannot be established; all graph-derived answers remain stale because an unchanged file can depend on changed inputs elsewhere. Observed changed paths help explain the mismatch but are not a complete invalidation proof. `unavailable` returns no model facts and a reason. A hook never waits for a full cold rebuild merely to pretend its last-known model is current.
+
+`--budget <bytes>` bounds the complete encoded output, including identity and omission metadata. Capped results identify omitted scope without cutting a JSON value or hiding truncation. A budget too small for the minimal status document returns an explicit error; adapters reserve enough room for that status and their own framing.
 
 ```json
 {
@@ -1480,7 +1513,11 @@ Every candidate has a reason for inclusion and source references. Declared owner
   "query": "add grouped undo to the meeting debrief",
   "snapshot": "sha1:...",
   "policy_digest": "sha256:...",
-  "retrieval": { "status": "matched", "methods": ["declared-vocabulary", "graph-neighbors"], "candidates_total": 2, "returned": 2, "truncated": false },
+  "requested_snapshot": "sha1:...",
+  "requested_policy_digest": "sha256:...",
+  "model_inputs_digest": "sha256:...",
+  "model_status": "current",
+  "retrieval": { "status": "matched", "methods": ["declared-vocabulary", "graph-neighbors"], "candidates_total": 2, "returned": 2, "truncated": false, "qualified": true, "qualification_report": "sha256:..." },
   "facts": [
     { "kind": "owner", "subject": "core.actions.undo", "basis": "declared", "source": "contract:core.actions.undo", "text": "Owns compensation registration." },
     { "kind": "interface", "subject": "core.actions.undo::registerCompensation", "basis": "observed-static", "source": "model:symbol/42", "text": "Three observed instances consume this interface." }
@@ -1494,7 +1531,9 @@ Every candidate has a reason for inclusion and source references. Declared owner
 }
 ```
 
-Retrieval reports `matched`, `ambiguous`, `no-match`, or `incomplete`. Ambiguous returns alternatives and the missing discriminator; no-match says no candidate was found by the named methods, not that the repository has no owner. Incomplete identifies unindexed scope, unsupported analysis, or truncation. Resolution, ownership, and retrieval completeness are separate. Tests cover ordinary-language queries whose words differ from symbols, multiple plausible owners, a genuinely new responsibility, stale examples, and capped results. Known aliases live with domain declarations, not in a hidden synonym database.
+Retrieval reports `matched`, `ambiguous`, `no-match`, or `incomplete`. Ambiguous returns alternatives and the missing discriminator; no-match says no candidate was found by the named methods, not that the repository has no owner. Incomplete identifies unindexed scope, unsupported analysis, or truncation. A conversational prompt unrelated to the code should return no-match without irrelevant candidates; S7 counts misleading answers on those prompts separately from missed owners. Resolution, ownership, and retrieval completeness are separate.
+
+S7 qualifies retrieval before M1 closes. `retrieval.qualified` is false until an applicable report meets the predeclared acceptance criteria; the existence of a report, including a failing one, is not qualification. A qualified result identifies that report and its measured scope. Tests cover vocabulary mismatch, multiple plausible owners, genuine novelty, unrelated prompts, stale examples and inputs, no model, and capped output. Known aliases live with domain declarations, not in a hidden synonym database.
 
 ### 12.4 Propose
 
@@ -1506,9 +1545,23 @@ Reuse candidates are labeled `exact-name`, `declared-responsibility`, `structura
 
 The stdio MCP server exposes the same advisory/read operations: context, query, propose, explain, check, verify, effective policy, and map. Results use the CLI schemas. Cache and check-receipt writes are disclosed; no source mutation, signing, policy adoption, or gate execution is exposed. An acceptance system invokes the protected gate independently. The first complete CLI experience does not wait for every transport adapter.
 
-### 12.6 Hooks
+### 12.6 Hooks: delivery and feedback
 
-Supported harness and Git hooks invoke changed-source diagnostics and do not edit, restage, install, or approve anything. Hooks on temporarily unparseable code return `mode: diagnostic` with provisional parse errors and the affected scope, not a clean verdict. A timeout is explicit and cannot produce a partial acceptance receipt. Normal checks and the gate still treat required parse failures as incomplete analysis. Hooks are convenience feedback, never the enforcement boundary.
+The map must reach an agent before the decision it is meant to inform. Context attached to the result of an already-selected tool call can improve the next decision, but cannot change the edit that just executed. v1 starts with a bounded map summary at session start and a bounded `warrant context` result beside the submitted prompt, on a harness whose before-decision placement has been verified. An ordinary complete no-match may stay silent; timeout, stale, unavailable, and incomplete are not treated as no-match. The adapter records delivery status without logging prompts. Warrant stores no session progress or delivery history; any ephemeral deduplication belongs to the harness and is keyed to the source, policy, and context actually delivered.
+
+After supported editing events, harness and Git hooks invoke changed-source diagnostics. They do not edit, restage, install packages, or approve anything. Temporarily unparseable code returns `mode: diagnostic` with provisional parse errors and affected scope, not a clean verdict. Normal checks and the gate still treat required parse failures as incomplete analysis. Hooks are guidance and feedback, never the enforcement boundary.
+
+A shipped delivery adapter must demonstrate:
+
+1. Context appears in model input before the relevant decision, established by an observable harness run, not merely a hook process starting before a write. Installation, trust review, and a successful sentinel delivery are separate facts.
+2. Delivered context identifies requested and used source/policy inputs, freshness, retrieval status, and omitted scope under section 12.3's output budget.
+3. The context subprocess has a deadline shorter than the harness timeout so the adapter can normally return a small failure status. If the harness skips, kills, distrusts, or fails to invoke the adapter, delivery is unavailable; no warning from code that never ran is promised. Qualification includes these cases and the harness-visible evidence of nondelivery. No timeout produces an acceptance receipt.
+4. The adapter names the events and tool families it supports. A file-tool matcher does not establish coverage of arbitrary shell writes. Prompt-submit guidance can precede either kind of edit, but it is not file-targeted interception of every writer.
+5. No task record, hidden work state, prompt log, or implicit remote disclosure is introduced. Privacy follows section 12.3. Noise on unrelated prompts, repeated context, output caps, and cold-model failure are measured rather than assumed harmless.
+
+Current [Claude Code hook documentation](https://code.claude.com/docs/en/hooks) and its [guide](https://code.claude.com/docs/en/hooks-guide), and the [Codex hook documentation](https://developers.openai.com/codex/hooks), were consulted on 2026-09-17 alongside local versions Claude Code 2.1.275 and Codex 0.154.0. They document session-start and prompt-submit context delivery. Nonblocking pre-tool context does not establish an opportunity to reconsider the pending call; tool matching, output limits, and trust admission differ by harness. No Warrant adapter or runtime delivery test exists yet. M1 records exact supported versions and tested events; one verified adapter is sufficient for the early comparison, not a promise of every transport.
+
+A deny-with-context experiment may cancel a pending edit and allow the model to reconsider. It is not the default: cancellation is stronger than ordinary guidance and needs harness-owned duplicate suppression to avoid loops. Only a separately specified comparison arm can establish whether that interruption improves outcomes. `warrant hook <harness>` emits configuration; `--install` changes it only on explicit request, and cannot grant native hook trust on the user's behalf.
 
 ### 12.7 Considered and rejected
 
@@ -1542,7 +1595,9 @@ The gate re-derives acceptance using the current protected policy anchor, trust 
 
 ### 13.5 Findings introduced by combination
 
-When given the combined source and comparison revisions, Warrant can report that a finding appears only in the combination. Comparisons use the same approved rules and instruments and include their completeness. If either comparison is incomplete, attribution is `undetermined`, never blame assigned to a developer or agent. This is a statement about code differences, not an assignment or work status.
+`warrant check --snapshot <candidate> --compare <receipt-a> --compare <receipt-b>` supplies the candidate and named comparison results. The caller obtains each receipt by checking its own source revision; Warrant neither combines branches nor registers their work. The output lists every compared source, policy, instrument, scope, and completeness identity. Compare underlying obligations and occurrence/count evidence, not only stable finding ids: an existing finding can gain a new violating occurrence without changing id.
+
+The ordinary claim is `introduced-relative-to-comparisons`, naming the supplied revisions. Stronger combination-only attribution requires independently verifiable derivation of the combined candidate from the named inputs, with any additional resolution edits identified, plus comparable complete results for the relevant obligations under the same approved rules and instruments. Without that derivation, unrelated source revisions cannot prove that combining work caused a finding. Missing inputs, incomparable requirements, or incomplete comparison evidence make attribution `undetermined`. This is a code comparison, never blame or an assignment of work.
 
 ### 13.6 External consumers of findings
 
@@ -1569,11 +1624,11 @@ The first useful map must not require writing all the policy by hand, nor should
 
 ### 15.1 Adoption path
 
-`census observe` inventories source and reports units, observed imports and entrypoints, cohesion, cycles, and possible interfaces without claiming that the architecture is approved. Ownership is explicitly undeclared where no human-approved contract exists. Inventory/readability accounting still runs, but census is not an acceptance mode.
+`census observe` runs without a Warrant manifest or existing policy. It discovers supported integrations from existing language and workspace manifests, reporting ambiguous or unsupported units rather than guessing completeness. It inventories source and reports units, observed imports and entrypoints, cohesion, cycles, and possible interfaces. Ownership is explicitly undeclared where no human-approved contract exists. Inventory/readability accounting still runs, but census is not an acceptance mode.
 
-`census propose` writes a new draft policy with suggested modules, dependencies, and interfaces. Each item carries its observed basis, uncertainty, and `authority: draft`. Existing shape is an example to judge, not a promise of zero findings or an automatic owner assignment. Effects, capabilities, and required behavior tests need human intent the code cannot supply.
+`census propose` writes a starter manifest and draft policy to new caller-selected destinations. Initial module candidates come from workspace/package boundaries, directory groupings, and observed import cohesion, using a deterministic method recorded with the proposal. Each item carries its basis, uncertainty, and `authority: draft`. Directory structure is a grouping hypothesis, not approved architecture. Proposed dependencies and interfaces reflect observed edges and exports; ambiguous ownership remains unresolved. Existing shape is an example to judge, not a promise of zero findings. Effects, capabilities, and required behavior tests need human intent the code cannot supply. Existing files are never overwritten; rerunning census produces a new proposal rather than silently updating approved policy.
 
-A person edits toward intended architecture. Existing `policy lint`, `check`, `explain`, and `rule draft` operations show the resulting obligations and any existing violations. Accepted debt is covered by individually scoped signed exceptions with reasons and expiry, never by saving the current finding set as a baseline. Existing planning tools handle any code repair independently. A signed amendment adopts the rules; the protected gate can then enforce them.
+A person edits toward intended architecture. Existing `policy lint`, `check`, `explain`, and `rule draft` operations show the resulting obligations and any existing violations. `rule draft --kind exception --from <receipt>` removes repetitive drafting, but every accepted-debt item still has a specific identity, reason, scope, and expiry. It is never a saved finding baseline. Existing planning tools handle code repair independently. A signed amendment adopts the rules; the protected gate can then enforce them.
 
 The minimal observe/propose path ships with the first pre-edit map. It does not wait for importers, a remediation workflow, or full model-assisted naming.
 
@@ -1595,7 +1650,7 @@ Every importer produces drafts, lists unmapped or uncertain semantics, and refus
 
 ### 15.4 Comparing findings after a change
 
-`check --compare <receipt>` reports whether a previously identified obligation is now satisfied by evidence, covered by an exception, still unsatisfied, no longer applicable with a stated reason, or undeterminable. These are evidence comparisons, not repair statuses. A subject disappearing is not automatically a successful fix; missing consumers or entrypoints remain checkable obligations. No packet title, assignee, repair dependency, open/closed state, or task export is produced.
+`check --compare <receipt>` reports whether a previously identified obligation is now satisfied by evidence, covered by an exception, still unsatisfied, no longer applicable with a stated reason, or undeterminable. Repeating the argument adds named comparison results under section 13.5's comparability rules. These are evidence comparisons, not repair statuses. A subject disappearing is not automatically a successful fix; missing consumers or entrypoints remain checkable obligations. No packet title, assignee, repair dependency, open/closed state, or task export is produced.
 
 ### 15.5 Considered and rejected
 
@@ -1638,7 +1693,7 @@ judgment:
       criteria_from: module-catalog-with-none-and-cannot-tell
 ```
 
-Measurable acceptance requirements and review-triggering deterministic signals belong to the signed policy meaning. Advice settings have explicit provenance and privacy controls, but cannot silently add an acceptance requirement. These are example preferences, not automatically ratified Atlas policy.
+Measurable acceptance requirements and review-triggering deterministic signals belong to the signed policy meaning. Preferences advise by default (R16); the explicit `review` entries above illustrate a deliberately stricter choice, not the default or ratified Atlas policy. Advice stays visible with counts. Its settings have provenance and privacy controls, but cannot silently add an acceptance requirement.
 
 ### 16.3 State and privacy
 
@@ -1710,6 +1765,14 @@ Additional acceptance cases required by this revision:
 | A combined tree changes only a fixture, generated input, or migration | Evidence from the other tree remains stale. |
 | An exception expires while a cached result exists | Current gate acceptance is re-derived and blocked; cached green is not authority. |
 | Optional model service is disabled or unavailable | Missing advice is explicit; acceptance facets do not change. |
+| A stable finding id retains its count but a covered occurrence is replaced | The old exception does not silently cover the replacement; identity mapping or fresh approval is required. |
+| An exception batch gains an item or contains an expired item | Added bytes invalidate its signature; an expired item covers nothing even when other items remain valid. |
+| A candidate supplies its own source-comparison base to hide a required signal | The authoritative gate uses the protected base, or reports the required comparison incomplete. |
+| A context report exists but missed its declared qualification criteria | Retrieval remains unqualified; report existence is not success. |
+| A model's own file is unchanged but another analysis input changes | A stale graph answer is not relabeled current; all required model inputs determine freshness. |
+| A hook runs but its context arrives only beside the completed edit | It is feedback, not verified before-decision delivery. |
+| The harness skips an untrusted hook or discards its late output | Delivery is unavailable, not silently recorded as a successful context injection. |
+| A human ships while required evidence is missing | The unchanged-policy receipt stays blocked; no override-to-green mode exists. |
 
 The protected-runner cases also require a focused check using the actual D5 deployment and safe fixture data before M3 closes. Passing local fixture assertions is not evidence that production credentials and execution are separated.
 
@@ -1731,9 +1794,13 @@ The corpus id is the manifest digest used by qualification. Real Atlas artifacts
 
 ### 17.5 Does Warrant improve the code and reduce supervision?
 
-Conformance proves the checker follows its rules. A separate, small Atlas comparison tests the product's reason to exist. The existing experiment and agent tools conduct it; Warrant does not gain an experiment scheduler or task tracker.
+Conformance proves the checker follows its rules. A separate Atlas comparison tests the product's reason to exist. Existing experiment and agent tools conduct it; Warrant does not gain an experiment scheduler or task tracker.
 
-Before running agents, freeze the Atlas source, approved policy, checker and instrument versions, available tools, model/harness settings, held-out change requests, review rubric, and human-decision budget. Compare agents given Warrant's pre-edit context with agents using the existing workflow without that context. Both groups face the same final checker and behavior tests. Keep retries and human interventions visible rather than comparing only the final passing results.
+First run a small advisory comparison at the end of M2, after S7 has qualified retrieval and one before-decision delivery adapter, before building M3's protected acceptance deployment. Both groups use the same fixed advisory checker and existing Atlas behavior tests; the context treatment is the intentional difference. These runs provide product evidence, not authenticated Warrant acceptance receipts. R14 is a stop-and-rethink checkpoint: if guidance shows no benefit, revise the guidance and rerun an appropriate comparison rather than automatically proceed to M3. Mixed or inconclusive results are presented to Trey, not converted into a pass by changing the rubric afterward. Proceeding requires his review of the declared usefulness criteria and measured result.
+
+M4 repeats the outcome assessment on held-out requests not used to tune retrieval, policy, or the early guidance. The later comparison includes the complete protected acceptance experience and follow-on maintainability. A passing early pilot is not a substitute for that release evidence, and reusing the pilot's tuned examples is not an independent held-out test.
+
+Before running agents, freeze the Atlas source, human-reviewed reference policy, checker and instrument versions, available tools, model/harness settings, change requests, review rubric, and human-decision budget. Keep the reference policy and result collection outside the implementing agents' control. Compare agents given Warrant's pre-edit context with agents using the existing workflow without that context. Both groups face the same final checker and behavior tests for that stage; M4 also requires the protected deployment and authenticated evidence. Keep retries, unavailable delivery, and human interventions visible rather than comparing only final passing results.
 
 Requests include grouped undo, reuse of an existing owner under different terminology, ambiguous ownership, a legitimate new responsibility, and a change whose combined source invalidates earlier evidence. Separate conformance fixtures test incomplete inventory and rejected forged or stale records; those failures must not be manufactured in a live customer repository.
 
@@ -1754,12 +1821,14 @@ Reviewers assess results without knowing which context treatment produced them w
 
 These are requirements measured in CI on the corpus, not estimates of delivery:
 
-- A warm incremental lane check on a repository the size of Atlas (about forty thousand source lines) completes in under two seconds wall-clock, excluding external instruments.
+- Warm incremental advisory check, after M4 qualification:
+
+  after full-versus-incremental equivalence qualifies the optimization, the check on the pinned Atlas corpus completes in under two seconds wall-clock, excluding external instruments. This is not an M1-to-M3 hook guarantee.
 - A cold full evaluation of the same repository completes in under twenty seconds, excluding external instruments.
 - Peak resident memory for that evaluation stays under one gibibyte.
 - `warrant verify` of a receipt without `--recompute` completes in under one second.
 
-A regression past a budget fails the corpus job.
+A regression past an applicable budget fails the corpus job. S7 separately measures warm and cold context latency against the supported adapter's deadline. Before safe incremental analysis is available, hooks return bounded current or explicitly stale/unavailable context and provisional diagnostics; a full check exceeding the hook deadline does not become a partial success.
 
 ### 17.7 Spikes with exit criteria
 
@@ -1773,6 +1842,7 @@ Every unproven seam is a spike with a question, a corpus, and an exit criterion,
 | S4 | Does in-process `ssh-key` verification agree with `ssh-keygen -Y verify` | Fixtures signed by `ssh-keygen` across ed25519, ecdsa, and rsa keys verify identically, and the same tampered inputs (bytes, namespace, principal, validity window, revocation) are rejected by both; the fixtures become the conformance suite |
 | S5 | Do `RLIMIT_AS` and `RLIMIT_CPU` bind a child spawned from Rust on macOS | Measured; the receipt records `limits: not-applied` with the reason where they do not |
 | S6 | Does `oxc_resolver` reach parity with `tsc --traceResolution` on the corpus (section 6.8) | Zero target or outcome disagreements for every enumerated edge in every corpus project, with missing, extra, ambiguous, and unparsed edges counted as failures; a feature-and-mode coverage matrix; each project qualified only for the modes it exercises; any disagreement leaves that project `unqualified` and says so |
+| S7 (sections 12.3, 12.6) | Does retrieval find the intended owner, interface, and example under ordinary words, avoid misleading unrelated answers, and reach the model before its decision | A small approved and redacted Atlas request sample plus representative novelty, ambiguity, vocabulary-mismatch, and unrelated-prompt cases; no automatic transcript ingestion or public disclosure. Freeze reviewed labels, failure-cost criteria, and the output budget before held-out measurement. Report found, missed, misleading, ambiguous/no-match outcomes with denominators; returned bytes and omissions; warm/cold latency; and actual delivery timing and failure behavior for every adapter claimed verified. One verified adapter is sufficient for M1. Qualification requires meeting the predeclared criteria, not merely producing a report. Separate development examples from held-out queries; changed criteria require fresh assessment, not a relabeled pass. The report informs whether an optional inferred semantic tier is needed; no embedding service is mandatory. S7 must pass before the R14 outcome comparison. |
 
 ## 18. Repository layout and conventions
 
@@ -1933,10 +2003,19 @@ TypeSafe's System One API: `POST https://api.typesafe.ai/v1/systemone` with bear
 - R13 (Trey, 2026-09-17, "good, approved, go"):
 
   revise the spec around the agreed review direction, obtain Fable review, and return a plain-language summary plus remaining decisions. This authorizes the revision, not ratification, an implementation plan, or a build.
+- R14 (Trey, 2026-09-17, co-design review):
+
+  test whether the architectural guidance improves real agent work before building the protected acceptance system. If the early advisory comparison shows no benefit, stop and rethink the guidance rather than automatically continue to the full gate. This is a build-sequence checkpoint, not a work-management feature inside Warrant.
+- R15 (Trey, 2026-09-17, co-design review):
+
+  v1 has two human approval actions: amend the rules, or accept a specific known violation. Instrument adoption and accepted limitations are typed amendments; trust-root administration stays outside Warrant and team delegation is deferred. An emergency bypass never turns an unverified result into a pass.
+- R16 (Trey, 2026-09-17, co-design review):
+
+  measurable preferences give visible advice by default. Blocking or required human approval is an explicit per-rule choice; architectural invariants retain their blocking behavior.
 
 ### 20.2 Decisions for ratification and build readiness
 
-These recommendations are not rulings. D3 corrects the previous contradiction between "never blocks" and `approval: required`. D5 rejects the earlier same-user gate arrangement. Trey's approval to revise settled the product direction, not the untested technical claims or the choices below.
+Entries marked ruled cite Trey's decision; the others remain recommendations or evidence prerequisites for ratification and build readiness. D3 corrects the previous contradiction between "never blocks" and `approval: required`. D5 rejects the earlier same-user gate arrangement. R14-R16 settle the early checkpoint, two-action approval design, and preference default, not the untested technical claims.
 
 - D1. Policy directory: retain visible `warrant/`. Naming is reversible before release.
 - D2. Permanent identifiers for signed records:
@@ -1950,7 +2029,7 @@ These recommendations are not rulings. D3 corrects the previous contradiction be
   recommend private storage for Atlas/dependency artifacts plus a public synthetic corpus and manifest containing only publishable metadata. Do not publish Atlas tarballs or dependency bundles without checking source permissions and data exposure. Hosting choice is secondary to that boundary; GitHub publication remains separately gated.
 - D5. Authoritative execution:
 
-  recommend an existing isolated runner with a protected controller, Warrant installation, approved-policy anchor, evidence-producer identity, and receipt signer. Candidate tests run without those credentials or write access. Choose and verify the concrete Atlas deployment before M3 can close. A protected trust-root file while everything else runs as the implementer does not qualify. No hosting or infrastructure change is authorized by this spec revision.
+  qualify the protected-controller and credential-free worker candidate in section 3.7 using an existing runner, with protected Warrant installation, approved-policy anchor, producer identity, and receipt signer. Candidate tests have none of those credentials or write access. R14's useful-guidance checkpoint precedes building this deployment; actual account, service, and infrastructure changes need separate approval. Verify the selected Atlas arrangement before M3 closes. A read-only mount or separately owned trust-root file alone does not qualify. No hosting or infrastructure change is authorized by this spec revision.
 - D6. Self-check bootstrap:
 
   use the ordinary Rust build/test gate and a small Cargo dependency-direction check at M0. Replace the dependency check with the minimal Cargo integration when available. Warrant cannot authoritatively check itself before its verifier and acceptance controls exist.
@@ -1960,12 +2039,12 @@ These recommendations are not rulings. D3 corrects the previous contradiction be
 - D10. S1 compiler-reference decision: evidence-dependent, concluded before promising any contract that needs it. A failed spike means an honest unsupported claim or narrower product requirement, not a relabeled pass.
 - D11. Deterministic preferences:
 
-  draft default remains required review, but only for preferences deliberately included in the approved profile. Trey decides whether that default should be advice instead. Invariants remain enforced; model advice follows D3 separately.
+  ruled by R16: visible, counted advice is the default. Explicit `fail` or `review` is a signed per-rule choice. Invariants and migrations retain blocking defaults; model advice follows D3 separately.
 - D12. Local config path: retain the conventional Warrant config directory. Its location does not establish trust; protection and admission follow D5.
 - D13. VSA export: retain the documented mapping and its conformance check; implement the export command when a consumer needs it. The full four-fact receipt stays primary.
 - D14. Signature carrier: retain detached SSH signatures for the initial product. Defer DSSE or provider-specific carriers until needed; preserve record bytes and a small verification boundary without building unused implementations.
 
-S1 and the deployment verification in D5 are build-readiness conditions, not questions a human can answer by preference. The final ratification records which defaults Trey accepts and which remain held; unresolved release prerequisites cannot be marked complete by an implementation plan.
+S1, S7, the R14 outcome result, and deployment verification in D5 are evidence conditions, not facts a human can establish by preference. The final ratification records which remaining defaults Trey accepts and which stay held; unresolved release prerequisites cannot be marked complete by an implementation plan.
 
 ## 21. Milestones
 
@@ -1974,13 +2053,13 @@ This is dependency order for building Warrant, not a task-management feature. Th
 | Milestone | Scope | Observable exit and limits |
 |---|---|---|
 | M0. Exact inputs and a testable foundation | Workspace and ordinary Rust gate; snapshot capture/read for worktree, index, commit, and supplied tree; inventory with independent classification and ownership; conformance fixture harness; Atlas revision and actual grouped-undo references selected; dependency and instrument inputs recorded. | Staged and committed reads ignore unrelated worktree bytes; tracked ignored files remain present; missing/unread input is explicit; colocated tests retain their class. S3 resolves native capture or keeps the Git path. This proves source identity and inventory, not architectural acceptance. |
-| M1. A useful map before editing | TypeScript model, parity qualification S6, declaration schema and canonical policy definitions, query, minimal census observe/propose, context, single-change propose, Mermaid/JSON map; small Cargo package-dependency integration. Resolve S1 early. | An ordinary-language grouped-undo query returns actual source references, reuse candidates, representative examples, affected consumers, and required evidence. Ambiguous, no-match, incomplete, and legitimate-new-owner cases are distinct. Qualified resolution has zero disagreements on covered features. Cargo exercises the language-neutral boundary without full Rust internals. No claim of reference completeness beyond the measured capability report. |
-| M2. Honest checks and human-approved rules | Typed claims and capability requirements; dependency/interface/pattern and declared ownership checks; capability structure and evidence requirements; four-fact advisory verdict; deterministic profile and signals; stable findings and explanations; ruling draft/render/verify, human signing, exceptions, canonical policy/obligation separation, protected policy-anchor chain. S4 verified. | Story A identifies an existing reuse candidate without pretending resemblance proves duplication; story B cannot install an unsigned rule change; story C cannot turn skipped analysis into a pass. Same rules on new source preserve policy identity. Equal present-day obligations do not prove future equivalence. A call occurrence cannot satisfy an authorization-behavior requirement. This proves check and approval semantics, not deployed runner isolation. |
-| M3. The first complete Atlas experience | D5's protected acceptance deployment; exact-source execution binding; needed test/Fallow/type/coverage/mutation evidence adapters as selected by Atlas's approved requirements; approved Atlas contracts and scoped exceptions; full gate and authenticated receipt; fresh evidence on combined source; human paragraph. | Run all of section 1.7. A dirty worktree cannot stand in for a selected commit/index; agent-local evidence of any class cannot authorize the gate; skipped required cases or wrong service evidence remain missing; a different combined tree invalidates earlier execution receipts. Story D compares real source revisions without lane registration. All four acceptance facts bind to the exact candidate and protected policy. Infrastructure proof and human policy signatures are real prerequisites, not fixture substitutes. |
-| M4. Demonstrate value and dependable upgrades | The held-out Atlas comparison in section 17.5; instrument/self qualification and upgrade reports; installed-control self-test; finding comparisons; safe incremental analysis where proven equivalent to full evaluation. | Stories E and F distinguish simpler code from lower counts and an instrument change from a code improvement. Changed config, dependencies, policy, trust, and time cannot inherit stale acceptance. Publish the outcome comparison with its limits; if benefit is not demonstrated, revise the guidance before claiming reduced supervision. |
-| M5. Fit the existing workflow and release | Thin MCP and needed diagnostic hooks; complete CLI/schema docs and bounded output; optional typed advice only if its measured value warrants one provider; first-adopter importers only where needed. | CLI and transports return the same evidence labels; diagnostic parse failures never look like clean checks; optional model outage changes no acceptance facet; no task or lane-management surface appears. Required repository gates and a fresh installed-runtime run pass on the release candidate. This does not promise every framework, language, report format, or model provider. |
+| M1. A useful map before decisions | TypeScript model, S6 parity, declaration schema and canonical policy definitions, query, manifest-free census and starter proposals, context, single-change propose, Mermaid/JSON map; small Cargo package-dependency integration; one before-decision harness adapter. Resolve S1 and qualify retrieval/delivery through S7. | Ordinary-language queries return real references, reuse candidates, examples, consumers, and required evidence under S7's predeclared criteria. Ambiguous, unrelated, no-match, incomplete, stale, and legitimate-new-owner cases are distinct. A recorded supported-harness run proves context preceded the decision, including nondelivery cases. Qualified resolution has zero disagreements on covered features. Cargo exercises the language boundary without full Rust internals. No capability exceeds its measured scope. |
+| M2. Honest advisory checks and the early product checkpoint | Typed claims, dependency/interface/pattern and declared ownership checks, capability structure and evidence requirements; four-fact advisory verdict; visible preference advice and explicit stricter choices; signals and explanations; two ruling kinds with exact exception batches; human signing and policy-anchor chain; S4 verification. Then run section 17.5's early advisory comparison. | Stories A-C distinguish reuse suggestions, signed policy changes, and incomplete analysis. New source under unchanged rules keeps policy identity. Present-day obligation equality does not prove future equivalence; call occurrence does not prove authorization behavior. Record onboarding exception burden and policy-change classifications. R14 then requires useful-guidance evidence: no demonstrated benefit stops progression for reconsideration, and mixed results go to Trey. This does not prove deployed runner isolation. |
+| M3. The first complete Atlas experience | Only after the R14 checkpoint permits progression: D5's separately authorized and qualified protected deployment; exact-source execution; needed evidence adapters selected by Atlas's requirements; approved contracts and exceptions; full authenticated gate receipt; fresh combined-source evidence; human paragraph. | Run all of section 1.7. Selected bytes, admitted producers, actual required cases, service/input bindings, and the protected comparison base govern acceptance. Other-tree receipts remain stale. Story D compares supplied revisions with honest attribution and no lane registry. All four facts bind to the exact candidate and approved configuration. Infrastructure proof and human policy signatures are real prerequisites, not fixture substitutes. |
+| M4. Independent value evidence and dependable upgrades | Section 17.5's held-out complete-product comparison, separate from tuned pilot requests; instrument/self qualification and upgrade reports; installed-control self-test; finding comparisons; safe incremental analysis after equivalence qualification. | Stories E and F distinguish simpler code from lower counts and instrument changes from code improvement. Changed inputs, trust, or time cannot inherit stale acceptance. Report held-out outcomes and follow-on maintainability with limits; revise guidance if benefit is not demonstrated. The warm incremental performance budget applies only after the optimization qualifies. |
+| M5. Fit the existing workflow and release | Thin MCP and additional needed harness/diagnostic adapters beyond the one proven at M1; complete CLI/schema docs and bounded output; optional typed advice if useful; first-adopter importers only where needed. | CLI and supported transports preserve evidence and delivery labels. Diagnostics never look like clean checks; model outages change no acceptance facet; no task-management surface appears. Required repository gates and a fresh installed-runtime run pass on the release candidate. Unused frameworks, languages, formats, and providers remain outside release scope. |
 
-The first complete product is M3; M4 supplies evidence for its claimed benefit and M5 makes the supported workflow ready to release. Full Rust source references, extra diagram formats, unused policy importers/report readers, cross-tree test-evidence carry-over, and a multi-provider judgment platform are not hidden M6-to-M8 release obligations.
+M1 and M2 provide useful advisory capabilities and test the upstream thesis before the protected system is built. The first complete map-plus-authoritative-check product is M3; M4 supplies independent complete-product benefit evidence, and M5 prepares the supported workflow for release. Full Rust source references, extra diagram formats, unused policy importers/report readers, cross-tree test-evidence carry-over, team delegation, and a multi-provider judgment platform are not hidden release obligations.
 
 Port only useful predecessor code: parser/resolver/discovery pieces behind the new integration contract, fixture projects as conformance seeds, and fail-closed policy-comparison cases. Do not carry forward the baseline, file-only model, old verdict, or accumulated doctor/config surface merely because they already exist.
 
@@ -1988,7 +2067,10 @@ Port only useful predecessor code: parser/resolver/discovery pieces behind the n
 
 - The map cannot find an existing owner under the user's words.
 
-  Test vocabulary mismatch, aliases, ambiguous matches, and retrieval omissions early; measure actual reuse. Do not hide this problem behind a sophisticated gate.
+  S7 tests vocabulary mismatch, aliases, ambiguity, misleading answers, and omissions before M1 closes. R14 tests actual outcomes before the protected gate is built; no benefit means stop and rethink rather than invest automatically in enforcement.
+- Context is delivered too late or not at all.
+
+  Verify model-input timing, installed hook trust, timeout/skip behavior, and actual harness coverage. A configured pre-tool hook is not proof that an agent could reconsider its pending edit.
 - Available TypeScript references do not support a promised claim. Resolve S1 early, declare required evidence capabilities, and retain `enforcement-unsupported` rather than weakening meaning in prose.
 - The protected gate is only nominally protected.
 
@@ -2055,7 +2137,7 @@ This table describes intended scope, not implemented capability. There is no War
 |---|---|---|
 | W01 inventory and entrypoints | 4, 5 | Specified with explicit omissions and independent classification/ownership |
 | W02 resolve the same program | 6 | Partial: qualified module resolution and binding references; stronger references depend on S1 |
-| W03 architectural questions | 6.9, 12.3 | Specified early, including ordinary-language retrieval failures |
+| W03 architectural questions | 6.9, 12.3, 12.6, S7 | Specified early, including retrieval failures and verified before-decision delivery |
 | W04 across languages | 6.1, 6.7 | TypeScript plus a minimal Cargo dependency implementation; full Rust internals and other languages deferred |
 | W05 domain contracts | 7 | Specified; typed checked claims distinct from broad intent |
 | W06 unambiguous policy | 7.6, 11.5 | Specified; canonical rules separate from snapshot obligations |

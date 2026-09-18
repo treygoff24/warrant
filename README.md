@@ -2,7 +2,7 @@
 
 Architecture your agents can read and can't cheat.
 
-Warrant reads a repository, builds a map of the program from the compiler's own resolution, evaluates the architecture contracts the team has declared against that map, and returns a verdict with a receipt anyone can verify. It exists because most of the code in the repositories it will guard is written by AI agents, and agents need three things a linter does not give them: findings structured enough to act on without guessing, a compliance lane deterministic enough that arguing with it is pointless, and a rule-change path that runs through a human's signature rather than a file the agent can edit.
+Warrant gives coding agents architectural context before they change code: where behavior belongs, which interface to reuse, what rules apply, and what evidence will be required. It then checks the actual candidate against human-approved contracts and reports compliance, analysis coverage, evidence, and pending approval separately. The map reduces guessing; protected checks and human signatures keep agents from quietly relaxing the rules. Whether that guidance improves real agent work is an explicit product test, not an assumed result.
 
 ## Status
 
@@ -11,7 +11,7 @@ Specification under review. There is no code in this repository yet. The first c
 Read in this order:
 
 1. `docs/vision.md`: what Warrant is and the lines it will not cross.
-2. `docs/specs/2026-09-16-warrant-v1-spec.md`: the v1 specification, draft 0.2. Start with section 1.7 for the complete Atlas experience; `docs/specs/2026-09-17-warrant-v0.2-changes.md` explains the revision in plain language.
+2. `docs/specs/2026-09-16-warrant-v1-spec.md`: the v1 specification, draft 0.3. Start with section 1.7 for the complete Atlas experience; `docs/specs/2026-09-17-warrant-v0.3-changes.md` explains the co-design changes in plain language.
 3. `docs/research/`: the primary-source research the spec cites.
 4. `docs/design/`: the requirements brief from agent builders and the earlier quality-tooling research that fed the spec.
 

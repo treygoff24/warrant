@@ -1,6 +1,6 @@
 # Warrant v1 specification
 
-Version: 0.3 draft, 2026-09-17. Status: incorporates Astra and Fable's co-design review and Trey's R14-R16 decisions; pending final ratification. Approval to revise is not approval to build. Owners: Trey Goff, Fable, and Astra. Fable wrote draft 0.1, Astra revised draft 0.2, and both contributed to this draft. The research trail and section numbers remain stable. The plain-language co-design summary is `docs/specs/2026-09-17-warrant-v0.3-changes.md`; the earlier revision summary remains available beside it.
+Version: 0.3, 2026-09-17. Status: ratified by Trey at 21:37 CDT after Astra and Fable agreed on spec commit `7b30330` (R17). Ratification accepts the design and its stated conditions, not untested technical claims or permission to build. Owners: Trey Goff, Fable, and Astra. Fable wrote draft 0.1, Astra revised draft 0.2, and both contributed to version 0.3. The research trail and section numbers remain stable. The plain-language co-design summary is `docs/specs/2026-09-17-warrant-v0.3-changes.md`; the earlier revision summary remains available beside it.
 
 ## Read the vision first
 
@@ -100,7 +100,7 @@ Deferred from v1 with a path, not refused:
 - DOT, HTML, and additional diagram exports. v1 has a scoped Mermaid diagram and the same structured model in JSON; completeness labels travel with both.
 - Multiple judgment providers and a general judgment-calibration command suite.
 
-  The initial optional advice interface stays; expanding it must earn its cost. Required human review driven by model thresholds is deferred pending D3.
+  The initial optional advice interface stays; expanding it must earn its cost. Required human review driven by model thresholds is deferred beyond the initial product (D3).
 - Importers and report readers not needed by the first adopter. This is a demand test, not a blanket dependency cut (sections 9.3, 15.3).
 - Warrant-managed trust-root changes and scoped signer delegation. The first signer uses existing protected key administration; v1 rulings are amendments and exceptions (R15).
 
@@ -1714,7 +1714,7 @@ Sending source or map context to a hosted provider requires explicit opt-in to t
 
 Initial model advice has `consequence: note`. It cannot change any acceptance facet. Disabled, unavailable, rate-limited, or malformed model output is reported as missing advice and does not demand a human decision or block code. Warrant never instructs an agent to keep rewriting correct code until a model approves it.
 
-If a later signed policy gives a model question `consequence: review`, a trigger will require human review and therefore block acceptance. Calling that behavior nonblocking would be false even if compliance remains untouched. Such a policy must name the question, calibrated provider/model version, data scope, treatment of unavailable answers, and how a human resolves a review. This capability is deferred pending D3; it is not enabled by the example profile or the mere existence of a threshold.
+If a later signed policy gives a model question `consequence: review`, a trigger will require human review and therefore block acceptance. Calling that behavior nonblocking would be false even if compliance remains untouched. Such a policy must name the question, calibrated provider/model version, data scope, treatment of unavailable answers, and how a human resolves a review. This capability is deferred beyond the initial product (D3); it is not enabled by the example profile or the mere existence of a threshold.
 
 ### 16.5 Backend identity
 
@@ -2027,9 +2027,13 @@ TypeSafe's System One API: `POST https://api.typesafe.ai/v1/systemone` with bear
 
   measurable preferences give visible advice by default. Blocking or required human approval is an explicit per-rule choice; architectural invariants retain their blocking behavior.
 
-### 20.2 Decisions for ratification and build readiness
+- R17 (Trey, 2026-09-17, 21:37 CDT, "spec approved"):
 
-Entries marked ruled cite Trey's decision; the others remain recommendations or evidence prerequisites for ratification and build readiness. D3 corrects the previous contradiction between "never blocks" and `approval: required`. D5 rejects the earlier same-user gate arrangement. R14-R16 settle the early checkpoint, two-action approval design, and preference default, not the untested technical claims.
+  ratify version 0.3 at `7b30330`, the revision Astra and Fable agreed on. Accept the defaults and staged decisions in section 20.2 as written, including their deferrals and evidence conditions. Record the ratification and close out; leave the next leg of work for 2026-09-18. This approval does not authorize implementation, infrastructure changes, publication of private artifacts, or GitHub writes. The implementation plan and build approval remain separate.
+
+### 20.2 Ratified defaults and build-readiness conditions
+
+R17 accepts the following design directions as written. Conditional choices and evidence prerequisites remain open at their named checkpoints; ratification does not supply their results. D3 corrects the previous contradiction between "never blocks" and `approval: required`. D5 rejects the earlier same-user gate arrangement. R14-R16 settle the early checkpoint, two-action approval design, and preference default, not the untested technical claims.
 
 - D1. Policy directory: retain visible `warrant/`. Naming is reversible before release.
 - D2. Permanent identifiers for signed records:
@@ -2037,10 +2041,10 @@ Entries marked ruled cite Trey's decision; the others remain recommendations or 
   use an owned domain if Trey already controls or chooses to acquire one; otherwise use the repository's GitHub-based identifiers. No purchase is authorized. Resolve before issuing durable signed records; examples using `warrant.dev` are placeholders. D13 and D14 determine the exported forms first.
 - D3. Model opinions and acceptance:
 
-  recommend advisory-only for the first product. Keep the typed interface, but defer model-triggered required review. If later enabled by a signed policy, it explicitly blocks acceptance and must specify outage behavior and measured usefulness. This replaces the old "never blocks, only requires approval" formulation.
+  advisory-only for the first product. Keep the typed interface, but defer model-triggered required review. If later enabled by a signed policy, it explicitly blocks acceptance and must specify outage behavior and measured usefulness. This replaces the old "never blocks, only requires approval" formulation.
 - D4. Corpus publication:
 
-  recommend private storage for Atlas/dependency artifacts plus a public synthetic corpus and manifest containing only publishable metadata. Do not publish Atlas tarballs or dependency bundles without checking source permissions and data exposure. Hosting choice is secondary to that boundary; GitHub publication remains separately gated.
+  private storage for Atlas/dependency artifacts plus a public synthetic corpus and manifest containing only publishable metadata. Do not publish Atlas tarballs or dependency bundles without checking source permissions and data exposure. Hosting choice is secondary to that boundary; GitHub publication remains separately gated.
 - D5. Authoritative execution:
 
   qualify the protected-controller and credential-free worker candidate in section 3.7 using an existing runner, with protected Warrant installation, approved-policy anchor, producer identity, and receipt signer. Candidate tests have none of those credentials or write access. R14's useful-guidance checkpoint precedes building this deployment; actual account, service, and infrastructure changes need separate approval. Verify the selected Atlas arrangement before M3 closes. A read-only mount or separately owned trust-root file alone does not qualify. No hosting or infrastructure change is authorized by this spec revision.
@@ -2049,7 +2053,7 @@ Entries marked ruled cite Trey's decision; the others remain recommendations or 
   use the ordinary Rust build/test gate and a small Cargo dependency-direction check at M0. Replace the dependency check with the minimal Cargo integration when available. Warrant cannot authoritatively check itself before its verifier and acceptance controls exist.
 - D7. Mutation thresholds outside core and authority: report first, then choose per crate from observed test quality. Core and authority retain section 17.2's hard-control requirements.
 - D8. npm installation wrapper: consider after the first release if TypeScript users need it; use existing packaging rather than a Warrant package manager.
-- D9. Telemetry: recommend no telemetry code path. Local experiment artifacts and voluntary user reports answer product questions.
+- D9. Telemetry: no telemetry code path. Local experiment artifacts and voluntary user reports answer product questions.
 - D10. S1 compiler-reference decision: evidence-dependent, concluded before promising any contract that needs it. A failed spike means an honest unsupported claim or narrower product requirement, not a relabeled pass.
 - D11. Deterministic preferences:
 
@@ -2058,11 +2062,11 @@ Entries marked ruled cite Trey's decision; the others remain recommendations or 
 - D13. VSA export: retain the documented mapping and its conformance check; implement the export command when a consumer needs it. The full four-fact receipt stays primary.
 - D14. Signature carrier: retain detached SSH signatures for the initial product. Defer DSSE or provider-specific carriers until needed; preserve record bytes and a small verification boundary without building unused implementations.
 
-S1, S7, the R14 outcome result, and deployment verification in D5 are evidence conditions, not facts a human can establish by preference. The final ratification records which remaining defaults Trey accepts and which stay held; unresolved release prerequisites cannot be marked complete by an implementation plan.
+S1, S7, the R14 outcome result, and deployment verification in D5 are evidence conditions, not facts a human can establish by preference. R17 accepts these requirements without claiming they have passed. D2's final identifiers, D7's measured thresholds, and other explicitly staged choices remain for their named checkpoints; unresolved release prerequisites cannot be marked complete by an implementation plan.
 
 ## 21. Milestones
 
-This is dependency order for building Warrant, not a task-management feature. The subsequent `writing-plans` skill turns the ratified spec into build work. Each milestone proves the named behavior with schemas, conformance fixtures, and relevant frozen-corpus checks. No build is authorized by this draft.
+This is dependency order for building Warrant, not a task-management feature. The subsequent `writing-plans` skill turns the ratified spec into build work. Each milestone proves the named behavior with schemas, conformance fixtures, and relevant frozen-corpus checks. Ratification of this spec does not authorize a build.
 
 | Milestone | Scope | Observable exit and limits |
 |---|---|---|

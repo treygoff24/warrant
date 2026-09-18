@@ -6,12 +6,12 @@ Warrant gives coding agents architectural context before they change code: where
 
 ## Status
 
-Specification under review. There is no code in this repository yet. The first commits are the vision, the v1 spec draft, and the research behind it, so the whole history is public from the first line.
+Specification version 0.3 was ratified by Trey on 2026-09-17 after Astra and Fable reached consensus. There is no implementation plan or code yet. Planning is next; building requires separate approval. The repository retains the vision, earlier spec revisions, and supporting research.
 
 Read in this order:
 
 1. `docs/vision.md`: what Warrant is and the lines it will not cross.
-2. `docs/specs/2026-09-16-warrant-v1-spec.md`: the v1 specification, draft 0.3. Start with section 1.7 for the complete Atlas experience; `docs/specs/2026-09-17-warrant-v0.3-changes.md` explains the co-design changes in plain language.
+2. `docs/specs/2026-09-16-warrant-v1-spec.md`: the ratified v1 specification, version 0.3. Start with section 1.7 for the complete Atlas experience; `docs/specs/2026-09-17-warrant-v0.3-changes.md` explains the co-design changes in plain language.
 3. `docs/research/`: the primary-source research the spec cites.
 4. `docs/design/`: the requirements brief from agent builders and the earlier quality-tooling research that fed the spec.
 

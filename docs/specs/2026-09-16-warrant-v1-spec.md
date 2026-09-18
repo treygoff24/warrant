@@ -66,7 +66,7 @@ What is new in Warrant is the combination: a compiler-aligned semantic model of 
 - G7. An existing repository can be onboarded by a census that proposes contracts from observation and keeps observed and intended architecture distinct (W26).
 - G8. Taste is a profile:
 
-  measurable preferences enter as evidence obligations, judgment preferences enter as labeled model questions, and both live in a file a user can replace (vision, "Taste is a profile").
+  measurable preferences enter as visible advice by default, or as acceptance requirements when a human explicitly chooses that (R16). Judgment preferences enter as labeled model questions, and both live in a file a user can replace (vision, "Taste is a profile").
 - G9. Warrant proves its own claims:
 
   every hard control has a conformance fixture, the gate is mutation-tested, and instrument upgrades produce a before-and-after report on a frozen corpus before adoption (W30, W31, W32).

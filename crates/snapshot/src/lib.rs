@@ -133,6 +133,13 @@ pub fn capture<T>(
                         snapshot.read(&entry.path)?;
                     }
                 }
+                let (tree, _, _) = worktree::tree(&snapshot.repo, snapshot.file_mode)?;
+                if snapshot.manifest.tree != format!("{}:{tree}", snapshot.manifest.object_format) {
+                    return Err(SnapshotError::new(
+                        "snapshot-changed",
+                        "worktree tree changed",
+                    ));
+                }
             }
             Ok((snapshot.manifest, result))
         })();

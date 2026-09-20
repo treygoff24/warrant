@@ -28,13 +28,7 @@ pub(crate) fn capture(repo: &Path, config: &SnapshotConfig) -> Result<Snapshot, 
     )?)?;
     let file_mode = git::text(&root, &["config", "--bool", "--get", "core.fileMode"], None)
         .map_or(true, |value| value != "false");
-    let (tree, carried, capture_kind) = match native::capture(&root, SnapshotKind::Worktree)? {
-        Some(tree) => (tree, BTreeSet::new(), "native-worktree"),
-        None => {
-            let (tree, carried) = portable(&root, file_mode)?;
-            (tree, carried, "temporary-index")
-        }
-    };
+    let (tree, carried, capture_kind) = tree(&root, file_mode)?;
     let mut snapshot = crate::capture_once(&root, SnapshotKind::Tree, Some(&tree), config)?;
     snapshot.object_paths = carried;
     snapshot.file_mode = file_mode;
@@ -61,6 +55,19 @@ pub(crate) fn capture(repo: &Path, config: &SnapshotConfig) -> Result<Snapshot, 
     }
     snapshot.entries.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(snapshot)
+}
+
+pub(crate) fn tree(
+    repo: &Path,
+    file_mode: bool,
+) -> Result<(String, BTreeSet<String>, &'static str), SnapshotError> {
+    match native::capture(repo, SnapshotKind::Worktree)? {
+        Some(tree) => Ok((tree, BTreeSet::new(), "native-worktree")),
+        None => {
+            let (tree, carried) = portable(repo, file_mode)?;
+            Ok((tree, carried, "temporary-index"))
+        }
+    }
 }
 
 fn portable(repo: &Path, file_mode: bool) -> Result<(String, BTreeSet<String>), SnapshotError> {

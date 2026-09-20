@@ -724,3 +724,30 @@ mod stable_identity {
         );
     }
 }
+
+#[test]
+fn created_mid_capture_file_invalidates_the_attempt() {
+    let dir = repo();
+    let mut attempts = 0;
+    let (manifest, entries) = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |s| {
+            attempts += 1;
+            if attempts == 1 {
+                fs::write(dir.path().join("created"), "new file\n").unwrap();
+            }
+            Ok(s.entries().to_vec())
+        },
+    )
+    .unwrap();
+    assert_eq!(attempts, 2);
+    assert!(entries.iter().any(|entry| entry.path == "created"));
+    git(dir.path(), &["add", "-A"]);
+    assert_eq!(
+        manifest.tree,
+        format!("sha1:{}", git(dir.path(), &["write-tree"]))
+    );
+}

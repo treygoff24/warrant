@@ -8,7 +8,26 @@ wildcards = "deny"
 
 [licenses]
 version = 2
-allow = ["Apache-2.0", "MIT"]
+# Permissive only. Each entry below the first two names the transitive crate that
+# requires it; none is copyleft, and no crate here is a direct dependency.
+allow = [
+  "Apache-2.0",
+  "MIT",
+  # unicode-ident under proc-macro2, so every serde or schemars derive; also the
+  # icu_* family and unicode-id-start under oxc_resolver.
+  "Unicode-3.0",
+  # Inflector, under the schema generation path.
+  "BSD-2-Clause",
+  # curve25519-dalek, ed25519-dalek and subtle, under the signing crates, and
+  # encoding_rs under the TypeScript resolver.
+  "BSD-3-Clause",
+  # foldhash, under hashbrown.
+  "Zlib",
+  # dragonbox_ecma under simd-json; satisfies its
+  # "Apache-2.0 WITH LLVM-exception OR BSL-1.0" expression without admitting
+  # BSL-1.0, which nothing in the tree requires on its own.
+  "Apache-2.0 WITH LLVM-exception",
+]
 
 [sources]
 unknown-registry = "deny"

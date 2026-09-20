@@ -9,7 +9,7 @@ use warrant_core::manifest::WarrantManifest;
 use warrant_core::nouns::{InventoryClass, InventoryEntry};
 use warrant_inventory::{
     BuildConfig, ClassRule, GeneratedIssueCode, InventoryError, ModuleSelector, build,
-    discover_units, lint_ownership, verify_generated,
+    discover_units, verify_generated,
 };
 
 fn write(root: &Path, path: &str, contents: &str) {
@@ -107,24 +107,31 @@ fn overlapping_module_selectors_are_an_error() {
     let root = tempdir().expect("temporary repository");
     write(root.path(), "src/shared.ts", "export const value = 1;\n");
 
-    let modules = [
-        ModuleSelector {
-            id: "first".into(),
-            files: vec!["src/**".into()],
-        },
-        ModuleSelector {
-            id: "second".into(),
-            files: vec!["src/shared.ts".into()],
-        },
-    ];
-    let error = lint_ownership(root.path(), &modules)
+    let first = ModuleSelector {
+        id: "first".into(),
+        files: vec!["src/**".into()],
+    };
+    let second = ModuleSelector {
+        id: "second".into(),
+        files: vec!["src/shared.ts".into()],
+    };
+    for modules in [vec![first.clone(), second.clone()], vec![second, first]] {
+        let error = build(
+            root.path(),
+            &snapshot(root.path()),
+            &empty_manifest(),
+            &BuildConfig {
+                modules,
+                ..BuildConfig::default()
+            },
+        )
         .expect_err("overlap must not be resolved by declaration order");
-
-    assert!(matches!(
-        error,
-        InventoryError::OwnershipOverlap { path, modules }
-            if path == "src/shared.ts" && modules == ["first", "second"]
-    ));
+        assert!(matches!(
+            error,
+            InventoryError::OwnershipOverlap { path, modules }
+                if path == "src/shared.ts" && modules == ["first", "second"]
+        ));
+    }
 }
 
 #[test]

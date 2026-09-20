@@ -594,3 +594,25 @@ fn sparse_checkout_entries_carry_index_ids() {
     assert_eq!(manifest.tree, format!("sha1:{tree}"));
     assert!(entries.iter().any(|entry| entry.path == "dropped/code.rs"));
 }
+
+#[test]
+fn clean_filter_files_hash_like_git_add() {
+    let dir = repo();
+    fs::write(dir.path().join(".gitattributes"), "* text=auto\n").unwrap();
+    fs::write(dir.path().join("crlf"), b"first\r\nsecond\r\n").unwrap();
+    git(dir.path(), &["add", "-A"]);
+    let tree = git(dir.path(), &["write-tree"]);
+    let (manifest, ()) = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |s| {
+            assert_eq!(s.manifest().tree, format!("sha1:{tree}"));
+            assert_eq!(s.read("crlf")?, b"first\r\nsecond\r\n");
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(manifest.tree, format!("sha1:{tree}"));
+}

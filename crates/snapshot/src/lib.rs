@@ -93,13 +93,7 @@ impl Snapshot {
         if self.manifest.kind == SnapshotKind::Worktree && !self.object_paths.contains(path) {
             let (mode, bytes) = worktree::read(&self.repo, path)
                 .map_err(|_| SnapshotError::new("snapshot-changed", path))?;
-            let hash_kind = if self.manifest.object_format == "sha256" {
-                gix::hash::Kind::Sha256
-            } else {
-                gix::hash::Kind::Sha1
-            };
-            let actual = gix::objs::compute_hash(hash_kind, gix::objs::Kind::Blob, &bytes)
-                .map_err(|error| SnapshotError::new("snapshot-hash", error.to_string()))?;
+            let actual = worktree::hash(&self.repo, path, &mode, &bytes)?;
             if actual != oid || self.mode(path) != Some(mode.as_str()) {
                 return Err(SnapshotError::new("snapshot-changed", path));
             }

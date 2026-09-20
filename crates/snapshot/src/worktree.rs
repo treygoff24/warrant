@@ -115,19 +115,8 @@ fn portable(repo: &Path) -> Result<(String, BTreeSet<String>), SnapshotError> {
                 Err(error) => return Err(error.into()),
             }
             let (mode, bytes) = read(repo, &path)?;
-            let oid = git::run(
-                repo,
-                &["hash-object", "-w", "--stdin", "--no-filters"],
-                None,
-                Some(&bytes),
-            )?;
-            (
-                mode,
-                String::from_utf8(oid)
-                    .map_err(|_| SnapshotError::new("git-output", "invalid blob id"))?
-                    .trim()
-                    .to_owned(),
-            )
+            let oid = hash(repo, &path, &mode, &bytes)?;
+            (mode, oid)
         };
         index_info.extend_from_slice(format!("{mode} {oid}\t{path}\0").as_bytes());
     }
@@ -138,6 +127,30 @@ fn portable(repo: &Path) -> Result<(String, BTreeSet<String>), SnapshotError> {
         Some(&index_info),
     )?;
     Ok((git::text(repo, &["write-tree"], Some(&index))?, carried))
+}
+
+// Git does not apply clean filters to symlink payloads.
+pub(crate) fn hash(
+    repo: &Path,
+    path: &str,
+    mode: &str,
+    bytes: &[u8],
+) -> Result<String, SnapshotError> {
+    let filter = if mode == "120000" {
+        "--no-filters".into()
+    } else {
+        format!("--path={path}")
+    };
+    let oid = git::run(
+        repo,
+        &["hash-object", "-w", "--stdin", &filter],
+        None,
+        Some(bytes),
+    )?;
+    Ok(String::from_utf8(oid)
+        .map_err(|_| SnapshotError::new("git-output", "invalid blob id"))?
+        .trim()
+        .to_owned())
 }
 
 /// All source-byte reads, including symlink payloads and ignore inputs, pass here.

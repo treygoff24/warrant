@@ -37,7 +37,13 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
     cancel::check()?;
     let bytes = serde_json::to_vec(&manifest)
         .map_err(|error| CommandError::internal(format!("could not encode snapshot: {error}")))?;
-    let analysis_key = format!("snapshot-v1-{}", manifest.capture.kind);
+    let input_digest = manifest
+        .capture
+        .manifest_digest
+        .as_deref()
+        .unwrap_or("no-capture-inputs")
+        .replace(':', "-");
+    let analysis_key = format!("snapshot-v1-{}-{input_digest}", manifest.capture.kind);
     let path = cache::artifact_path(
         &manifest.repo,
         &manifest.tree,

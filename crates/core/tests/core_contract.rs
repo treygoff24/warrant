@@ -1,7 +1,9 @@
 use std::{collections::BTreeSet, fs, path::Path};
 
 use warrant_core::manifest::{ManifestError, WarrantManifest};
-use warrant_core::nouns::{InventoryClass, SnapshotKind, SnapshotManifest};
+use warrant_core::nouns::{
+    GeneratedBy, InventoryClass, InventorySummary, SnapshotKind, SnapshotManifest,
+};
 use warrant_core::schema::{DOCUMENTS, canonical_bytes};
 
 #[test]
@@ -44,6 +46,79 @@ fn manifest_rejects_unknown_class_with_its_field() {
             class: "mystery".into(),
         }
     );
+}
+
+#[test]
+fn new_inventory_contract_fields_are_additive_and_pinned() {
+    let manifest = WarrantManifest::parse(
+        r#"
+schema_version: warrant.manifest/1
+inventory:
+  classes:
+    - class: migration
+      files: ["src/value.ts"]
+      replaces: source
+  generated:
+    - files: ["generated/**"]
+      producer: generate
+      inputs: ["schema/api.yaml"]
+"#,
+    )
+    .expect("new manifest fields should parse");
+    assert_eq!(
+        manifest.inventory.classes[0].replaces,
+        Some(InventoryClass::Source)
+    );
+    assert_eq!(manifest.inventory.generated[0].inputs, ["schema/api.yaml"]);
+
+    let generated: GeneratedBy = serde_json::from_str(
+        r#"{"producer":"generate","reproducible":true,"inputs":["schema/api.yaml"]}"#,
+    )
+    .expect("generated provenance should deserialize");
+    assert_eq!(generated.inputs, ["schema/api.yaml"]);
+    let old_generated: GeneratedBy =
+        serde_json::from_str(r#"{"producer":"generate","reproducible":false}"#)
+            .expect("old generated provenance should keep deserializing");
+    assert!(old_generated.inputs.is_empty());
+
+    let summary: InventorySummary = serde_json::from_str(
+        r#"{
+          "files": 0,
+          "by_class": {},
+          "unread": [],
+          "unowned_source": [],
+          "unknown": [],
+          "ignored_files": 0,
+          "submodules": [],
+          "unit_aliases": [
+            {"unit":".","alias_table":null,"by":"implicit-root-fallback"}
+          ],
+          "generated_absent": [
+            {"declaration":"generated/**","producer":"generate"}
+          ]
+        }"#,
+    )
+    .expect("new summary fields should deserialize");
+    assert_eq!(summary.unit_aliases[0].unit, ".");
+    assert_eq!(summary.unit_aliases[0].alias_table, None);
+    assert_eq!(summary.unit_aliases[0].by, "implicit-root-fallback");
+    assert_eq!(summary.generated_absent[0].declaration, "generated/**");
+    assert_eq!(summary.generated_absent[0].producer, "generate");
+
+    let old_summary: InventorySummary = serde_json::from_str(
+        r#"{
+          "files": 0,
+          "by_class": {},
+          "unread": [],
+          "unowned_source": [],
+          "unknown": [],
+          "ignored_files": null,
+          "submodules": []
+        }"#,
+    )
+    .expect("old inventory summaries should keep deserializing");
+    assert!(old_summary.unit_aliases.is_empty());
+    assert!(old_summary.generated_absent.is_empty());
 }
 
 #[test]

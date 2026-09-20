@@ -14,8 +14,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use warrant_core::manifest::{ClassDeclaration, WarrantManifest};
 use warrant_core::nouns::{
-    Entrypoint, GeneratedBy, InventoryClass, InventoryDocument, InventoryEntry, InventorySummary,
-    Submodule, UnreadPath, VendoredFrom,
+    Entrypoint, GeneratedAbsent, GeneratedBy, InventoryClass, InventoryDocument, InventoryEntry,
+    InventorySummary, Submodule, UnitAliasTable, UnreadPath, VendoredFrom,
 };
 
 /// A module selector assigns ownership without changing a path's class.
@@ -34,23 +34,11 @@ pub struct ClassRule {
     pub replaces: Option<InventoryClass>,
 }
 
-/// A path known to the snapshot but deliberately not read as an ordinary file.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DeliberateExclusion {
-    pub path: String,
-    pub class: InventoryClass,
-    pub reason: String,
-    /// For a submodule this is its recorded commit id; otherwise it is the excluded blob id.
-    pub blob: Option<String>,
-}
-
 /// Inputs not represented by `warrant.yaml` yet (module policy arrives in a later milestone).
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BuildConfig {
     pub modules: Vec<ModuleSelector>,
     pub class_rules: Vec<ClassRule>,
-    pub deliberate_exclusions: Vec<DeliberateExclusion>,
-    pub ignored_files: Option<u64>,
 }
 
 /// A discovered compilation or package scope.
@@ -58,6 +46,8 @@ pub struct BuildConfig {
 pub struct Unit {
     pub root: String,
     pub configuration: String,
+    #[serde(default)]
+    pub by: String,
 }
 
 /// Result of classifying a snapshot tree.
@@ -176,26 +166,43 @@ impl fmt::Display for InventoryError {
 
 impl std::error::Error for InventoryError {}
 
-/// Classify every ordinary path and deliberate exclusion under `root`.
+/// Enrich the snapshot's path listing with inventory classification and provenance.
 pub fn build(
     root: &Path,
+    snapshot_entries: &[InventoryEntry],
     manifest: &WarrantManifest,
     config: &BuildConfig,
 ) -> Result<BuiltInventory, InventoryError> {
-    let paths = repository_paths(root)?;
+    let mut paths: Vec<String> = snapshot_entries
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect();
+    paths.sort();
+    if paths.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(InventoryError::InvalidDeclaration {
+            reason: "duplicate path in snapshot listing".into(),
+        });
+    }
     let modules = compile_modules(&config.modules)?;
     let mut rules = manifest_rules(&manifest.inventory.classes);
     rules.extend(config.class_rules.clone());
     let class_rules = compile_rules(&rules)?;
     let generated = compile_generated(manifest)?;
     let vendored = compile_vendored(manifest)?;
-    let units = discover_units_from_paths(root, &paths)?;
+    let mut units = discover_units_from_paths(root, &paths)?;
     let package_entrypoints = discover_package_entrypoints(root, &paths)?;
     let enabled = EnabledIntegrations::from_manifest(manifest);
     let mut entries = Vec::new();
 
-    for relative in &paths {
-        let path = root.join(relative);
+    for snapshot_entry in snapshot_entries {
+        let relative = &snapshot_entry.path;
+        if matches!(
+            snapshot_entry.class,
+            InventoryClass::Ignored | InventoryClass::Submodule | InventoryClass::Unread
+        ) {
+            entries.push(snapshot_entry.clone());
+            continue;
+        }
         let default = default_class(relative, enabled);
         let explicit = matching_rules(relative, &class_rules);
         let generated_match = matching_generated(relative, &generated);
@@ -226,6 +233,7 @@ pub fn build(
                 Some(GeneratedBy {
                     producer: item.producer.clone(),
                     reproducible: item.reproducible,
+                    inputs: item.inputs.clone(),
                 }),
                 None,
             )
@@ -261,31 +269,47 @@ pub fn build(
             });
         }
         let module = owners.into_iter().next();
-        let (blob, unread, final_class) = match blob_id(&path) {
-            Ok(blob) => (Some(blob), None, class),
-            Err(error) => (None, Some(error.to_string()), InventoryClass::Unread),
+        let mut unit = unit_for(relative, &units, source_language(relative, enabled))
+            .map(|unit| unit.root.clone());
+        let by = if class == InventoryClass::Source && unit.is_none() {
+            unit = Some(".".into());
+            "implicit-root-unit".into()
+        } else {
+            by
         };
         let entrypoints = entrypoints_for(relative, manifest, &package_entrypoints);
         entries.push(InventoryEntry {
             path: relative.clone(),
-            blob,
-            class: final_class,
+            blob: snapshot_entry.blob.clone(),
+            class,
             language: language(relative, enabled),
-            unit: unit_for(relative, &units),
+            unit,
             module,
             by,
             reason,
             entrypoints,
-            unread,
+            unread: snapshot_entry.unread.clone(),
             generated_by,
             vendored_from,
         });
     }
 
-    add_absent_generated(&mut entries, &generated, &paths);
-    add_exclusions(&mut entries, &config.deliberate_exclusions)?;
+    if entries
+        .iter()
+        .any(|entry| entry.unit.as_deref() == Some("."))
+        && !units.iter().any(|unit| unit.root == ".")
+    {
+        units.push(Unit {
+            root: ".".into(),
+            configuration: String::new(),
+            by: "implicit-root-fallback".into(),
+        });
+        units.sort_by(|left, right| left.root.cmp(&right.root));
+    }
+    let generated_absent = add_absent_generated(&mut entries, &generated, &paths);
     entries.sort_by(|left, right| left.path.cmp(&right.path));
-    let summary = summarize(&entries, config.ignored_files);
+    let unit_aliases = alias_tables(root, &paths, &units)?;
+    let summary = summarize(&entries, unit_aliases, generated_absent);
     let document = InventoryDocument {
         schema_version: "warrant.inventory/1".into(),
         entries,
@@ -384,7 +408,7 @@ pub fn verify_generated(
             .filter(|path| item.matcher.is_match(path.as_str()))
             .cloned()
             .collect();
-        if is_literal(&item.pattern) {
+        if is_literal(&item.pattern) || candidates.is_empty() {
             candidates.insert(item.pattern.clone());
         }
         for path in candidates {
@@ -458,6 +482,7 @@ struct GeneratedPattern {
     matcher: GlobSet,
     pattern: String,
     producer: String,
+    inputs: Vec<String>,
     reproducible: bool,
 }
 struct VendoredPattern {
@@ -560,7 +585,7 @@ fn manifest_rules(declarations: &[ClassDeclaration]) -> Vec<ClassRule> {
             id: format!("manifest:inventory.classes[{index}]"),
             class: declaration.class,
             files: declaration.files.clone(),
-            replaces: None,
+            replaces: declaration.replaces,
         })
         .collect()
 }
@@ -587,6 +612,7 @@ fn compile_generated(manifest: &WarrantManifest) -> Result<Vec<GeneratedPattern>
                 matcher: compile_glob(pattern)?,
                 pattern: pattern.clone(),
                 producer: declaration.producer.clone(),
+                inputs: declaration.inputs.clone(),
                 reproducible: declaration.reproducible,
             });
         }
@@ -789,27 +815,102 @@ fn digest_bytes(bytes: &[u8]) -> String {
 }
 
 fn discover_units_from_paths(root: &Path, paths: &[String]) -> Result<Vec<Unit>, InventoryError> {
-    let mut units = BTreeMap::<String, String>::new();
+    let mut units = BTreeMap::<String, Unit>::new();
     for path in paths {
         if path.ends_with("/tsconfig.json") || path == "tsconfig.json" {
-            units.insert(parent_string(path), path.clone());
+            units.insert(
+                parent_string(path),
+                Unit {
+                    root: parent_string(path),
+                    configuration: path.clone(),
+                    by: "tsconfig".into(),
+                },
+            );
         }
     }
+    discover_tsconfig_references(root, paths, &mut units)?;
     discover_javascript_units(root, paths, &mut units)?;
     discover_cargo_units(root, paths, &mut units)?;
-    Ok(units
-        .into_iter()
-        .map(|(root, configuration)| Unit {
-            root,
-            configuration,
-        })
-        .collect())
+    Ok(units.into_values().collect())
+}
+
+fn discover_tsconfig_references(
+    root: &Path,
+    paths: &[String],
+    units: &mut BTreeMap<String, Unit>,
+) -> Result<(), InventoryError> {
+    let available: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
+    let mut pending: Vec<String> = units
+        .values()
+        .map(|unit| unit.configuration.clone())
+        .collect();
+    let mut seen = BTreeSet::new();
+    while let Some(configuration) = pending.pop() {
+        if !seen.insert(configuration.clone()) {
+            continue;
+        }
+        let value: Value = serde_json::from_slice(
+            &fs::read(root.join(&configuration))
+                .map_err(|error| io_error(&configuration, error))?,
+        )
+        .map_err(|error| InventoryError::InvalidDeclaration {
+            reason: format!("invalid `{configuration}`: {error}"),
+        })?;
+        for reference in value
+            .get("references")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|reference| reference.get("path").and_then(Value::as_str))
+        {
+            let joined = Path::new(&parent_string(&configuration)).join(reference);
+            let Some(mut referenced) = normalize_relative(&joined) else {
+                continue;
+            };
+            if !referenced.ends_with(".json") {
+                referenced = format!("{referenced}/tsconfig.json");
+            }
+            if !available.contains(referenced.as_str()) {
+                continue;
+            }
+            let unit_root = parent_string(&referenced);
+            units.insert(
+                unit_root.clone(),
+                Unit {
+                    root: unit_root,
+                    configuration: referenced.clone(),
+                    by: "tsconfig-reference".into(),
+                },
+            );
+            pending.push(referenced);
+        }
+    }
+    Ok(())
+}
+
+fn normalize_relative(path: &Path) -> Option<String> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => parts.push(part.to_string_lossy().into_owned()),
+            Component::ParentDir => {
+                parts.pop()?;
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(if parts.is_empty() {
+        ".".into()
+    } else {
+        parts.join("/")
+    })
 }
 
 fn discover_javascript_units(
     root: &Path,
     paths: &[String],
-    units: &mut BTreeMap<String, String>,
+    units: &mut BTreeMap<String, Unit>,
 ) -> Result<(), InventoryError> {
     let package_files: Vec<&String> = paths
         .iter()
@@ -823,12 +924,20 @@ fn discover_javascript_units(
                 reason: format!("invalid `{package_file}`: {error}"),
             })?;
         let package_root = parent_string(package_file);
-        units
-            .entry(package_root.clone())
-            .or_insert_with(|| (*package_file).clone());
+        units.entry(package_root.clone()).or_insert_with(|| Unit {
+            root: package_root.clone(),
+            configuration: (*package_file).clone(),
+            by: "package-json".into(),
+        });
         if let Some(workspaces) = value.get("workspaces") {
             let patterns = workspace_patterns(workspaces);
-            add_workspace_packages(&package_root, &patterns, &package_files, units)?;
+            add_workspace_packages(
+                &package_root,
+                &patterns,
+                &package_files,
+                units,
+                "package-workspace",
+            )?;
         }
     }
     for workspace_file in paths
@@ -854,6 +963,7 @@ fn discover_javascript_units(
             &patterns,
             &package_files,
             units,
+            "pnpm-workspace",
         )?;
     }
     Ok(())
@@ -875,7 +985,8 @@ fn add_workspace_packages(
     workspace_root: &str,
     patterns: &[String],
     package_files: &[&String],
-    units: &mut BTreeMap<String, String>,
+    units: &mut BTreeMap<String, Unit>,
+    by: &str,
 ) -> Result<(), InventoryError> {
     for pattern in patterns {
         let qualified = if workspace_root == "." {
@@ -887,7 +998,11 @@ fn add_workspace_packages(
         for package_file in package_files {
             let package_root = parent_string(package_file);
             if matcher.is_match(&package_root) {
-                units.insert(package_root, (*package_file).clone());
+                units.entry(package_root.clone()).or_insert_with(|| Unit {
+                    root: package_root,
+                    configuration: (*package_file).clone(),
+                    by: by.into(),
+                });
             }
         }
     }
@@ -897,10 +1012,15 @@ fn add_workspace_packages(
 fn discover_cargo_units(
     root: &Path,
     paths: &[String],
-    units: &mut BTreeMap<String, String>,
+    units: &mut BTreeMap<String, Unit>,
 ) -> Result<(), InventoryError> {
     for manifest in paths.iter().filter(|path| path.ends_with("Cargo.toml")) {
-        units.insert(parent_string(manifest), manifest.clone());
+        let unit_root = parent_string(manifest);
+        units.entry(unit_root.clone()).or_insert_with(|| Unit {
+            root: unit_root,
+            configuration: manifest.clone(),
+            by: "cargo-manifest".into(),
+        });
     }
     let Some(manifest) = paths.iter().find(|path| path.as_str() == "Cargo.toml") else {
         return Ok(());
@@ -918,7 +1038,12 @@ fn discover_cargo_units(
     for package in metadata.packages {
         let manifest_path = PathBuf::from(package.manifest_path.as_std_path());
         let relative = relative_path(root, &manifest_path)?;
-        units.insert(parent_string(&relative), relative);
+        let unit_root = parent_string(&relative);
+        units.entry(unit_root.clone()).or_insert(Unit {
+            root: unit_root,
+            configuration: relative,
+            by: "cargo-metadata".into(),
+        });
     }
     Ok(())
 }
@@ -931,14 +1056,28 @@ fn parent_string(path: &str) -> String {
         .unwrap_or_else(|| ".".into())
 }
 
-fn unit_for(path: &str, units: &[Unit]) -> Option<String> {
-    units
-        .iter()
-        .filter(|unit| {
-            unit.root == "." || path == unit.root || path.starts_with(&format!("{}/", unit.root))
-        })
-        .max_by_key(|unit| unit.root.matches('/').count() + usize::from(unit.root != "."))
-        .map(|unit| unit.root.clone())
+fn unit_for<'a>(path: &str, units: &'a [Unit], source_language: Option<&str>) -> Option<&'a Unit> {
+    let contains = |unit: &&Unit| {
+        unit.root == "." || path == unit.root || path.starts_with(&format!("{}/", unit.root))
+    };
+    let depth = |unit: &&Unit| unit.root.matches('/').count() + usize::from(unit.root != ".");
+    if source_language == Some("typescript") {
+        units
+            .iter()
+            .filter(contains)
+            .filter(|unit| is_tsconfig(&unit.configuration))
+            .max_by_key(depth)
+            .or_else(|| units.iter().filter(contains).max_by_key(depth))
+    } else {
+        units.iter().filter(contains).max_by_key(depth)
+    }
+}
+
+fn is_tsconfig(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("tsconfig") && name.ends_with(".json"))
 }
 
 fn discover_package_entrypoints(
@@ -1054,13 +1193,74 @@ fn entrypoints_for(
     entrypoints
 }
 
+fn alias_tables(
+    root: &Path,
+    paths: &[String],
+    units: &[Unit],
+) -> Result<Vec<UnitAliasTable>, InventoryError> {
+    let available: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
+    let mut rows = Vec::with_capacity(units.len());
+    for unit in units {
+        let mut alias_table = None;
+        if is_tsconfig(&unit.configuration) && !unit.configuration.is_empty() {
+            let value: Value = serde_json::from_slice(
+                &fs::read(root.join(&unit.configuration))
+                    .map_err(|error| io_error(&unit.configuration, error))?,
+            )
+            .map_err(|error| InventoryError::InvalidDeclaration {
+                reason: format!("invalid `{}`: {error}", unit.configuration),
+            })?;
+            if value
+                .get("compilerOptions")
+                .and_then(|options| options.get("paths"))
+                .is_some_and(Value::is_object)
+            {
+                alias_table = Some(unit.configuration.clone());
+            }
+        }
+        if alias_table.is_none() {
+            let package = if unit.root == "." {
+                "package.json".into()
+            } else {
+                format!("{}/package.json", unit.root)
+            };
+            if available.contains(package.as_str()) {
+                let value: Value = serde_json::from_slice(
+                    &fs::read(root.join(&package)).map_err(|error| io_error(&package, error))?,
+                )
+                .map_err(|error| InventoryError::InvalidDeclaration {
+                    reason: format!("invalid `{package}`: {error}"),
+                })?;
+                if value.get("exports").is_some() {
+                    alias_table = Some(package);
+                }
+            }
+        }
+        rows.push(UnitAliasTable {
+            unit: unit.root.clone(),
+            alias_table,
+            by: unit.by.clone(),
+        });
+    }
+    rows.sort_by(|left, right| left.unit.cmp(&right.unit));
+    Ok(rows)
+}
+
 fn add_absent_generated(
     entries: &mut Vec<InventoryEntry>,
     patterns: &[GeneratedPattern],
     paths: &[String],
-) {
+) -> Vec<GeneratedAbsent> {
+    let mut absent = Vec::new();
     for item in patterns {
-        if !is_literal(&item.pattern) || paths.contains(&item.pattern) {
+        if paths.iter().any(|path| item.matcher.is_match(path)) {
+            continue;
+        }
+        if !is_literal(&item.pattern) {
+            absent.push(GeneratedAbsent {
+                declaration: item.pattern.clone(),
+                producer: item.producer.clone(),
+            });
             continue;
         }
         entries.push(InventoryEntry {
@@ -1077,45 +1277,30 @@ fn add_absent_generated(
             generated_by: Some(GeneratedBy {
                 producer: item.producer.clone(),
                 reproducible: item.reproducible,
+                inputs: item.inputs.clone(),
             }),
             vendored_from: None,
         });
     }
+    absent.sort_by(|left, right| left.declaration.cmp(&right.declaration));
+    absent
 }
 
-fn add_exclusions(
-    entries: &mut Vec<InventoryEntry>,
-    exclusions: &[DeliberateExclusion],
-) -> Result<(), InventoryError> {
-    let mut present: BTreeSet<String> = entries.iter().map(|entry| entry.path.clone()).collect();
-    for exclusion in exclusions {
-        if !present.insert(exclusion.path.clone()) {
-            return Err(InventoryError::InvalidDeclaration {
-                reason: format!("duplicate inventory path `{}`", exclusion.path),
-            });
-        }
-        entries.push(InventoryEntry {
-            path: exclusion.path.clone(),
-            blob: exclusion.blob.clone(),
-            class: exclusion.class,
-            language: None,
-            unit: None,
-            module: None,
-            by: "snapshot:exclusion".into(),
-            reason: exclusion.reason.clone(),
-            entrypoints: Vec::new(),
-            unread: (exclusion.class == InventoryClass::Unread).then(|| exclusion.reason.clone()),
-            generated_by: None,
-            vendored_from: None,
-        });
-    }
-    Ok(())
-}
-
-fn summarize(entries: &[InventoryEntry], ignored_files: Option<u64>) -> InventorySummary {
+fn summarize(
+    entries: &[InventoryEntry],
+    unit_aliases: Vec<UnitAliasTable>,
+    generated_absent: Vec<GeneratedAbsent>,
+) -> InventorySummary {
     let mut summary = InventorySummary {
         files: entries.len() as u64,
-        ignored_files,
+        ignored_files: Some(
+            entries
+                .iter()
+                .filter(|entry| entry.class == InventoryClass::Ignored)
+                .count() as u64,
+        ),
+        unit_aliases,
+        generated_absent,
         ..InventorySummary::default()
     };
     for entry in entries {

@@ -79,6 +79,17 @@
           "items": {
             "type": "string"
           }
+        },
+        "replaces": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InventoryClass"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "additionalProperties": false,
@@ -136,6 +147,13 @@
       "properties": {
         "files": {
           "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "inputs": {
+          "type": "array",
+          "default": [],
           "items": {
             "type": "string"
           }

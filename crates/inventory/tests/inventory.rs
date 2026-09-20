@@ -5,16 +5,61 @@ use std::path::Path;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 use warrant_core::manifest::WarrantManifest;
-use warrant_core::nouns::InventoryClass;
+use warrant_core::nouns::{InventoryClass, InventoryEntry};
 use warrant_inventory::{
-    BuildConfig, ClassRule, DeliberateExclusion, GeneratedIssueCode, InventoryError,
-    ModuleSelector, build, discover_units, lint_ownership, verify_generated,
+    BuildConfig, ClassRule, GeneratedIssueCode, InventoryError, ModuleSelector, build,
+    discover_units, lint_ownership, verify_generated,
 };
 
 fn write(root: &Path, path: &str, contents: &str) {
     let target = root.join(path);
     fs::create_dir_all(target.parent().expect("file parent")).expect("create parent");
     fs::write(target, contents).expect("write fixture file");
+}
+
+fn snapshot_entry(path: &str, class: InventoryClass, blob: Option<&str>) -> InventoryEntry {
+    InventoryEntry {
+        path: path.into(),
+        blob: blob.map(str::to_owned),
+        class,
+        language: None,
+        unit: None,
+        module: None,
+        by: "snapshot".into(),
+        reason: "captured fixture".into(),
+        entrypoints: Vec::new(),
+        unread: (class == InventoryClass::Unread).then(|| "oversize".into()),
+        generated_by: None,
+        vendored_from: None,
+    }
+}
+
+fn snapshot(root: &Path) -> Vec<InventoryEntry> {
+    fn collect(root: &Path, directory: &Path, entries: &mut Vec<InventoryEntry>) {
+        for item in fs::read_dir(directory).expect("read fixture directory") {
+            let item = item.expect("read fixture entry");
+            let path = item.path();
+            if item.file_type().expect("fixture file type").is_dir() {
+                collect(root, &path, entries);
+            } else {
+                let relative = path
+                    .strip_prefix(root)
+                    .expect("fixture path below root")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                entries.push(snapshot_entry(
+                    &relative,
+                    InventoryClass::Unknown,
+                    Some(&format!("sha1:fixture-{relative}")),
+                ));
+            }
+        }
+    }
+
+    let mut entries = Vec::new();
+    collect(root, root, &mut entries);
+    entries.sort_by(|left, right| left.path.cmp(&right.path));
+    entries
 }
 
 fn manifest(inventory: &str) -> WarrantManifest {
@@ -98,31 +143,20 @@ fn classification_defaults_and_provenance_cover_every_class() {
             id: "application".into(),
             files: vec!["src/**".into()],
         }],
-        deliberate_exclusions: vec![
-            DeliberateExclusion {
-                path: "third-party/old".into(),
-                class: InventoryClass::Submodule,
-                reason: "submodule-not-descended".into(),
-                blob: Some("sha1:abc".into()),
-            },
-            DeliberateExclusion {
-                path: "ignored/cache.bin".into(),
-                class: InventoryClass::Ignored,
-                reason: "gitignored".into(),
-                blob: None,
-            },
-            DeliberateExclusion {
-                path: "large/data.bin".into(),
-                class: InventoryClass::Unread,
-                reason: "oversize".into(),
-                blob: None,
-            },
-        ],
-        ignored_files: Some(1),
         ..BuildConfig::default()
     };
+    let mut listing = snapshot(root.path());
+    listing.extend([
+        snapshot_entry(
+            "third-party/old",
+            InventoryClass::Submodule,
+            Some("sha1:abc"),
+        ),
+        snapshot_entry("ignored/cache.bin", InventoryClass::Ignored, None),
+        snapshot_entry("large/data.bin", InventoryClass::Unread, None),
+    ]);
 
-    let built = build(root.path(), &manifest, &config).expect("inventory builds");
+    let built = build(root.path(), &listing, &manifest, &config).expect("inventory builds");
     let classes: BTreeMap<_, _> = built
         .document
         .entries
@@ -187,7 +221,13 @@ fn colocated_test_keeps_its_class_and_owner() {
         ..BuildConfig::default()
     };
 
-    let built = build(root.path(), &empty_manifest(), &config).expect("inventory builds");
+    let built = build(
+        root.path(),
+        &snapshot(root.path()),
+        &empty_manifest(),
+        &config,
+    )
+    .expect("inventory builds");
     let entry = &built.document.entries[0];
     assert_eq!(entry.class, InventoryClass::Test);
     assert_eq!(entry.module.as_deref(), Some("service"));
@@ -198,10 +238,24 @@ fn first_party_source_outside_module_is_unowned() {
     let root = tempdir().expect("temporary repository");
     write(root.path(), "outside.ts", "export {};\n");
 
-    let built =
-        build(root.path(), &empty_manifest(), &BuildConfig::default()).expect("inventory builds");
+    let built = build(
+        root.path(),
+        &snapshot(root.path()),
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect("inventory builds");
     assert_eq!(built.document.entries[0].module, None);
+    assert_eq!(built.document.entries[0].unit.as_deref(), Some("."));
+    assert_eq!(built.document.entries[0].by, "implicit-root-unit");
     assert_eq!(built.document.summary.unowned_source, ["outside.ts"]);
+    assert_eq!(built.document.summary.unit_aliases.len(), 1);
+    assert_eq!(built.document.summary.unit_aliases[0].unit, ".");
+    assert_eq!(built.document.summary.unit_aliases[0].alias_table, None);
+    assert_eq!(
+        built.document.summary.unit_aliases[0].by,
+        "implicit-root-fallback"
+    );
 }
 
 #[test]
@@ -211,7 +265,13 @@ fn source_defaults_only_apply_for_enabled_integrations() {
     let manifest =
         WarrantManifest::parse("schema_version: warrant.manifest/1\n").expect("valid manifest");
 
-    let built = build(root.path(), &manifest, &BuildConfig::default()).expect("inventory builds");
+    let built = build(
+        root.path(),
+        &snapshot(root.path()),
+        &manifest,
+        &BuildConfig::default(),
+    )
+    .expect("inventory builds");
     assert_eq!(built.document.entries[0].class, InventoryClass::Unknown);
 }
 
@@ -238,6 +298,7 @@ fn conflicting_class_rules_are_order_independent_errors() {
     ] {
         let error = build(
             root.path(),
+            &snapshot(root.path()),
             &empty_manifest(),
             &BuildConfig {
                 class_rules: rules,
@@ -268,7 +329,12 @@ fn explicit_override_must_name_the_default_it_replaces() {
     };
 
     assert!(matches!(
-        build(root.path(), &empty_manifest(), &make_config(None)),
+        build(
+            root.path(),
+            &snapshot(root.path()),
+            &empty_manifest(),
+            &make_config(None)
+        ),
         Err(InventoryError::MissingDefaultReplacement {
             default: InventoryClass::Source,
             ..
@@ -277,6 +343,7 @@ fn explicit_override_must_name_the_default_it_replaces() {
     assert!(matches!(
         build(
             root.path(),
+            &snapshot(root.path()),
             &empty_manifest(),
             &make_config(Some(InventoryClass::Test))
         ),
@@ -288,11 +355,190 @@ fn explicit_override_must_name_the_default_it_replaces() {
     ));
     let built = build(
         root.path(),
+        &snapshot(root.path()),
         &empty_manifest(),
         &make_config(Some(InventoryClass::Source)),
     )
     .expect("named replacement is valid");
     assert_eq!(built.document.entries[0].class, InventoryClass::Migration);
+}
+
+#[test]
+fn manifest_class_override_names_the_replaced_default() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "src/value.ts", "export {};\n");
+    let manifest = manifest(
+        r#"  classes:
+    - class: migration
+      files: ["src/value.ts"]
+      replaces: source
+"#,
+    );
+
+    let built = build(
+        root.path(),
+        &snapshot(root.path()),
+        &manifest,
+        &BuildConfig::default(),
+    )
+    .expect("manifest override should build");
+    let entry = &built.document.entries[0];
+    assert_eq!(entry.class, InventoryClass::Migration);
+    assert_eq!(entry.by, "rule:manifest:inventory.classes[0]");
+}
+
+#[test]
+fn manifest_class_override_errors_are_order_independent() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "README.md", "docs\n");
+    write(root.path(), "src/value.ts", "export {};\n");
+    let harmless = r#"    - class: doc
+      files: ["README.md"]"#;
+
+    for declarations in [
+        format!(
+            r#"    - class: migration
+      files: ["src/value.ts"]
+{harmless}"#
+        ),
+        format!(
+            r#"{harmless}
+    - class: migration
+      files: ["src/value.ts"]"#
+        ),
+    ] {
+        let manifest = manifest(&format!("  classes:\n{declarations}\n"));
+        assert!(matches!(
+            build(
+                root.path(),
+                &snapshot(root.path()),
+                &manifest,
+                &BuildConfig::default()
+            ),
+            Err(InventoryError::MissingDefaultReplacement {
+                path,
+                default: InventoryClass::Source,
+                ..
+            }) if path == "src/value.ts"
+        ));
+    }
+
+    for declarations in [
+        format!(
+            r#"    - class: migration
+      files: ["src/value.ts"]
+      replaces: test
+{harmless}"#
+        ),
+        format!(
+            r#"{harmless}
+    - class: migration
+      files: ["src/value.ts"]
+      replaces: test"#
+        ),
+    ] {
+        let manifest = manifest(&format!("  classes:\n{declarations}\n"));
+        assert!(matches!(
+            build(
+                root.path(),
+                &snapshot(root.path()),
+                &manifest,
+                &BuildConfig::default()
+            ),
+            Err(InventoryError::WrongDefaultReplacement {
+                path,
+                expected: InventoryClass::Source,
+                named: InventoryClass::Test,
+                ..
+            }) if path == "src/value.ts"
+        ));
+    }
+}
+
+#[test]
+fn generated_provenance_distinguishes_same_producer_inputs() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "generated/first.ts", "generated\n");
+    write(root.path(), "generated/second.ts", "generated\n");
+    let manifest = manifest(
+        r#"  generated:
+    - files: ["generated/first.ts"]
+      producer: generate
+      inputs: ["schema/first.yaml"]
+    - files: ["generated/second.ts"]
+      producer: generate
+      inputs: ["schema/second.yaml"]
+"#,
+    );
+
+    let built = build(
+        root.path(),
+        &snapshot(root.path()),
+        &manifest,
+        &BuildConfig::default(),
+    )
+    .expect("generated declarations should build");
+    let inputs = |path: &str| {
+        built
+            .document
+            .entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .and_then(|entry| entry.generated_by.as_ref())
+            .map(|generated| generated.inputs.as_slice())
+            .expect("generated provenance")
+    };
+    assert_eq!(inputs("generated/first.ts"), ["schema/first.yaml"]);
+    assert_eq!(inputs("generated/second.ts"), ["schema/second.yaml"]);
+}
+
+#[test]
+fn snapshot_listing_controls_paths_blobs_and_ignored_count() {
+    let clean = tempdir().expect("clean checkout");
+    let dirty = tempdir().expect("checkout with ignored files");
+    write(clean.path(), "src/value.ts", "export {};\n");
+    write(dirty.path(), "src/value.ts", "export {};\n");
+    write(dirty.path(), "target/cache.bin", "ignored\n");
+    let listing = vec![snapshot_entry(
+        "src/value.ts",
+        InventoryClass::Unknown,
+        Some("sha1:0123456789012345678901234567890123456789"),
+    )];
+
+    let first = build(
+        clean.path(),
+        &listing,
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect("clean inventory");
+    let second = build(
+        dirty.path(),
+        &listing,
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect("dirty inventory");
+    assert_eq!(first.digest, second.digest);
+    assert_eq!(first.document.entries, second.document.entries);
+    assert_eq!(
+        first.document.entries[0].blob.as_deref(),
+        Some("sha1:0123456789012345678901234567890123456789")
+    );
+    assert_eq!(first.document.summary.ignored_files, Some(0));
+
+    let listing_with_ignored = [
+        listing[0].clone(),
+        snapshot_entry("target/cache.bin", InventoryClass::Ignored, None),
+    ];
+    let with_ignored = build(
+        dirty.path(),
+        &listing_with_ignored,
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect("excluded path inventory");
+    assert_eq!(with_ignored.document.summary.ignored_files, Some(1));
 }
 
 #[test]
@@ -341,8 +587,13 @@ fn discovers_monorepo_units_from_all_declared_sources() {
     assert!(roots.contains(&"services/api"));
     assert!(roots.contains(&"crates/tool"));
 
-    let built =
-        build(root.path(), &empty_manifest(), &BuildConfig::default()).expect("inventory builds");
+    let built = build(
+        root.path(),
+        &snapshot(root.path()),
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect("inventory builds");
     let unit_of = |path: &str| {
         built
             .document
@@ -352,8 +603,128 @@ fn discovers_monorepo_units_from_all_declared_sources() {
             .and_then(|entry| entry.unit.as_deref())
     };
     assert_eq!(unit_of("packages/web/src/index.ts"), Some("packages/web"));
-    assert_eq!(unit_of("services/api/src/index.ts"), Some("services/api"));
+    assert_eq!(unit_of("services/api/src/index.ts"), Some("."));
     assert_eq!(unit_of("crates/tool/src/lib.rs"), Some("crates/tool"));
+}
+
+#[test]
+fn project_references_define_units_and_tsconfig_precedes_deeper_package() {
+    let root = tempdir().expect("temporary repository");
+    write(
+        root.path(),
+        "tsconfig.json",
+        r#"{"references":[{"path":"packages/app/tsconfig.build.json"}]}"#,
+    );
+    write(
+        root.path(),
+        "packages/app/tsconfig.build.json",
+        r#"{"compilerOptions":{"paths":{"@app/*":["src/*"]}}}"#,
+    );
+    write(root.path(), "packages/app/src/index.ts", "export {};\n");
+    write(
+        root.path(),
+        "packages/loose/package.json",
+        r#"{"name":"loose"}"#,
+    );
+    write(root.path(), "packages/loose/src/index.ts", "export {};\n");
+
+    let built = build(
+        root.path(),
+        &snapshot(root.path()),
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect("referenced units should build");
+    let entry = |path: &str| {
+        built
+            .document
+            .entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .expect("fixture entry")
+    };
+    assert_eq!(
+        entry("packages/app/src/index.ts").unit.as_deref(),
+        Some("packages/app")
+    );
+    assert_eq!(
+        entry("packages/loose/src/index.ts").unit.as_deref(),
+        Some(".")
+    );
+    let app_alias = built
+        .document
+        .summary
+        .unit_aliases
+        .iter()
+        .find(|row| row.unit == "packages/app")
+        .expect("referenced unit alias row");
+    assert_eq!(
+        app_alias.alias_table.as_deref(),
+        Some("packages/app/tsconfig.build.json")
+    );
+    assert_eq!(app_alias.by, "tsconfig-reference");
+}
+
+#[test]
+fn alias_summary_has_one_explicit_row_per_unit() {
+    let root = tempdir().expect("temporary repository");
+    write(
+        root.path(),
+        "packages/exported/package.json",
+        r#"{"name":"exported","exports":{".":"./src/index.js"}}"#,
+    );
+    write(
+        root.path(),
+        "packages/exported/src/index.js",
+        "export {};\n",
+    );
+    write(
+        root.path(),
+        "packages/plain/package.json",
+        r#"{"name":"plain"}"#,
+    );
+    write(root.path(), "packages/plain/src/index.js", "export {};\n");
+
+    let built = build(
+        root.path(),
+        &snapshot(root.path()),
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect("package units should build");
+    assert_eq!(built.units.len(), built.document.summary.unit_aliases.len());
+    for unit in &built.units {
+        assert_eq!(
+            built
+                .document
+                .summary
+                .unit_aliases
+                .iter()
+                .filter(|row| row.unit == unit.root)
+                .count(),
+            1,
+            "each unit must have exactly one alias row"
+        );
+    }
+    let exported = built
+        .document
+        .summary
+        .unit_aliases
+        .iter()
+        .find(|row| row.unit == "packages/exported")
+        .expect("exported unit row");
+    assert_eq!(
+        exported.alias_table.as_deref(),
+        Some("packages/exported/package.json")
+    );
+    let plain = built
+        .document
+        .summary
+        .unit_aliases
+        .iter()
+        .find(|row| row.unit == "packages/plain")
+        .expect("plain unit row");
+    assert_eq!(plain.alias_table, None);
 }
 
 #[test]
@@ -387,7 +758,13 @@ entrypoints:
     )
     .expect("valid manifest");
 
-    let built = build(root.path(), &manifest, &BuildConfig::default()).expect("inventory builds");
+    let built = build(
+        root.path(),
+        &snapshot(root.path()),
+        &manifest,
+        &BuildConfig::default(),
+    )
+    .expect("inventory builds");
     let kinds = |path: &str| {
         built
             .document
@@ -420,8 +797,13 @@ fn generated_verification_reports_drift_and_absence() {
 "#,
     );
 
-    let built = build(root.path(), &manifest, &BuildConfig::default())
-        .expect("inventory records declared missing output");
+    let built = build(
+        root.path(),
+        &snapshot(root.path()),
+        &manifest,
+        &BuildConfig::default(),
+    )
+    .expect("inventory records declared missing output");
     let absent = built
         .document
         .entries
@@ -458,6 +840,47 @@ fn generated_verification_reports_drift_and_absence() {
 }
 
 #[test]
+fn glob_declared_absent_generated_scope_is_summarized_and_verified() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "source.txt", "input\n");
+    let manifest = manifest(
+        r#"  generated:
+    - files: ["generated/**"]
+      producer: "true"
+      inputs: ["source.txt"]
+      reproducible: true
+"#,
+    );
+
+    let built = build(
+        root.path(),
+        &snapshot(root.path()),
+        &manifest,
+        &BuildConfig::default(),
+    )
+    .expect("absent generated scope should build");
+    assert_eq!(built.document.summary.generated_absent.len(), 1);
+    assert_eq!(
+        built.document.summary.generated_absent[0].declaration,
+        "generated/**"
+    );
+    assert_eq!(built.document.summary.generated_absent[0].producer, "true");
+    assert!(
+        built
+            .document
+            .entries
+            .iter()
+            .all(|entry| entry.path != "generated/**"),
+        "a glob declaration is not a file path"
+    );
+
+    let issues = verify_generated(root.path(), &manifest).expect("producer runs");
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].code, GeneratedIssueCode::GeneratedAbsent);
+    assert_eq!(issues[0].path, "generated/**");
+}
+
+#[test]
 fn completeness_counts_equal_entries_and_digest_is_stable() {
     let root = tempdir().expect("temporary repository");
     write(root.path(), "src/owned.ts", "export {};\n");
@@ -468,17 +891,18 @@ fn completeness_counts_equal_entries_and_digest_is_stable() {
             id: "owned".into(),
             files: vec!["src/owned.ts".into()],
         }],
-        deliberate_exclusions: vec![DeliberateExclusion {
-            path: "external".into(),
-            class: InventoryClass::Submodule,
-            reason: "not descended".into(),
-            blob: Some("sha1:123".into()),
-        }],
         ..BuildConfig::default()
     };
+    let mut listing = snapshot(root.path());
+    listing.push(snapshot_entry(
+        "external",
+        InventoryClass::Submodule,
+        Some("sha1:123"),
+    ));
 
-    let first = build(root.path(), &empty_manifest(), &config).expect("first inventory");
-    let second = build(root.path(), &empty_manifest(), &config).expect("second inventory");
+    let first = build(root.path(), &listing, &empty_manifest(), &config).expect("first inventory");
+    let second =
+        build(root.path(), &listing, &empty_manifest(), &config).expect("second inventory");
     let counted: u64 = first.document.summary.by_class.values().sum();
     assert_eq!(counted, first.document.entries.len() as u64);
     assert_eq!(first.document.summary.files, counted);

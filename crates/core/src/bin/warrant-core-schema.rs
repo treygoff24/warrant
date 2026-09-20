@@ -1,6 +1,6 @@
 use std::{env, fs, path::PathBuf};
 
-use warrant_core::schema::DOCUMENTS;
+use warrant_core::schema::{DOCUMENTS, canonical_bytes};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = env::args_os()
@@ -13,10 +13,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for document in DOCUMENTS {
         match document.generate() {
             Ok(schema) => {
-                let bytes = serde_json::to_vec_pretty(&schema)?;
                 fs::write(
                     output.join(format!("{}.json", document.name)),
-                    [bytes, vec![b'\n']].concat(),
+                    canonical_bytes(&schema)?,
                 )?;
                 println!("schema: {} implemented", document.name);
             }

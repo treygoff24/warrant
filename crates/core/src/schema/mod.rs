@@ -3,6 +3,17 @@
 use schemars::Schema;
 use thiserror::Error;
 
+/// Preserve schemars' keyword order and sort other keys regardless of serde_json features.
+pub fn canonical_bytes(schema: &Schema) -> Result<Vec<u8>, serde_json::Error> {
+    let mut value = serde_json::to_value(schema)?;
+    value.sort_all_objects();
+    // Retain schemars' presentation order so existing schema bytes do not change.
+    let schema: Schema = serde_json::from_value(value)?;
+    let mut bytes = serde_json::to_vec_pretty(&schema)?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 mod capabilities;
 mod census;
 mod context;

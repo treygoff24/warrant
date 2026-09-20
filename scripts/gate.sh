@@ -12,8 +12,8 @@ rustc --version
 cargo --version
 cargo clippy --version
 cargo deny --version
-if command -v cargo-mutants >/dev/null 2>&1; then
-  cargo mutants --version
+if mutants_version="$(cargo mutants --version 2>/dev/null)"; then
+  printf '%s\n' "$mutants_version"
 fi
 git --version
 if command -v node >/dev/null 2>&1; then

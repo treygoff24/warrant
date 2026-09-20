@@ -1,0 +1,80 @@
+use std::{env, path::PathBuf};
+
+use clap::{ArgGroup, Args as ClapArgs};
+use warrant_core::{manifest::SnapshotConfig, nouns::SnapshotKind};
+
+use crate::{cache, cancel, cli::Format, error::CommandError, output};
+
+#[derive(Debug, ClapArgs)]
+#[command(group(ArgGroup::new("source").required(true).multiple(false)))]
+pub struct Args {
+    #[arg(long, group = "source")]
+    worktree: bool,
+    #[arg(long, group = "source")]
+    index: bool,
+    #[arg(long, value_name = "REV", group = "source")]
+    commit: Option<String>,
+    #[arg(long, value_name = "OID", group = "source")]
+    tree: Option<String>,
+}
+
+pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
+    let root = current_dir()?;
+    let (kind, revision) = args.source();
+    let (manifest, ()) = warrant_snapshot::capture(
+        &root,
+        kind,
+        revision.as_deref(),
+        &SnapshotConfig::default(),
+        |_| {
+            cancel::check().map_err(|error| warrant_snapshot::SnapshotError {
+                document: error.document.clone(),
+            })?;
+            Ok(())
+        },
+    )
+    .map_err(snapshot_error)?;
+    cancel::check()?;
+    let bytes = serde_json::to_vec(&manifest)
+        .map_err(|error| CommandError::internal(format!("could not encode snapshot: {error}")))?;
+    let analysis_key = format!("snapshot-v1-{}", manifest.capture.kind);
+    let path = cache::artifact_path(
+        &manifest.repo,
+        &manifest.tree,
+        &analysis_key,
+        "snapshot.json",
+    );
+    cache::write_atomic(&path, &bytes)?;
+    output::document(&manifest, format)
+}
+
+impl Args {
+    fn source(&self) -> (SnapshotKind, Option<String>) {
+        if self.worktree {
+            (SnapshotKind::Worktree, None)
+        } else if self.index {
+            (SnapshotKind::Index, None)
+        } else if let Some(revision) = &self.commit {
+            (SnapshotKind::Commit, Some(revision.clone()))
+        } else {
+            (SnapshotKind::Tree, self.tree.clone())
+        }
+    }
+}
+
+fn current_dir() -> crate::error::Result<PathBuf> {
+    env::current_dir()
+        .map_err(|error| CommandError::evaluation("repository-io", error.to_string(), None))
+}
+
+fn snapshot_error(error: warrant_snapshot::SnapshotError) -> Box<CommandError> {
+    if error.document.code == "cancelled"
+        && let Err(cancelled) = cancel::check()
+    {
+        return cancelled;
+    }
+    Box::new(CommandError {
+        document: error.document,
+        exit: 2,
+    })
+}

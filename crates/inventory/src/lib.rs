@@ -103,6 +103,9 @@ pub enum InventoryError {
         path: String,
         modules: Vec<String>,
     },
+    NestedRepository {
+        path: String,
+    },
     InvalidDeclaration {
         reason: String,
     },
@@ -153,6 +156,10 @@ impl fmt::Display for InventoryError {
                     modules.join(", ")
                 )
             }
+            Self::NestedRepository { path } => write!(
+                formatter,
+                "nested-repository: `{path}` is not a declared submodule"
+            ),
             Self::InvalidDeclaration { reason } => formatter.write_str(reason),
             Self::ProducerFailed { producer, status } => {
                 write!(
@@ -173,8 +180,20 @@ pub fn build(
     manifest: &WarrantManifest,
     config: &BuildConfig,
 ) -> Result<BuiltInventory, InventoryError> {
+    let submodules: Vec<_> = snapshot_entries
+        .iter()
+        .filter(|entry| entry.class == InventoryClass::Submodule)
+        .map(|entry| entry.path.clone())
+        .collect();
+    check_nested_repositories(root, &submodules)?;
     let mut paths: Vec<String> = snapshot_entries
         .iter()
+        .filter(|entry| {
+            !has_git_component(Path::new(&entry.path), Path::new(""))
+                && !submodules.iter().any(|submodule| {
+                    entry.path != *submodule && Path::new(&entry.path).starts_with(submodule)
+                })
+        })
         .map(|entry| entry.path.clone())
         .collect();
     paths.sort();
@@ -196,6 +215,9 @@ pub fn build(
 
     for snapshot_entry in snapshot_entries {
         let relative = &snapshot_entry.path;
+        if paths.binary_search(relative).is_err() {
+            continue;
+        }
         if matches!(
             snapshot_entry.class,
             InventoryClass::Ignored | InventoryClass::Submodule | InventoryClass::Unread
@@ -209,17 +231,20 @@ pub fn build(
         let explicit = matching_rules(relative, &class_rules);
         let generated_match = matching_generated(relative, &generated);
         let vendored_match = matching_vendored(relative, &vendored);
-        let declaration_count = usize::from(generated_match.is_some())
-            + usize::from(vendored_match.is_some())
-            + usize::from(!explicit.is_empty());
+        let declaration_count =
+            generated_match.len() + vendored_match.len() + usize::from(!explicit.is_empty());
         if declaration_count > 1 {
             let mut names: Vec<String> = explicit.iter().map(|rule| rule.rule.id.clone()).collect();
-            if generated_match.is_some() {
-                names.push("manifest:generated".into());
-            }
-            if vendored_match.is_some() {
-                names.push("manifest:vendored".into());
-            }
+            names.extend(
+                generated_match
+                    .iter()
+                    .map(|item| format!("manifest:inventory.generated[{}]", item.declaration)),
+            );
+            names.extend(
+                vendored_match
+                    .iter()
+                    .map(|item| format!("manifest:inventory.vendored[{}]", item.declaration)),
+            );
             names.sort();
             return Err(InventoryError::ClassificationConflict {
                 path: relative.clone(),
@@ -227,41 +252,42 @@ pub fn build(
             });
         }
 
-        let (class, by, reason, generated_by, vendored_from) = if let Some(item) = generated_match {
-            (
-                InventoryClass::Generated,
-                "manifest:inventory.generated".into(),
-                format!("matched generated glob {}", item.pattern),
-                Some(GeneratedBy {
-                    producer: item.producer.clone(),
-                    reproducible: item.reproducible,
-                    inputs: item.inputs.clone(),
-                }),
-                None,
-            )
-        } else if let Some(item) = vendored_match {
-            (
-                InventoryClass::Vendored,
-                "manifest:inventory.vendored".into(),
-                format!("matched vendored glob {}", item.pattern),
-                None,
-                Some(VendoredFrom {
-                    source: item.source.clone(),
-                    version: item.version.clone(),
-                    treatment: item.treatment.clone(),
-                }),
-            )
-        } else if let Some(rule) = choose_explicit(relative, default.0, &explicit)? {
-            (
-                rule.rule.class,
-                format!("rule:{}", rule.rule.id),
-                format!("matched explicit class glob {}", rule.pattern),
-                None,
-                None,
-            )
-        } else {
-            (default.0, default.1, default.2, None, None)
-        };
+        let (class, by, reason, generated_by, vendored_from) =
+            if let Some(item) = generated_match.first() {
+                (
+                    InventoryClass::Generated,
+                    "manifest:inventory.generated".into(),
+                    format!("matched generated glob {}", item.pattern),
+                    Some(GeneratedBy {
+                        producer: item.producer.clone(),
+                        reproducible: item.reproducible,
+                        inputs: item.inputs.clone(),
+                    }),
+                    None,
+                )
+            } else if let Some(item) = vendored_match.first() {
+                (
+                    InventoryClass::Vendored,
+                    "manifest:inventory.vendored".into(),
+                    format!("matched vendored glob {}", item.pattern),
+                    None,
+                    Some(VendoredFrom {
+                        source: item.source.clone(),
+                        version: item.version.clone(),
+                        treatment: item.treatment.clone(),
+                    }),
+                )
+            } else if let Some(rule) = choose_explicit(relative, default.0, &explicit)? {
+                (
+                    rule.rule.class,
+                    format!("rule:{}", rule.rule.id),
+                    format!("matched explicit class glob {}", rule.pattern),
+                    None,
+                    None,
+                )
+            } else {
+                (default.0, default.1, default.2, None, None)
+            };
 
         let owners = matching_modules(relative, &modules);
         if owners.len() > 1 {
@@ -308,7 +334,7 @@ pub fn build(
         });
         units.sort_by(|left, right| left.root.cmp(&right.root));
     }
-    let generated_absent = add_absent_generated(&mut entries, &generated, &paths);
+    let generated_absent = add_absent_generated(&mut entries, &generated, &paths)?;
     entries.sort_by(|left, right| left.path.cmp(&right.path));
     let unit_aliases = alias_tables(root, &paths, &units)?;
     let summary = summarize(&entries, unit_aliases, generated_absent);
@@ -481,6 +507,7 @@ struct CompiledModule {
     matcher: GlobSet,
 }
 struct GeneratedPattern {
+    declaration: usize,
     matcher: GlobSet,
     pattern: String,
     producer: String,
@@ -488,11 +515,39 @@ struct GeneratedPattern {
     reproducible: bool,
 }
 struct VendoredPattern {
+    declaration: usize,
     matcher: GlobSet,
     pattern: String,
     source: String,
     version: String,
     treatment: String,
+}
+
+fn check_nested_repositories(root: &Path, submodules: &[String]) -> Result<(), InventoryError> {
+    let git = root.join(".git");
+    let excluded: Vec<_> = submodules.iter().map(|path| root.join(path)).collect();
+    let mut walker = WalkBuilder::new(root);
+    walker
+        .hidden(false)
+        .ignore(false)
+        .git_ignore(false)
+        .git_exclude(false)
+        .parents(false)
+        .filter_entry(move |entry| {
+            entry.path() != git && !excluded.iter().any(|path| entry.path().starts_with(path))
+        });
+    for result in walker.build() {
+        let entry = result.map_err(|error| io_error(root, error))?;
+        if entry.path() != root && entry.file_name() == ".git" {
+            return Err(InventoryError::NestedRepository {
+                path: relative_path(
+                    root,
+                    entry.path().parent().expect("nested .git has a parent"),
+                )?,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn repository_paths(root: &Path) -> Result<Vec<String>, InventoryError> {
@@ -608,9 +663,10 @@ fn compile_rules(rules: &[ClassRule]) -> Result<Vec<CompiledRule>, InventoryErro
 
 fn compile_generated(manifest: &WarrantManifest) -> Result<Vec<GeneratedPattern>, InventoryError> {
     let mut patterns = Vec::new();
-    for declaration in &manifest.inventory.generated {
+    for (index, declaration) in manifest.inventory.generated.iter().enumerate() {
         for pattern in &declaration.files {
             patterns.push(GeneratedPattern {
+                declaration: index,
                 matcher: compile_glob(pattern)?,
                 pattern: pattern.clone(),
                 producer: declaration.producer.clone(),
@@ -624,9 +680,10 @@ fn compile_generated(manifest: &WarrantManifest) -> Result<Vec<GeneratedPattern>
 
 fn compile_vendored(manifest: &WarrantManifest) -> Result<Vec<VendoredPattern>, InventoryError> {
     let mut patterns = Vec::new();
-    for declaration in &manifest.inventory.vendored {
+    for (index, declaration) in manifest.inventory.vendored.iter().enumerate() {
         for pattern in &declaration.files {
             patterns.push(VendoredPattern {
+                declaration: index,
                 matcher: compile_glob(pattern)?,
                 pattern: pattern.clone(),
                 source: declaration.source.clone(),
@@ -695,15 +752,22 @@ fn choose_explicit<'a>(
 fn matching_generated<'a>(
     path: &str,
     patterns: &'a [GeneratedPattern],
-) -> Option<&'a GeneratedPattern> {
-    patterns.iter().find(|item| item.matcher.is_match(path))
+) -> Vec<&'a GeneratedPattern> {
+    let mut matches: Vec<_> = patterns
+        .iter()
+        .filter(|item| item.matcher.is_match(path))
+        .collect();
+    matches.dedup_by_key(|item| item.declaration);
+    matches
 }
 
-fn matching_vendored<'a>(
-    path: &str,
-    patterns: &'a [VendoredPattern],
-) -> Option<&'a VendoredPattern> {
-    patterns.iter().find(|item| item.matcher.is_match(path))
+fn matching_vendored<'a>(path: &str, patterns: &'a [VendoredPattern]) -> Vec<&'a VendoredPattern> {
+    let mut matches: Vec<_> = patterns
+        .iter()
+        .filter(|item| item.matcher.is_match(path))
+        .collect();
+    matches.dedup_by_key(|item| item.declaration);
+    matches
 }
 
 fn matching_modules(path: &str, modules: &[CompiledModule]) -> Vec<String> {
@@ -728,18 +792,21 @@ fn default_class(path: &str, enabled: EnabledIntegrations) -> (InventoryClass, S
         .any(|part| in_dir(part));
     let class = if known_output {
         InventoryClass::BuildOutput
-    } else if (enabled.typescript && lower.ends_with(".d.ts"))
-        || in_dir("schemas")
-        || in_dir("schema")
-    {
+    } else if enabled.typescript && lower.ends_with(".d.ts") {
         InventoryClass::Schema
-    } else if name.ends_with(".test.ts")
-        || name.ends_with(".spec.ts")
-        || name.ends_with(".test.tsx")
-        || name.ends_with(".spec.tsx")
-        || in_dir("__tests__")
-        || in_dir("tests")
+    } else if enabled.typescript
+        && (name.ends_with(".test.ts")
+            || name.ends_with(".spec.ts")
+            || name.ends_with(".test.tsx")
+            || name.ends_with(".spec.tsx")
+            || in_dir("__tests__"))
     {
+        InventoryClass::Test
+    } else if source_language(path, enabled).is_some() {
+        InventoryClass::Source
+    } else if in_dir("schemas") || in_dir("schema") {
+        InventoryClass::Schema
+    } else if in_dir("tests") {
         InventoryClass::Test
     } else if in_dir("migrations") || lower.ends_with(".sql") {
         InventoryClass::Migration
@@ -764,8 +831,6 @@ fn default_class(path: &str, enabled: EnabledIntegrations) -> (InventoryClass, S
     .any(|extension| lower.ends_with(extension))
     {
         InventoryClass::Asset
-    } else if source_language(path, enabled).is_some() {
-        InventoryClass::Source
     } else {
         InventoryClass::Unknown
     };
@@ -1056,10 +1121,17 @@ fn discover_cargo_units(
         .manifest_path(root.join(manifest))
         .no_deps()
         .other_options(["--locked".into()]);
-    let Ok(metadata) = command.exec() else {
+    let has_lock = root.join("Cargo.lock").exists();
+    let metadata = match command.exec() {
+        Ok(metadata) => metadata,
+        Err(error) if has_lock => {
+            return Err(InventoryError::InvalidDeclaration {
+                reason: format!("cargo metadata failed for `{manifest}`: {error}"),
+            });
+        }
         // Do not let discovery create a lockfile in the source tree. Manifest
         // roots still give conservative unit boundaries when no lock exists.
-        return Ok(());
+        Err(_) => return Ok(()),
     };
     for package in metadata.packages {
         let manifest_path = PathBuf::from(package.manifest_path.as_std_path());
@@ -1276,7 +1348,7 @@ fn add_absent_generated(
     entries: &mut Vec<InventoryEntry>,
     patterns: &[GeneratedPattern],
     paths: &[String],
-) -> Vec<GeneratedAbsent> {
+) -> Result<Vec<GeneratedAbsent>, InventoryError> {
     let mut absent = Vec::new();
     for item in patterns {
         if paths.iter().any(|path| item.matcher.is_match(path)) {
@@ -1287,6 +1359,21 @@ fn add_absent_generated(
                 declaration: item.pattern.clone(),
                 producer: item.producer.clone(),
             });
+            continue;
+        }
+        let matches = matching_generated(&item.pattern, patterns);
+        if matches.len() > 1 {
+            let mut rules: Vec<_> = matches
+                .iter()
+                .map(|matched| format!("manifest:inventory.generated[{}]", matched.declaration))
+                .collect();
+            rules.sort();
+            return Err(InventoryError::ClassificationConflict {
+                path: item.pattern.clone(),
+                rules,
+            });
+        }
+        if entries.iter().any(|entry| entry.path == item.pattern) {
             continue;
         }
         entries.push(InventoryEntry {
@@ -1309,7 +1396,7 @@ fn add_absent_generated(
         });
     }
     absent.sort_by(|left, right| left.declaration.cmp(&right.declaration));
-    absent
+    Ok(absent)
 }
 
 fn summarize(

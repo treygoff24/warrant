@@ -3,12 +3,13 @@ use std::fs;
 use std::path::Path;
 
 use pretty_assertions::assert_eq;
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 use warrant_core::manifest::WarrantManifest;
 use warrant_core::nouns::{InventoryClass, InventoryEntry};
 use warrant_inventory::{
     BuildConfig, ClassRule, GeneratedIssueCode, InventoryError, ModuleSelector, build,
-    discover_units, lint_ownership, verify_generated,
+    discover_units, verify_generated,
 };
 
 fn write(root: &Path, path: &str, contents: &str) {
@@ -47,11 +48,30 @@ fn snapshot(root: &Path) -> Vec<InventoryEntry> {
                     .expect("fixture path below root")
                     .to_string_lossy()
                     .replace('\\', "/");
-                entries.push(snapshot_entry(
-                    &relative,
-                    InventoryClass::Unknown,
-                    Some(&format!("sha1:fixture-{relative}")),
-                ));
+                // Inventory consumes captured blobs and read failures, not live file bytes.
+                let entry = match fs::read(&path) {
+                    Ok(bytes) => {
+                        let mut hash = Sha256::new();
+                        hash.update(format!("blob {}\0", bytes.len()));
+                        hash.update(bytes);
+                        let digest: String = hash
+                            .finalize()
+                            .iter()
+                            .map(|byte| format!("{byte:02x}"))
+                            .collect();
+                        snapshot_entry(
+                            &relative,
+                            InventoryClass::Unknown,
+                            Some(&format!("sha256:{digest}")),
+                        )
+                    }
+                    Err(error) => {
+                        let mut entry = snapshot_entry(&relative, InventoryClass::Unread, None);
+                        entry.unread = Some(error.to_string());
+                        entry
+                    }
+                };
+                entries.push(entry);
             }
         }
     }
@@ -87,28 +107,105 @@ fn overlapping_module_selectors_are_an_error() {
     let root = tempdir().expect("temporary repository");
     write(root.path(), "src/shared.ts", "export const value = 1;\n");
 
-    let modules = [
-        ModuleSelector {
-            id: "first".into(),
-            files: vec!["src/**".into()],
-        },
-        ModuleSelector {
-            id: "second".into(),
-            files: vec!["src/shared.ts".into()],
-        },
-    ];
-    let error = lint_ownership(root.path(), &modules)
+    let first = ModuleSelector {
+        id: "first".into(),
+        files: vec!["src/**".into()],
+    };
+    let second = ModuleSelector {
+        id: "second".into(),
+        files: vec!["src/shared.ts".into()],
+    };
+    for modules in [vec![first.clone(), second.clone()], vec![second, first]] {
+        let error = build(
+            root.path(),
+            &snapshot(root.path()),
+            &empty_manifest(),
+            &BuildConfig {
+                modules,
+                ..BuildConfig::default()
+            },
+        )
         .expect_err("overlap must not be resolved by declaration order");
-
-    assert!(matches!(
-        error,
-        InventoryError::OwnershipOverlap { path, modules }
-            if path == "src/shared.ts" && modules == ["first", "second"]
-    ));
+        assert!(matches!(
+            error,
+            InventoryError::OwnershipOverlap { path, modules }
+                if path == "src/shared.ts" && modules == ["first", "second"]
+        ));
+    }
 }
 
 #[test]
-fn classification_defaults_and_provenance_cover_every_class() {
+fn nested_repository_is_rejected() {
+    for git_is_file in [false, true] {
+        let root = tempdir().expect("temporary repository");
+        if git_is_file {
+            write(root.path(), "vendor/nested/.git", "gitdir: elsewhere\n");
+        } else {
+            write(
+                root.path(),
+                "vendor/nested/.git/HEAD",
+                "ref: refs/heads/main\n",
+            );
+        }
+        write(root.path(), "vendor/nested/src/b.ts", "export {};\n");
+        let error = build(
+            root.path(),
+            &snapshot(root.path()),
+            &empty_manifest(),
+            &BuildConfig::default(),
+        )
+        .expect_err("nested repository has two identities");
+        assert!(
+            matches!(error, InventoryError::NestedRepository { path } if path == "vendor/nested")
+        );
+    }
+}
+
+#[test]
+fn declared_submodule_contents_are_not_first_party() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), ".git/HEAD", "ref: refs/heads/main\n");
+    write(
+        root.path(),
+        "vendor/sub/.git/HEAD",
+        "ref: refs/heads/main\n",
+    );
+    write(root.path(), "vendor/sub/src/b.ts", "export {};\n");
+    write(
+        root.path(),
+        "vendor/sub/package.json",
+        "not first-party config",
+    );
+    write(root.path(), "vendor/submarine.ts", "export {};\n");
+    let mut listing = snapshot(root.path());
+    listing.push(snapshot_entry(
+        "vendor/sub",
+        InventoryClass::Submodule,
+        Some("sha1:abc"),
+    ));
+    let built = build(
+        root.path(),
+        &listing,
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect("declared submodule is allowed");
+    let paths: Vec<_> = built
+        .document
+        .entries
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .collect();
+    assert_eq!(paths, ["vendor/sub", "vendor/submarine.ts"]);
+    assert_eq!(built.document.summary.submodules[0].path, "vendor/sub");
+    assert_eq!(
+        built.document.summary.unowned_source,
+        ["vendor/submarine.ts"]
+    );
+}
+
+#[test]
+fn classification_defaults_and_snapshot_exclusions_preserve_classes() {
     let root = tempdir().expect("temporary repository");
     for (path, contents) in [
         ("src/main.ts", "export {};\n"),
@@ -261,7 +358,14 @@ fn first_party_source_outside_module_is_unowned() {
 #[test]
 fn source_defaults_only_apply_for_enabled_integrations() {
     let root = tempdir().expect("temporary repository");
-    write(root.path(), "types/disabled.d.ts", "export {};\n");
+    for path in [
+        "types/disabled.d.ts",
+        "src/value.test.ts",
+        "src/value.spec.tsx",
+        "__tests__/value.ts",
+    ] {
+        write(root.path(), path, "export {};\n");
+    }
     let manifest =
         WarrantManifest::parse("schema_version: warrant.manifest/1\n").expect("valid manifest");
 
@@ -272,7 +376,57 @@ fn source_defaults_only_apply_for_enabled_integrations() {
         &BuildConfig::default(),
     )
     .expect("inventory builds");
-    assert_eq!(built.document.entries[0].class, InventoryClass::Unknown);
+    for entry in &built.document.entries {
+        assert_eq!(entry.class, InventoryClass::Unknown, "{}", entry.path);
+    }
+}
+
+#[test]
+fn unowned_bin_source_keeps_integration_defaults() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "package.json", "{}");
+    let sources = [
+        "crates/tool/src/bin/helper.rs",
+        "migrations/change.ts",
+        "schemas/model.rs",
+        "scripts/tool.ts",
+        "src/bin/cli.ts",
+        "tests/helper.rs",
+        "vite.config.ts",
+    ];
+    for path in sources {
+        write(root.path(), path, "// source\n");
+    }
+    write(root.path(), "scripts/release.sh", "exit 0\n");
+    let built = build(
+        root.path(),
+        &snapshot(root.path()),
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect("inventory builds");
+    for path in sources {
+        let entry = built
+            .document
+            .entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .expect("source entry");
+        assert_eq!(entry.class, InventoryClass::Source, "{path}");
+        assert_eq!(entry.module, None);
+        assert_eq!(entry.by, "default:source");
+    }
+    assert_eq!(built.document.summary.unowned_source, sources);
+    assert_eq!(
+        built
+            .document
+            .entries
+            .iter()
+            .find(|entry| entry.path == "scripts/release.sh")
+            .expect("shell script")
+            .class,
+        InventoryClass::Script
+    );
 }
 
 #[test]
@@ -312,6 +466,92 @@ fn conflicting_class_rules_are_order_independent_errors() {
                 if path == "src/value.ts" && rules == ["doc-rule", "script-rule"]
         ));
     }
+}
+
+#[test]
+fn overlapping_generated_declarations_are_order_independent_errors() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "generated/client.ts", "generated\n");
+    let first = "    - files: [\"generated/**\"]\n      producer: first\n";
+    let second = "    - files: [\"generated/client.ts\"]\n      producer: second\n";
+    for declarations in [format!("{first}{second}"), format!("{second}{first}")] {
+        let error = build(
+            root.path(),
+            &snapshot(root.path()),
+            &manifest(&format!("  generated:\n{declarations}")),
+            &BuildConfig::default(),
+        )
+        .expect_err("overlapping producers must fail");
+        assert!(
+            matches!(error, InventoryError::ClassificationConflict { path, rules }
+            if path == "generated/client.ts" && rules == ["manifest:inventory.generated[0]", "manifest:inventory.generated[1]"])
+        );
+    }
+}
+
+#[test]
+fn overlapping_vendored_declarations_are_order_independent_errors() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "vendor/client.ts", "vendored\n");
+    let first = "    - files: [\"vendor/**\"]\n      source: first\n      version: '1'\n";
+    let second = "    - files: [\"vendor/client.ts\"]\n      source: second\n      version: '2'\n";
+    for declarations in [format!("{first}{second}"), format!("{second}{first}")] {
+        let error = build(
+            root.path(),
+            &snapshot(root.path()),
+            &manifest(&format!("  vendored:\n{declarations}")),
+            &BuildConfig::default(),
+        )
+        .expect_err("overlapping vendors must fail");
+        assert!(
+            matches!(error, InventoryError::ClassificationConflict { path, rules }
+            if path == "vendor/client.ts" && rules == ["manifest:inventory.vendored[0]", "manifest:inventory.vendored[1]"])
+        );
+    }
+}
+
+#[test]
+fn duplicate_absent_generated_declarations_are_errors() {
+    let root = tempdir().expect("temporary repository");
+    for producers in [["first", "second"], ["second", "first"]] {
+        let declarations: String = producers
+            .iter()
+            .map(|producer| {
+                format!("    - files: [\"generated/missing.ts\"]\n      producer: {producer}\n")
+            })
+            .collect();
+        let error = build(
+            root.path(),
+            &[],
+            &manifest(&format!("  generated:\n{declarations}")),
+            &BuildConfig::default(),
+        )
+        .expect_err("an absent path cannot have conflicting producers");
+        assert!(
+            matches!(error, InventoryError::ClassificationConflict { path, rules }
+            if path == "generated/missing.ts" && rules == ["manifest:inventory.generated[0]", "manifest:inventory.generated[1]"])
+        );
+    }
+}
+
+#[test]
+fn overlapping_patterns_within_one_generated_declaration_are_not_conflicts() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "generated/client.ts", "generated\n");
+    let manifest = manifest(
+        "  generated:\n    - files: ['generated/**', 'generated/client.ts', 'absent.ts', 'absent.ts']\n      producer: generate\n",
+    );
+    let built = build(
+        root.path(),
+        &snapshot(root.path()),
+        &manifest,
+        &BuildConfig::default(),
+    )
+    .expect("one declaration owns both paths");
+    assert_eq!(built.document.entries.len(), 2);
+    assert_eq!(built.document.summary.files, 2);
+    assert_eq!(built.document.entries[0].path, "absent.ts");
+    assert_eq!(built.document.entries[1].path, "generated/client.ts");
 }
 
 #[test]
@@ -552,6 +792,30 @@ fn snapshot_listing_controls_paths_blobs_and_ignored_count() {
     )
     .expect("excluded path inventory");
     assert_eq!(with_ignored.document.summary.ignored_files, Some(1));
+}
+
+#[test]
+fn malformed_cargo_manifest_with_lock_fails_closed() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "Cargo.toml", "[package\n");
+    write(root.path(), "Cargo.lock", "version = 4\n");
+    let error = discover_units(root.path()).expect_err("locked metadata failures must surface");
+    assert!(
+        matches!(error, InventoryError::InvalidDeclaration { reason }
+        if reason.contains("cargo metadata failed") && reason.contains("Cargo.toml") && reason.contains("error"))
+    );
+}
+
+#[test]
+fn malformed_cargo_manifest_without_lock_keeps_conservative_units() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "Cargo.toml", "[package\n");
+    let units = discover_units(root.path()).expect("no-lock fallback is conservative");
+    assert_eq!(units.len(), 1);
+    assert_eq!(units[0].root, ".");
+    assert_eq!(units[0].configuration, "Cargo.toml");
+    assert_eq!(units[0].by, "cargo-manifest");
+    assert!(!root.path().join("Cargo.lock").exists());
 }
 
 #[test]
@@ -800,15 +1064,33 @@ entrypoints:
 #[test]
 fn generated_verification_reports_drift_and_absence() {
     let root = tempdir().expect("temporary repository");
+    let effects = tempdir().expect("producer execution sentinels");
+    let reproducible_effect = effects.path().join("reproducible-ran");
+    let unsafe_effect = effects.path().join("non-reproducible-ran");
     write(root.path(), "generated/value.txt", "stale\n");
+    write(root.path(), "generated/clean.txt", "same\n");
     write(root.path(), "source.txt", "input\n");
-    let manifest = manifest(
+    let clean_producer = serde_json::to_string(&format!(
+        "mkdir -p generated && printf 'same\\n' > generated/clean.txt && printf ran > '{}'",
+        reproducible_effect.display()
+    ))
+    .expect("quoted shell producer");
+    let unsafe_producer =
+        serde_json::to_string(&format!("printf ran > '{}'", unsafe_effect.display()))
+            .expect("quoted shell producer");
+    let manifest = manifest(&format!(
         r#"  generated:
     - files: ["generated/value.txt", "generated/missing.txt"]
       producer: "mkdir -p generated && printf 'fresh\\n' > generated/value.txt"
       reproducible: true
+    - files: ["generated/clean.txt"]
+      producer: {clean_producer}
+      reproducible: true
+    - files: ["generated/unsafe.txt"]
+      producer: {unsafe_producer}
+      reproducible: false
 "#,
-    );
+    ));
 
     let built = build(
         root.path(),
@@ -835,6 +1117,14 @@ fn generated_verification_reports_drift_and_absence() {
     );
 
     let issues = verify_generated(root.path(), &manifest).expect("producer runs");
+    assert_eq!(
+        fs::read_to_string(&reproducible_effect).expect("reproducible producer ran"),
+        "ran"
+    );
+    assert!(
+        !unsafe_effect.exists(),
+        "non-reproducible producer must never execute"
+    );
     assert_eq!(
         issues,
         [
@@ -912,6 +1202,11 @@ fn completeness_counts_equal_entries_and_digest_is_stable() {
         InventoryClass::Submodule,
         Some("sha1:123"),
     ));
+    listing.push(snapshot_entry(
+        "ignored/cache.bin",
+        InventoryClass::Ignored,
+        None,
+    ));
 
     let first = build(root.path(), &listing, &empty_manifest(), &config).expect("first inventory");
     let second =
@@ -922,5 +1217,77 @@ fn completeness_counts_equal_entries_and_digest_is_stable() {
     assert_eq!(first.document.summary.unowned_source, ["src/unowned.ts"]);
     assert_eq!(first.document.summary.unknown, ["mystery.xyz"]);
     assert_eq!(first.document.summary.submodules[0].path, "external");
+    assert_eq!(first.document.summary.ignored_files, Some(1));
     assert_eq!(first.digest, second.digest);
+}
+
+#[test]
+fn inventory_digest_changes_with_captured_file_content() {
+    let first_root = tempdir().expect("first repository");
+    let second_root = tempdir().expect("second repository");
+    write(
+        first_root.path(),
+        "src/value.ts",
+        "export const value = 1;\n",
+    );
+    write(
+        second_root.path(),
+        "src/value.ts",
+        "export const value = 2;\n",
+    );
+    let capture = |root: &Path| {
+        build(
+            root,
+            &snapshot(root),
+            &empty_manifest(),
+            &BuildConfig::default(),
+        )
+        .expect("inventory builds")
+    };
+    let first = capture(first_root.path());
+    let second = capture(second_root.path());
+    assert_ne!(
+        first.document.entries[0].blob,
+        second.document.entries[0].blob
+    );
+    assert!(first.digest.starts_with("sha256:"));
+    assert!(second.digest.starts_with("sha256:"));
+    assert_ne!(
+        first.digest, second.digest,
+        "content changes must change the inventory identity"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unread_snapshot_entry_preserves_read_failure_in_completeness() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "src/unread.ts", "export {};\n");
+    let path = root.path().join("src/unread.ts");
+    let permissions = fs::metadata(&path).expect("fixture metadata").permissions();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).expect("make fixture unreadable");
+    let read_result = fs::read(&path);
+    let listing = snapshot(root.path());
+    let result = build(
+        root.path(),
+        &listing,
+        &empty_manifest(),
+        &BuildConfig::default(),
+    );
+    fs::set_permissions(&path, permissions).expect("restore fixture permissions");
+    let error = read_result
+        .expect_err("this test needs an unprivileged user to exercise a real read failure");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    let built = result.expect("unread entries stay in the inventory");
+    assert_eq!(built.document.entries.len(), 1);
+    assert_eq!(built.document.entries[0].class, InventoryClass::Unread);
+    assert_eq!(
+        built.document.entries[0].unread.as_deref(),
+        Some(error.to_string().as_str())
+    );
+    assert_eq!(built.document.summary.unread.len(), 1);
+    assert_eq!(built.document.summary.unread[0].path, "src/unread.ts");
+    assert_eq!(built.document.summary.unread[0].reason, error.to_string());
 }

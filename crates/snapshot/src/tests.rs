@@ -489,6 +489,18 @@ fn ignore_configuration_digest_changes_even_when_tree_and_exclusions_do_not() {
         |_| Ok(()),
     )
     .unwrap();
+    let (unchanged, ()) = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(
+        first.capture.manifest_digest,
+        unchanged.capture.manifest_digest
+    );
     fs::write(ignores.path(), "# second\n").unwrap();
     let (second, ()) = capture(
         dir.path(),

@@ -31,14 +31,10 @@ possible without the optional terminal decoration.
 | `oxc_resolver` | 11.24.3 | MIT | lang-ts |
 | `tree-sitter-typescript` | 0.23.2 | MIT | core pattern checks |
 | `cargo_metadata` | 0.23.1 | MIT | inventory and lang-rust |
-| `syn` | 3.0.6 | MIT OR Apache-2.0 | lang-rust |
 | `ast-grep-core` | 0.45.3 | MIT | core pattern checks |
-| `ast-grep-config` | 0.45.3 | MIT | core pattern checks |
-| `ast-grep-language` | 0.45.3 | MIT | core pattern checks |
 | `tree-sitter` | 0.27.0 | MIT | core pattern checks |
 | `serde_json_canonicalizer` | 0.3.2 | MIT | core, model, authority |
 | `sha2` | 0.11.0 | MIT OR Apache-2.0 | digests |
-| `serde-sarif` | 0.8.0 | MIT | evidence adapters |
 | `schemars` | 1.2.2 | MIT | core schemas |
 | `petgraph` | 0.8.3 | MIT OR Apache-2.0 | core and model graphs |
 | `clap` | 4.6.7 | MIT OR Apache-2.0 | CLI |
@@ -58,7 +54,6 @@ possible without the optional terminal decoration.
 | `process-wrap` | 10.0.0 | Apache-2.0 OR MIT | child process groups |
 | `wait-timeout` | 0.2.1 | MIT OR Apache-2.0 | child deadlines |
 | `jiff` | 0.2.37 | Unlicense OR MIT | timestamps |
-| `insta` | 1.48.0 | Apache-2.0 | tests |
 | `tempfile` | 3.27.0 | MIT OR Apache-2.0 | isolated tests and writes |
 | `pretty_assertions` | 1.4.1 | MIT OR Apache-2.0 | tests |
 
@@ -71,6 +66,11 @@ advisories, bans, licenses, and sources all OK for the locked graph.
 
 | Entry | Verified candidate | Reason and adoption point |
 | --- | --- | --- |
+| `ast-grep-config` | 0.45.3, MIT | W2.2 names `ast-grep-core` plus the TypeScript grammar directly; defer the config layer unless a later task demonstrates a need. This also avoids its archived `serde_yaml` dependency. |
+| `ast-grep-language` | 0.45.3, MIT | The plan needs only the TypeScript grammar in M0-M2, not ast-grep's all-language registry. |
+| `syn` | 3.0.6, MIT OR Apache-2.0 | W1.6 is the minimal Cargo-metadata integration and does not parse Rust syntax. |
+| `serde-sarif` | 0.8.0, MIT | W2.4's selected adapters consume Vitest and Fallow JSON; no M0-M2 task consumes or emits SARIF. |
+| `insta` | 1.48.0, Apache-2.0 | Schema drift is checked byte-for-byte by the schema stage, and no planned M0-M2 test requires snapshot machinery. |
 | `scip` | 0.10.0, Apache-2.0 | Optional; only W1.5/W1.D10 may adopt it if the SCIP candidate survives S1. |
 | `ssh-key` | 0.6.7, Apache-2.0 OR MIT | Deferred to W2.7 by coordinator ruling. It is absent from every manifest; W2.7 must resolve the applicability of RUSTSEC-2023-0071 before adoption. |
 | `typescript` | 7.0.2 | External instrument, deferred to the S1/S6 lock entries that record the selected platform binary. |

@@ -2,6 +2,7 @@
   "schema_version": 1,
   "corpus_date": "2026-09-19",
   "artifact_layout": "Each member has a deterministic Git source archive and a deterministic node_modules dependency archive.",
+  "frameworks_rule": "Record application frameworks and build bundlers used by the pinned repository, with versions resolved from its installed dependency tree.",
   "inputs": {
     "git": "git version 2.47.3",
     "platform_observed": "Linux x86_64",
@@ -19,7 +20,6 @@
       "source": "private:atlas",
       "public_fetch": false,
       "commit": "5e3d5e4c806c2b0dad6357ff2c860772568f0c13",
-      "git_tree_oid": "99114e51a812a879eb665b352c07f2f200c105a5",
       "source_artifact": "atlas-source.tar.gz",
       "tree_sha256": "2861fc99320a0d701d1eac25a9312835ba6d9289b0f798b973ba318643f73f79",
       "lockfile": "package-lock.json",
@@ -38,7 +38,6 @@
       "source": "https://github.com/vercel/nextjs-postgres-auth-starter.git",
       "public_fetch": true,
       "commit": "fde8ecf1da9337223081f70cf88b420060039d6e",
-      "git_tree_oid": "f6848643f42fea8960d0a0d1cf151db32d03247e",
       "source_artifact": "nextjs-app-source.tar.gz",
       "tree_sha256": "f7b9707529e09e3c6f5cc7dd22d9dcbbb64294d16576c849df56523b81350702",
       "lockfile": "pnpm-lock.yaml",
@@ -57,16 +56,15 @@
       "source": "https://github.com/ibezkrovnyi/pnpm-monorepo-typescript-project-references.git",
       "public_fetch": true,
       "commit": "dbf42905a1c1c0443ca575c4cb25da0b401e6aba",
-      "git_tree_oid": "b68d4dd21bba3cbd68d5376556ceeeb889b4ab39",
       "source_artifact": "pnpm-project-references-source.tar.gz",
       "tree_sha256": "5067103ce887cb2c07f9e9d7bc478109ec4d762082a34d26690918ace13be4be",
       "lockfile": "pnpm-lock.yaml",
       "lockfile_sha256": "2e3f02578eaf3ac5ec90be8681a7f5d8a9b7a9ebbfe7939bcb3b7183b2d70b75",
       "package_manager": "pnpm@7.33.7",
       "dependency_artifact": "pnpm-project-references-dependencies.tar.gz",
-      "dependency_bundle_sha256": "832ee70dd2ad6d4cd9a32a5764d80ee27e457686b783b69ff36a2d3814ba8f94",
+      "dependency_bundle_sha256": "9977b382fa97bf86794f312228b11840b9ba47bdac8d9ca4ae6879a80da1374f",
       "typescript_observed": "4.2.4",
-      "publishability": "metadata is publishable; source carries Apache-2.0; dependency redistribution needs separate review",
+      "publishability": "metadata is publishable; root LICENSE is Apache-2.0; root package.json and all four workspace package.json files declare ISC; dependency redistribution needs separate review",
       "frameworks": [],
       "framework_versions": {}
     },
@@ -76,7 +74,6 @@
       "source": "https://github.com/zaki-yama/typescript-npm-package-template.git",
       "public_fetch": true,
       "commit": "92b6f49414a5200daab958b174598ca7dff43a5a",
-      "git_tree_oid": "def439f4e896d41c4fb85db79ecd571c94e7959c",
       "source_artifact": "commonjs-library-source.tar.gz",
       "tree_sha256": "a9f6b7de655a3504d1bdc03b716691ff3cb87420ff7533ced9db558c0717a9ed",
       "lockfile": "package-lock.json",
@@ -95,7 +92,6 @@
       "source": "https://github.com/jasonsturges/vite-typescript-npm-package.git",
       "public_fetch": true,
       "commit": "e182cf8e135fb072c4ddf261f5ac34423fd067ea",
-      "git_tree_oid": "01630299561a3a4d6d456c552cc245596c9b38cd",
       "source_artifact": "vite-library-source.tar.gz",
       "tree_sha256": "d77f0a40a9c431f0e200d1407c57fb2fa111513ddec67aa6efd9e4c88e2d67cd",
       "lockfile": "package-lock.json",
@@ -114,7 +110,6 @@
       "source": "https://github.com/pmndrs/zustand.git",
       "public_fetch": true,
       "commit": "b57db4f86ef179285da216eeb291266da82c361c",
-      "git_tree_oid": "b6e553438d47e555433acce49e55bd96f5881d10",
       "source_artifact": "path-aliases-exports-source.tar.gz",
       "tree_sha256": "e5808aedfe6089ffdf7278b9c665d125172b4e27c23ddf636087459e00864734",
       "lockfile": "pnpm-lock.yaml",
@@ -124,8 +119,8 @@
       "dependency_bundle_sha256": "bb252e0ad38681f42ffd5e47a3fe56cad57c06466afa2c6bff4bb8c5df2b806f",
       "typescript_observed": "6.0.3",
       "publishability": "metadata is publishable; source carries MIT; dependency redistribution needs separate review",
-      "frameworks": ["react"],
-      "framework_versions": {"react": "19.2.8"}
+      "frameworks": ["react", "rollup"],
+      "framework_versions": {"react": "19.2.8", "rollup": "4.62.4"}
     }
   ]
 }

@@ -1121,10 +1121,17 @@ fn discover_cargo_units(
         .manifest_path(root.join(manifest))
         .no_deps()
         .other_options(["--locked".into()]);
-    let Ok(metadata) = command.exec() else {
+    let has_lock = root.join("Cargo.lock").exists();
+    let metadata = match command.exec() {
+        Ok(metadata) => metadata,
+        Err(error) if has_lock => {
+            return Err(InventoryError::InvalidDeclaration {
+                reason: format!("cargo metadata failed for `{manifest}`: {error}"),
+            });
+        }
         // Do not let discovery create a lockfile in the source tree. Manifest
         // roots still give conservative unit boundaries when no lock exists.
-        return Ok(());
+        Err(_) => return Ok(()),
     };
     for package in metadata.packages {
         let manifest_path = PathBuf::from(package.manifest_path.as_std_path());

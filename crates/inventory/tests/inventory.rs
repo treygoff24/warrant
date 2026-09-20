@@ -795,6 +795,30 @@ fn snapshot_listing_controls_paths_blobs_and_ignored_count() {
 }
 
 #[test]
+fn malformed_cargo_manifest_with_lock_fails_closed() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "Cargo.toml", "[package\n");
+    write(root.path(), "Cargo.lock", "version = 4\n");
+    let error = discover_units(root.path()).expect_err("locked metadata failures must surface");
+    assert!(
+        matches!(error, InventoryError::InvalidDeclaration { reason }
+        if reason.contains("cargo metadata failed") && reason.contains("Cargo.toml") && reason.contains("error"))
+    );
+}
+
+#[test]
+fn malformed_cargo_manifest_without_lock_keeps_conservative_units() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "Cargo.toml", "[package\n");
+    let units = discover_units(root.path()).expect("no-lock fallback is conservative");
+    assert_eq!(units.len(), 1);
+    assert_eq!(units[0].root, ".");
+    assert_eq!(units[0].configuration, "Cargo.toml");
+    assert_eq!(units[0].by, "cargo-manifest");
+    assert!(!root.path().join("Cargo.lock").exists());
+}
+
+#[test]
 fn discovers_monorepo_units_from_all_declared_sources() {
     let root = tempdir().expect("temporary repository");
     write(
@@ -1243,7 +1267,7 @@ fn unread_snapshot_entry_preserves_read_failure_in_completeness() {
     write(root.path(), "src/unread.ts", "export {};\n");
     let path = root.path().join("src/unread.ts");
     let permissions = fs::metadata(&path).expect("fixture metadata").permissions();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0)).expect("make fixture unreadable");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).expect("make fixture unreadable");
     let read_result = fs::read(&path);
     let listing = snapshot(root.path());
     let result = build(

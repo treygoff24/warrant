@@ -64,10 +64,11 @@ self_test() {
 
   cp "$repo_root/Cargo.toml" "$repo_root/Cargo.lock" "$tmp_root/"
   cp -R "$repo_root/crates" "$tmp_root/crates"
-  cat >>"$tmp_root/crates/core/Cargo.toml" <<'EOF'
-
-[target.'cfg(warrant_deps_self_test)'.dependencies]
-warrant-snapshot = { version = "0.1.0", path = "../snapshot" }
+  cat >>"$tmp_root/crates/snapshot/Cargo.toml" <<'EOF'
+warrant-inventory = { version = "0.1.0", path = "../inventory" }
+EOF
+  cat >>"$tmp_root/crates/lang-ts/Cargo.toml" <<'EOF'
+warrant-authority = { version = "0.1.0", path = "../authority" }
 EOF
 
   local output
@@ -75,7 +76,8 @@ EOF
     printf '%s\n' "self-test: detector accepted a forbidden edge" >&2
     return 1
   fi
-  if ! command grep -q 'warrant-core -> warrant-snapshot' <<<"$output"; then
+  if ! command grep -Fxq 'deps: forbidden workspace edge: warrant-snapshot -> warrant-inventory' <<<"$output" \
+    || ! command grep -Fxq 'deps: forbidden workspace edge: warrant-lang-ts -> warrant-authority' <<<"$output"; then
     printf '%s\n' "self-test: detector failed for the wrong reason" >&2
     printf '%s\n' "$output" >&2
     return 1

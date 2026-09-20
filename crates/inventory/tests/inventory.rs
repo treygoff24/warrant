@@ -108,6 +108,76 @@ fn overlapping_module_selectors_are_an_error() {
 }
 
 #[test]
+fn nested_repository_is_rejected() {
+    for git_is_file in [false, true] {
+        let root = tempdir().expect("temporary repository");
+        if git_is_file {
+            write(root.path(), "vendor/nested/.git", "gitdir: elsewhere\n");
+        } else {
+            write(
+                root.path(),
+                "vendor/nested/.git/HEAD",
+                "ref: refs/heads/main\n",
+            );
+        }
+        write(root.path(), "vendor/nested/src/b.ts", "export {};\n");
+        let error = build(
+            root.path(),
+            &snapshot(root.path()),
+            &empty_manifest(),
+            &BuildConfig::default(),
+        )
+        .expect_err("nested repository has two identities");
+        assert!(
+            matches!(error, InventoryError::NestedRepository { path } if path == "vendor/nested")
+        );
+    }
+}
+
+#[test]
+fn declared_submodule_contents_are_not_first_party() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), ".git/HEAD", "ref: refs/heads/main\n");
+    write(
+        root.path(),
+        "vendor/sub/.git/HEAD",
+        "ref: refs/heads/main\n",
+    );
+    write(root.path(), "vendor/sub/src/b.ts", "export {};\n");
+    write(
+        root.path(),
+        "vendor/sub/package.json",
+        "not first-party config",
+    );
+    write(root.path(), "vendor/submarine.ts", "export {};\n");
+    let mut listing = snapshot(root.path());
+    listing.push(snapshot_entry(
+        "vendor/sub",
+        InventoryClass::Submodule,
+        Some("sha1:abc"),
+    ));
+    let built = build(
+        root.path(),
+        &listing,
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect("declared submodule is allowed");
+    let paths: Vec<_> = built
+        .document
+        .entries
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .collect();
+    assert_eq!(paths, ["vendor/sub", "vendor/submarine.ts"]);
+    assert_eq!(built.document.summary.submodules[0].path, "vendor/sub");
+    assert_eq!(
+        built.document.summary.unowned_source,
+        ["vendor/submarine.ts"]
+    );
+}
+
+#[test]
 fn classification_defaults_and_provenance_cover_every_class() {
     let root = tempdir().expect("temporary repository");
     for (path, contents) in [

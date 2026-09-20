@@ -103,6 +103,9 @@ pub enum InventoryError {
         path: String,
         modules: Vec<String>,
     },
+    NestedRepository {
+        path: String,
+    },
     InvalidDeclaration {
         reason: String,
     },
@@ -153,6 +156,10 @@ impl fmt::Display for InventoryError {
                     modules.join(", ")
                 )
             }
+            Self::NestedRepository { path } => write!(
+                formatter,
+                "nested-repository: `{path}` is not a declared submodule"
+            ),
             Self::InvalidDeclaration { reason } => formatter.write_str(reason),
             Self::ProducerFailed { producer, status } => {
                 write!(
@@ -173,8 +180,20 @@ pub fn build(
     manifest: &WarrantManifest,
     config: &BuildConfig,
 ) -> Result<BuiltInventory, InventoryError> {
+    let submodules: Vec<_> = snapshot_entries
+        .iter()
+        .filter(|entry| entry.class == InventoryClass::Submodule)
+        .map(|entry| entry.path.clone())
+        .collect();
+    check_nested_repositories(root, &submodules)?;
     let mut paths: Vec<String> = snapshot_entries
         .iter()
+        .filter(|entry| {
+            !has_git_component(Path::new(&entry.path), Path::new(""))
+                && !submodules.iter().any(|submodule| {
+                    entry.path != *submodule && Path::new(&entry.path).starts_with(submodule)
+                })
+        })
         .map(|entry| entry.path.clone())
         .collect();
     paths.sort();
@@ -196,6 +215,9 @@ pub fn build(
 
     for snapshot_entry in snapshot_entries {
         let relative = &snapshot_entry.path;
+        if paths.binary_search(relative).is_err() {
+            continue;
+        }
         if matches!(
             snapshot_entry.class,
             InventoryClass::Ignored | InventoryClass::Submodule | InventoryClass::Unread
@@ -499,6 +521,33 @@ struct VendoredPattern {
     source: String,
     version: String,
     treatment: String,
+}
+
+fn check_nested_repositories(root: &Path, submodules: &[String]) -> Result<(), InventoryError> {
+    let git = root.join(".git");
+    let excluded: Vec<_> = submodules.iter().map(|path| root.join(path)).collect();
+    let mut walker = WalkBuilder::new(root);
+    walker
+        .hidden(false)
+        .ignore(false)
+        .git_ignore(false)
+        .git_exclude(false)
+        .parents(false)
+        .filter_entry(move |entry| {
+            entry.path() != git && !excluded.iter().any(|path| entry.path().starts_with(path))
+        });
+    for result in walker.build() {
+        let entry = result.map_err(|error| io_error(root, error))?;
+        if entry.path() != root && entry.file_name() == ".git" {
+            return Err(InventoryError::NestedRepository {
+                path: relative_path(
+                    root,
+                    entry.path().parent().expect("nested .git has a parent"),
+                )?,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn repository_paths(root: &Path) -> Result<Vec<String>, InventoryError> {

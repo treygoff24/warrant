@@ -6,5 +6,17 @@ rust-version = "1.96"
 license.workspace = true
 
 [dependencies]
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_parser.workspace = true
+oxc_resolver.workspace = true
+oxc_semantic.workspace = true
+oxc_span.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 warrant-core = { version = "0.1.0", path = "../core" }
 warrant-model = { version = "0.1.0", path = "../model" }
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tempfile.workspace = true

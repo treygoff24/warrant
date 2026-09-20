@@ -1,0 +1,284 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InventoryDocument",
+  "description": "The complete classified inventory document.",
+  "type": "object",
+  "properties": {
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/InventoryEntry"
+      }
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "summary": {
+      "$ref": "#/$defs/InventorySummary"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "entries",
+    "summary"
+  ],
+  "$defs": {
+    "Entrypoint": {
+      "description": "A runtime-visible entrypoint and the basis that established it.",
+      "type": "object",
+      "properties": {
+        "basis": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "basis",
+        "by"
+      ]
+    },
+    "GeneratedBy": {
+      "description": "Producer provenance for generated content.",
+      "type": "object",
+      "properties": {
+        "producer": {
+          "type": "string"
+        },
+        "reproducible": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "producer",
+        "reproducible"
+      ]
+    },
+    "InventoryClass": {
+      "description": "The exclusive classification assigned to an inventory path.",
+      "type": "string",
+      "enum": [
+        "source",
+        "test",
+        "config",
+        "script",
+        "migration",
+        "schema",
+        "generated",
+        "vendored",
+        "asset",
+        "doc",
+        "build-output",
+        "submodule",
+        "ignored",
+        "unknown",
+        "unread"
+      ]
+    },
+    "InventoryEntry": {
+      "description": "One classified path in the inventory denominator.",
+      "type": "object",
+      "properties": {
+        "blob": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "by": {
+          "type": "string"
+        },
+        "class": {
+          "$ref": "#/$defs/InventoryClass"
+        },
+        "entrypoints": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Entrypoint"
+          }
+        },
+        "generated_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GeneratedBy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "module": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "unit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unread": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vendored_from": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VendoredFrom"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "class",
+        "by",
+        "reason"
+      ]
+    },
+    "InventorySummary": {
+      "description": "Completeness accounting for the entire inventory.",
+      "type": "object",
+      "properties": {
+        "by_class": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "files": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "ignored_files": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "submodules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Submodule"
+          }
+        },
+        "unknown": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unowned_source": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unread": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UnreadPath"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "files",
+        "by_class",
+        "unread",
+        "unowned_source",
+        "unknown",
+        "submodules"
+      ]
+    },
+    "Submodule": {
+      "description": "A submodule recorded but not descended.",
+      "type": "object",
+      "properties": {
+        "commit": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "commit"
+      ]
+    },
+    "UnreadPath": {
+      "description": "A path Warrant could not read and the reason why.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "reason"
+      ]
+    },
+    "VendoredFrom": {
+      "description": "Source provenance for vendored content.",
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "treatment": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "version",
+        "treatment"
+      ]
+    }
+  }
+}

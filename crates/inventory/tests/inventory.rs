@@ -261,7 +261,14 @@ fn first_party_source_outside_module_is_unowned() {
 #[test]
 fn source_defaults_only_apply_for_enabled_integrations() {
     let root = tempdir().expect("temporary repository");
-    write(root.path(), "types/disabled.d.ts", "export {};\n");
+    for path in [
+        "types/disabled.d.ts",
+        "src/value.test.ts",
+        "src/value.spec.tsx",
+        "__tests__/value.ts",
+    ] {
+        write(root.path(), path, "export {};\n");
+    }
     let manifest =
         WarrantManifest::parse("schema_version: warrant.manifest/1\n").expect("valid manifest");
 
@@ -272,7 +279,57 @@ fn source_defaults_only_apply_for_enabled_integrations() {
         &BuildConfig::default(),
     )
     .expect("inventory builds");
-    assert_eq!(built.document.entries[0].class, InventoryClass::Unknown);
+    for entry in &built.document.entries {
+        assert_eq!(entry.class, InventoryClass::Unknown, "{}", entry.path);
+    }
+}
+
+#[test]
+fn unowned_bin_source_keeps_integration_defaults() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "package.json", "{}");
+    let sources = [
+        "crates/tool/src/bin/helper.rs",
+        "migrations/change.ts",
+        "schemas/model.rs",
+        "scripts/tool.ts",
+        "src/bin/cli.ts",
+        "tests/helper.rs",
+        "vite.config.ts",
+    ];
+    for path in sources {
+        write(root.path(), path, "// source\n");
+    }
+    write(root.path(), "scripts/release.sh", "exit 0\n");
+    let built = build(
+        root.path(),
+        &snapshot(root.path()),
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect("inventory builds");
+    for path in sources {
+        let entry = built
+            .document
+            .entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .expect("source entry");
+        assert_eq!(entry.class, InventoryClass::Source, "{path}");
+        assert_eq!(entry.module, None);
+        assert_eq!(entry.by, "default:source");
+    }
+    assert_eq!(built.document.summary.unowned_source, sources);
+    assert_eq!(
+        built
+            .document
+            .entries
+            .iter()
+            .find(|entry| entry.path == "scripts/release.sh")
+            .expect("shell script")
+            .class,
+        InventoryClass::Script
+    );
 }
 
 #[test]

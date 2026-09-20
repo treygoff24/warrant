@@ -728,18 +728,21 @@ fn default_class(path: &str, enabled: EnabledIntegrations) -> (InventoryClass, S
         .any(|part| in_dir(part));
     let class = if known_output {
         InventoryClass::BuildOutput
-    } else if (enabled.typescript && lower.ends_with(".d.ts"))
-        || in_dir("schemas")
-        || in_dir("schema")
-    {
+    } else if enabled.typescript && lower.ends_with(".d.ts") {
         InventoryClass::Schema
-    } else if name.ends_with(".test.ts")
-        || name.ends_with(".spec.ts")
-        || name.ends_with(".test.tsx")
-        || name.ends_with(".spec.tsx")
-        || in_dir("__tests__")
-        || in_dir("tests")
+    } else if enabled.typescript
+        && (name.ends_with(".test.ts")
+            || name.ends_with(".spec.ts")
+            || name.ends_with(".test.tsx")
+            || name.ends_with(".spec.tsx")
+            || in_dir("__tests__"))
     {
+        InventoryClass::Test
+    } else if source_language(path, enabled).is_some() {
+        InventoryClass::Source
+    } else if in_dir("schemas") || in_dir("schema") {
+        InventoryClass::Schema
+    } else if in_dir("tests") {
         InventoryClass::Test
     } else if in_dir("migrations") || lower.ends_with(".sql") {
         InventoryClass::Migration
@@ -764,8 +767,6 @@ fn default_class(path: &str, enabled: EnabledIntegrations) -> (InventoryClass, S
     .any(|extension| lower.ends_with(extension))
     {
         InventoryClass::Asset
-    } else if source_language(path, enabled).is_some() {
-        InventoryClass::Source
     } else {
         InventoryClass::Unknown
     };

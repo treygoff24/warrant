@@ -6,4 +6,11 @@ rust-version = "1.90"
 license.workspace = true
 
 [dependencies]
+serde.workspace = true
+serde-saphyr.workspace = true
+serde_json.workspace = true
 warrant-core = { version = "0.1.0", path = "../core" }
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tempfile.workspace = true

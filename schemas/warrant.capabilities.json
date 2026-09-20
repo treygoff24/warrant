@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CapabilityReport",
+  "description": "Claims an integration can and cannot support.",
+  "type": "object",
+  "properties": {
+    "compiler_reference_instrument": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "instruments": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "integration": {
+      "type": "string"
+    },
+    "limits": {
+      "type": "string"
+    },
+    "resolution_authority": {
+      "type": "string"
+    },
+    "resolution_modes_qualified": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "resolution_oracle": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "supports": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "symbol_level": {
+      "type": "string"
+    },
+    "type_only_distinction": {
+      "type": "boolean"
+    },
+    "unsupported": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/UnsupportedCapability"
+      }
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "integration",
+    "version",
+    "instruments",
+    "resolution_authority",
+    "resolution_modes_qualified",
+    "symbol_level",
+    "type_only_distinction",
+    "supports",
+    "unsupported",
+    "limits"
+  ],
+  "$defs": {
+    "UnsupportedCapability": {
+      "description": "One unsupported construct and its explicit treatment.",
+      "type": "object",
+      "properties": {
+        "construct": {
+          "type": "string"
+        },
+        "treatment": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "construct",
+        "treatment"
+      ]
+    }
+  }
+}

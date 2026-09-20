@@ -4,3 +4,24 @@ version.workspace = true
 edition.workspace = true
 rust-version = "1.90"
 license.workspace = true
+
+[dependencies]
+ast-grep-config.workspace = true
+ast-grep-core.workspace = true
+ast-grep-language.workspace = true
+jiff.workspace = true
+petgraph.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde-saphyr.workspace = true
+serde_json.workspace = true
+serde_json_canonicalizer.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tree-sitter.workspace = true
+tree-sitter-typescript.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+pretty_assertions.workspace = true
+tempfile.workspace = true

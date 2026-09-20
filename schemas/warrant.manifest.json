@@ -1,0 +1,300 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WarrantManifest",
+  "description": "Repository-level Warrant configuration.",
+  "type": "object",
+  "properties": {
+    "entrypoints": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EntrypointDeclaration"
+      }
+    },
+    "gate": {
+      "$ref": "#/$defs/GateConfig",
+      "default": {
+        "required_evidence": [],
+        "trust_root_hint": null
+      }
+    },
+    "instruments": {
+      "type": "string",
+      "default": "warrant/instruments.lock"
+    },
+    "integrations": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/IntegrationConfig"
+      },
+      "default": {}
+    },
+    "inventory": {
+      "$ref": "#/$defs/InventoryConfig",
+      "default": {
+        "classes": [],
+        "generated": [],
+        "unknown": "report",
+        "vendored": []
+      }
+    },
+    "policy": {
+      "$ref": "#/$defs/PolicyConfig",
+      "default": {
+        "paths": [
+          "warrant/policy/*.yaml"
+        ]
+      }
+    },
+    "profile": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "snapshot": {
+      "$ref": "#/$defs/SnapshotConfig",
+      "default": {
+        "max_file_bytes": 8388608
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version"
+  ],
+  "$defs": {
+    "ClassDeclaration": {
+      "description": "An explicit path-class assignment.",
+      "type": "object",
+      "properties": {
+        "class": {
+          "$ref": "#/$defs/InventoryClass"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "class",
+        "files"
+      ]
+    },
+    "EntrypointDeclaration": {
+      "description": "An explicitly declared external entrypoint.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "path"
+      ]
+    },
+    "GateConfig": {
+      "description": "Gate hints proposed by repository configuration.",
+      "type": "object",
+      "properties": {
+        "required_evidence": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "trust_root_hint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "GeneratedDeclaration": {
+      "description": "A reproducible generated-path declaration.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "producer": {
+          "type": "string"
+        },
+        "reproducible": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "files",
+        "producer"
+      ]
+    },
+    "IntegrationConfig": {
+      "description": "One language integration selected by the manifest.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "framework_adapters": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "tsconfig": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "InventoryClass": {
+      "description": "The exclusive classification assigned to an inventory path.",
+      "type": "string",
+      "enum": [
+        "source",
+        "test",
+        "config",
+        "script",
+        "migration",
+        "schema",
+        "generated",
+        "vendored",
+        "asset",
+        "doc",
+        "build-output",
+        "submodule",
+        "ignored",
+        "unknown",
+        "unread"
+      ]
+    },
+    "InventoryConfig": {
+      "description": "Inventory classification configuration.",
+      "type": "object",
+      "properties": {
+        "classes": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ClassDeclaration"
+          }
+        },
+        "generated": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/GeneratedDeclaration"
+          }
+        },
+        "unknown": {
+          "$ref": "#/$defs/UnknownTreatment",
+          "default": "report"
+        },
+        "vendored": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/VendoredDeclaration"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicyConfig": {
+      "description": "Paths containing policy documents.",
+      "type": "object",
+      "properties": {
+        "paths": {
+          "type": "array",
+          "default": [
+            "warrant/policy/*.yaml"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "SnapshotConfig": {
+      "description": "Snapshot capture limits.",
+      "type": "object",
+      "properties": {
+        "max_file_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 8388608,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "UnknownTreatment": {
+      "description": "Whether unknown inventory paths are advisory or blocking.",
+      "type": "string",
+      "enum": [
+        "report",
+        "block"
+      ]
+    },
+    "VendoredDeclaration": {
+      "description": "A vendored-path declaration.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source": {
+          "type": "string"
+        },
+        "treatment": {
+          "type": "string",
+          "default": "excluded-from-contracts"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "files",
+        "source",
+        "version"
+      ]
+    }
+  }
+}

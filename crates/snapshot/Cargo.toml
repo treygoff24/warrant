@@ -6,4 +6,14 @@ rust-version = "1.90"
 license.workspace = true
 
 [dependencies]
+gix.workspace = true
+globset.workspace = true
+ignore.workspace = true
+jiff.workspace = true
+serde.workspace = true
+sha2.workspace = true
 warrant-core = { version = "0.1.0", path = "../core" }
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tempfile.workspace = true

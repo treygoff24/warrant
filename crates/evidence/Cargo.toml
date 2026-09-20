@@ -6,4 +6,16 @@ rust-version = "1.90"
 license.workspace = true
 
 [dependencies]
+jiff.workspace = true
+nix.workspace = true
+process-wrap.workspace = true
+serde.workspace = true
+serde-sarif.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+wait-timeout.workspace = true
 warrant-core = { version = "0.1.0", path = "../core" }
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tempfile.workspace = true

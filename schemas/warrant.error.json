@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ErrorDocument",
+  "description": "A structured command error.",
+  "type": "object",
+  "properties": {
+    "code": {
+      "type": "string"
+    },
+    "locations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Location"
+      }
+    },
+    "next_diagnostic": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "code",
+    "reason",
+    "locations"
+  ],
+  "$defs": {
+    "Location": {
+      "description": "A bounded source location relevant to an error.",
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ]
+    }
+  }
+}

@@ -15,15 +15,21 @@
 #   M1: 02-05, M2: 01-10), the corpus stage reporting that the Atlas member
 #   ran, and the schema stage reporting zero stub documents.
 #
-# Stage marker contract, consumed by --final and produced by the stage scripts:
+# Stage marker contract (plan Interfaces; coordinator ruling F2, 2026-09-20),
+# consumed by --final and produced by the stage scripts:
 #   scripts/stages/45-corpus.sh  prints one line per corpus member, either
 #       "corpus: <name> ran"
 #     or
 #       "corpus: <name> not run: private member unavailable"
-#   scripts/stages/40-schema.sh  prints exactly one line
+#   scripts/stages/40-schema.sh  prints one line per pre-declared document,
+#       "schema: <name> implemented"   or   "schema: <name> stub"
+#     in a stable order, and may follow them with a summary line
 #       "schema: stub-documents <count>"
-#   --final fails closed when a marker it needs is absent, so an unmarked
-#   stage is a red result and never a silent pass.
+#   A bare count cannot answer the plan's condition, which is zero stubs among
+#   the documents IN SCOPE at that milestone: W0.2 pre-declares all 23 and M0
+#   delivers five, so a correct M0 build has 18 stubs. --final therefore checks
+#   the per-milestone in-scope list below, and fails closed when a marker it
+#   needs is absent, so an unmarked stage is a red result, never a silent pass.
 #
 # Gate output goes to .verify/acceptance-gate.log (gitignored) and is not
 # echoed on success: this script's stdout is committed as
@@ -225,16 +231,35 @@ if [ -n "$final_milestone" ]; then
     fail "final: the corpus stage printed no 'corpus: atlas ran' marker"
   fi
 
-  stub_line="$(command grep -m1 '^schema: stub-documents ' "$gate_log" || true)"
-  if [ -z "$stub_line" ]; then
-    fail "final: the schema stage printed no 'schema: stub-documents <count>' marker"
+  # A document is in scope at a milestone when its owning task is at or before
+  # it. The owning task id travels with each name so this list stays checkable
+  # against the plan's owned_files rather than being trusted.
+  m0_docs="snapshot:W0.2 inventory:W0.2 capabilities:W0.2 manifest:W0.2 error:W0.2"
+  m1_docs="instruments:W1.4 policy:W1.7 effective-policy:W1.7 census:W1.10 context:W1.11 propose:W1.11 map:W1.12 hook:W1.13"
+  m2_docs="obligations:W2.1 finding:W2.3 evidence:W2.4 test-receipt:W2.4 verdict:W2.5 receipt:W2.5 profile:W2.6 ruling:W2.7 diff:W2.8 verify:W2.9"
+  case "$final_milestone" in
+    M0) in_scope="$m0_docs" ;;
+    M1) in_scope="$m0_docs $m1_docs" ;;
+    M2) in_scope="$m0_docs $m1_docs $m2_docs" ;;
+    *)  in_scope="" ;;
+  esac
+
+  scoped=0
+  for entry in $in_scope; do
+    doc="${entry%%:*}"
+    owner="${entry##*:}"
+    scoped=$((scoped + 1))
+    if command grep -qE "^schema: warrant\.$doc stub\$" "$gate_log"; then
+      fail "final: warrant.$doc is in scope at $final_milestone ($owner) and the schema stage reports it a stub"
+    elif ! command grep -qE "^schema: warrant\.$doc implemented\$" "$gate_log"; then
+      fail "final: the schema stage printed no marker for warrant.$doc, in scope at $final_milestone ($owner)"
+    fi
+  done
+  # A check over an empty set passes and proves nothing; assert the precondition.
+  if [ "$scoped" -eq 0 ]; then
+    fail "final: no in-scope document list for milestone $final_milestone"
   else
-    stub_count="${stub_line##* }"
-    case "$stub_count" in
-      ''|*[!0-9]*) fail "final: schema stub marker is not a count: $stub_line" ;;
-      0) emit "final: schema stub documents 0" ;;
-      *) fail "final: the schema stage reports $stub_count stub document(s) in scope" ;;
-    esac
+    emit "final: $scoped in-scope document(s) checked at $final_milestone"
   fi
 fi
 

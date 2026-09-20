@@ -1,2 +1,50 @@
 #!/usr/bin/env bash
-exec "${DELEGATE_AUDIT:-$HOME/.local/bin/delegate-audit}" "$@"
+# Exec shim for the installed delegate-audit. Written by the build coordinator
+# before launch; no lane owns it (plan Interfaces, "Gate, stages, acceptance").
+#
+# Redaction rule, coordinator ruling F1 (2026-09-20): the final close copies
+# this command's stdout into docs/acceptance/audit-report.md and commits it, and
+# this repository is public. The compiler bakes an absolute plan path into the
+# --plan argument, and the bundle path under the delegate state root and lane
+# worktree paths can appear in the same output, so every absolute path is
+# rewritten here rather than at any one call site: the repository root becomes
+# ".", any home directory becomes "~". The output is then scanned with the same
+# expressions tests/acceptance.sh uses, and a residual hit REFUSES rather than
+# printing, so a leak fails the close instead of reaching the tree.
+#
+# The committed receipt is therefore not byte-identical to the tool's stdout.
+# The counters and the plan reference survive, and "./docs/plans/<plan>.md"
+# still identifies the plan. The durable fix is compiler-side.
+set -Eeuo pipefail
+
+real="${DELEGATE_AUDIT:-$HOME/.local/bin/delegate-audit}"
+command -v "$real" >/dev/null 2>&1 || [ -x "$real" ] || {
+  printf '%s\n' "delegate-audit: shim cannot find the real binary at: $real" >&2
+  exit 127
+}
+
+work="$(mktemp "${TMPDIR:-/tmp}/delegate-audit.XXXXXX")"
+trap 'rm -f "$work"' EXIT
+
+rc=0
+"$real" "$@" >"$work" || rc=$?
+
+root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+REDACT_ROOT="$root" REDACT_HOME="${HOME:-}" perl -CSD -pi -e '
+  BEGIN { $r = $ENV{REDACT_ROOT}; $h = $ENV{REDACT_HOME}; }
+  s/\Q$r\E/./g if defined $r && length $r;
+  s/\Q$h\E/~/g if defined $h && length $h;
+  s{/home/[A-Za-z0-9._-]+}{~}g;
+  s{/Users/[A-Za-z0-9._-]+}{~}g;
+' "$work"
+
+leak='/home/|/Users/|\.ts\.net|100\.[0-9]+\.[0-9]+\.[0-9]+'
+if command grep -qE "$leak" "$work"; then
+  printf '%s\n' "delegate-audit: REFUSED to emit output that still carries a home path or internal host after redaction; this repository is public" >&2
+  printf '%s\n' "offending lines (withheld from stdout):" >&2
+  command grep -nE "$leak" "$work" >&2 || true
+  exit 3
+fi
+
+cat "$work"
+exit "$rc"

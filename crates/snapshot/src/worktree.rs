@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::Read,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -28,12 +29,26 @@ pub(crate) fn capture(repo: &Path, config: &SnapshotConfig) -> Result<Snapshot, 
     )?)?;
     let file_mode = git::text(&root, &["config", "--bool", "--get", "core.fileMode"], None)
         .map_or(true, |value| value != "false");
-    let (tree, carried, capture_kind) = tree(&root, file_mode)?;
-    let mut snapshot = crate::capture_once(&root, SnapshotKind::Tree, Some(&tree), config)?;
-    snapshot.object_paths = carried;
+    let captured = tree(&root, file_mode, config)?;
+    let mut snapshot = crate::capture_once(&root, SnapshotKind::Tree, Some(&captured.id), config)?;
+    if captured.kind == "temporary-index" {
+        snapshot.manifest.excluded.oversize = 0;
+        for entry in &mut snapshot.entries {
+            if captured.oversize.contains(&entry.path) {
+                entry.class = InventoryClass::Unread;
+                entry.unread = Some("oversize".into());
+                snapshot.manifest.excluded.oversize += 1;
+            } else if entry.unread.as_deref() == Some("oversize") {
+                entry.class = InventoryClass::Unknown;
+                entry.unread = None;
+            }
+        }
+        crate::links::classify(&mut snapshot)?;
+    }
+    snapshot.object_paths = captured.carried;
     snapshot.file_mode = file_mode;
     snapshot.manifest.kind = SnapshotKind::Worktree;
-    snapshot.manifest.capture.kind = capture_kind.into();
+    snapshot.manifest.capture.kind = captured.kind.into();
     snapshot.manifest.excluded.ignored_files = Some(ignored.len() as u64);
     snapshot.manifest.excluded.ignored_count_reason = None;
     snapshot.manifest.capture.manifest_digest = Some(ignore_digest(&root, &snapshot, &ignored)?);
@@ -57,26 +72,41 @@ pub(crate) fn capture(repo: &Path, config: &SnapshotConfig) -> Result<Snapshot, 
     Ok(snapshot)
 }
 
+pub(crate) struct CapturedTree {
+    pub id: String,
+    carried: BTreeSet<String>,
+    oversize: BTreeSet<String>,
+    kind: &'static str,
+}
+
 pub(crate) fn tree(
     repo: &Path,
     file_mode: bool,
-) -> Result<(String, BTreeSet<String>, &'static str), SnapshotError> {
+    config: &SnapshotConfig,
+) -> Result<CapturedTree, SnapshotError> {
     match native::capture(repo, SnapshotKind::Worktree)? {
-        Some(tree) => Ok((tree, BTreeSet::new(), "native-worktree")),
-        None => {
-            let (tree, carried) = portable(repo, file_mode)?;
-            Ok((tree, carried, "temporary-index"))
-        }
+        Some(id) => Ok(CapturedTree {
+            id,
+            carried: BTreeSet::new(),
+            oversize: BTreeSet::new(),
+            kind: "native-worktree",
+        }),
+        None => portable(repo, file_mode, config),
     }
 }
 
-fn portable(repo: &Path, file_mode: bool) -> Result<(String, BTreeSet<String>), SnapshotError> {
+fn portable(
+    repo: &Path,
+    file_mode: bool,
+    config: &SnapshotConfig,
+) -> Result<CapturedTree, SnapshotError> {
     let temporary = TemporaryIndex::new()?;
     let index = temporary.0.join("index");
     git::run(repo, &["read-tree", "--empty"], Some(&index), None)?;
     let tracked = git::run(repo, &["ls-files", "--stage", "-t", "-z"], None, None)?;
     let mut files = BTreeMap::new();
     let mut carried = BTreeSet::new();
+    let mut oversize = BTreeSet::new();
     for record in tracked.split(|b| *b == 0).filter(|r| !r.is_empty()) {
         let record = std::str::from_utf8(record)
             .map_err(|_| SnapshotError::new("unsupported-path", "non-UTF-8 path"))?;
@@ -107,6 +137,14 @@ fn portable(repo: &Path, file_mode: bool) -> Result<(String, BTreeSet<String>), 
     let mut index_info = Vec::new();
     for (path, indexed) in files {
         let (mode, oid) = if let Some((mode, oid, true)) = &indexed {
+            if mode != "160000"
+                && git::text(repo, &["cat-file", "-s", oid], None)?
+                    .parse::<u64>()
+                    .map_err(|_| SnapshotError::new("git-output", "invalid blob size"))?
+                    > config.max_file_bytes
+            {
+                oversize.insert(path.clone());
+            }
             (mode.clone(), oid.clone())
         } else {
             // A tracked deletion is absent, not a read failure; all other errors fail closed.
@@ -132,9 +170,22 @@ fn portable(repo: &Path, file_mode: bool) -> Result<(String, BTreeSet<String>), 
                         .map_or("100644", |(mode, _, _)| mode.as_str()),
                 )
             };
-            let (mode, bytes) = read(repo, &path, indexed_mode)?;
-            let oid = hash(repo, &path, &mode, &bytes)?;
-            (mode, oid)
+            read(repo, &path, indexed_mode, |mode, size, source| {
+                let oid = if size > config.max_file_bytes {
+                    oversize.insert(path.clone());
+                    hash_stream(repo, &path, mode, source)?
+                } else {
+                    let mut bytes = Vec::new();
+                    source
+                        .take(config.max_file_bytes.saturating_add(1))
+                        .read_to_end(&mut bytes)?;
+                    if bytes.len() as u64 > config.max_file_bytes {
+                        return Err(SnapshotError::new("snapshot-changed", &path));
+                    }
+                    hash(repo, &path, mode, &bytes)?
+                };
+                Ok((mode.to_owned(), oid))
+            })?
         };
         index_info.extend_from_slice(format!("{mode} {oid}\t{path}\0").as_bytes());
     }
@@ -144,7 +195,12 @@ fn portable(repo: &Path, file_mode: bool) -> Result<(String, BTreeSet<String>), 
         Some(&index),
         Some(&index_info),
     )?;
-    Ok((git::text(repo, &["write-tree"], Some(&index))?, carried))
+    Ok(CapturedTree {
+        id: git::text(repo, &["write-tree"], Some(&index))?,
+        carried,
+        oversize,
+        kind: "temporary-index",
+    })
 }
 
 // Git does not apply clean filters to symlink payloads.
@@ -154,16 +210,25 @@ pub(crate) fn hash(
     mode: &str,
     bytes: &[u8],
 ) -> Result<String, SnapshotError> {
+    hash_stream(repo, path, mode, &mut &bytes[..])
+}
+
+fn hash_stream(
+    repo: &Path,
+    path: &str,
+    mode: &str,
+    source: &mut dyn Read,
+) -> Result<String, SnapshotError> {
     let filter = if mode == "120000" {
         "--no-filters".into()
     } else {
         format!("--path={path}")
     };
-    let oid = git::run(
+    let oid = git::run_stream(
         repo,
         &["hash-object", "-w", "--stdin", &filter],
         None,
-        Some(bytes),
+        Some(source),
     )?;
     Ok(String::from_utf8(oid)
         .map_err(|_| SnapshotError::new("git-output", "invalid blob id"))?
@@ -171,13 +236,26 @@ pub(crate) fn hash(
         .to_owned())
 }
 
-/// All source-byte reads, including symlink payloads and ignore inputs, pass here.
-/// Symlink payloads are read without following them; non-directory ancestors fail closed.
-pub(crate) fn read(
+pub(crate) fn read_bytes(
     repo: &Path,
     path: &str,
     indexed_mode: Option<&str>,
 ) -> Result<(String, Vec<u8>), SnapshotError> {
+    read(repo, path, indexed_mode, |mode, _, source| {
+        let mut bytes = Vec::new();
+        source.read_to_end(&mut bytes)?;
+        Ok((mode.to_owned(), bytes))
+    })
+}
+
+/// All source-byte reads, including symlink payloads and ignore inputs, pass here.
+/// Symlink payloads are read without following them; non-directory ancestors fail closed.
+fn read<T>(
+    repo: &Path,
+    path: &str,
+    indexed_mode: Option<&str>,
+    consume: impl FnOnce(&str, u64, &mut dyn Read) -> Result<T, SnapshotError>,
+) -> Result<T, SnapshotError> {
     #[cfg(test)]
     crate::READ_ATTEMPTS.with(|count| count.set(count.get() + 1));
     let relative = Path::new(path);
@@ -201,7 +279,7 @@ pub(crate) fn read(
     if metadata.file_type().is_symlink() {
         let target = fs::read_link(full)?;
         let bytes = target.as_os_str().as_encoded_bytes().to_vec();
-        return Ok(("120000".into(), bytes));
+        return consume("120000", bytes.len() as u64, &mut bytes.as_slice());
     }
     if !metadata.is_file() {
         return Err(SnapshotError::new("unsupported-file", path));
@@ -213,14 +291,10 @@ pub(crate) fn read(
     };
     #[cfg(not(unix))]
     let executable = false;
-    Ok((
-        indexed_mode
-            .map_or(if executable { "100755" } else { "100644" }, |mode| {
-                if mode == "100755" { "100755" } else { "100644" }
-            })
-            .into(),
-        fs::read(full)?,
-    ))
+    let mode = indexed_mode.map_or(if executable { "100755" } else { "100644" }, |mode| {
+        if mode == "100755" { "100755" } else { "100644" }
+    });
+    consume(mode, metadata.len(), &mut fs::File::open(full)?)
 }
 
 fn paths(output: &[u8]) -> Result<BTreeSet<String>, SnapshotError> {
@@ -257,7 +331,7 @@ fn ignore_digest(
             let name = path
                 .to_str()
                 .ok_or_else(|| SnapshotError::new("unsupported-path", "ignore path"))?;
-            let (_, bytes) = read(repo, name, None)?;
+            let (_, bytes) = read_bytes(repo, name, None)?;
             hash_field(&mut digest, name.as_bytes());
             hash_field(&mut digest, &bytes);
         }
@@ -306,7 +380,7 @@ fn ignore_digest(
                     .file_name()
                     .and_then(|s| s.to_str())
                     .ok_or_else(|| SnapshotError::new("unsupported-path", label))?;
-                let (_, bytes) = read(parent, name, None)?;
+                let (_, bytes) = read_bytes(parent, name, None)?;
                 hash_field(&mut digest, label.as_bytes());
                 hash_field(&mut digest, &bytes);
             }

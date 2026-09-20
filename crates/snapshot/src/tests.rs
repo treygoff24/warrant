@@ -751,3 +751,40 @@ fn created_mid_capture_file_invalidates_the_attempt() {
         format!("sha1:{}", git(dir.path(), &["write-tree"]))
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn exclusions_include_untracked_oversize_and_external_symlinks() {
+    use std::os::unix::fs::symlink;
+    let dir = repo();
+    fs::write(dir.path().join("big-untracked"), "x".repeat(100)).unwrap();
+    symlink("../outside", dir.path().join("external-untracked")).unwrap();
+    let (manifest, entries) = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig { max_file_bytes: 32 },
+        |s| Ok(s.entries().to_vec()),
+    )
+    .unwrap();
+    git(dir.path(), &["add", "-A"]);
+    assert_eq!(
+        manifest.tree,
+        format!("sha1:{}", git(dir.path(), &["write-tree"]))
+    );
+    assert_eq!(manifest.excluded.oversize, 1);
+    for (path, reason) in [
+        ("big-untracked", "oversize"),
+        ("external-untracked", "external-symlink"),
+    ] {
+        assert_eq!(
+            entries
+                .iter()
+                .find(|e| e.path == path)
+                .unwrap()
+                .unread
+                .as_deref(),
+            Some(reason)
+        );
+    }
+}

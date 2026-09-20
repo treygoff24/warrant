@@ -92,7 +92,7 @@ impl Snapshot {
             .as_deref()
             .ok_or_else(|| SnapshotError::new("ignored", path))?;
         if self.manifest.kind == SnapshotKind::Worktree && !self.object_paths.contains(path) {
-            let (mode, bytes) = worktree::read(
+            let (mode, bytes) = worktree::read_bytes(
                 &self.repo,
                 path,
                 if self.file_mode {
@@ -133,7 +133,7 @@ pub fn capture<T>(
                         snapshot.read(&entry.path)?;
                     }
                 }
-                let (tree, _, _) = worktree::tree(&snapshot.repo, snapshot.file_mode)?;
+                let tree = worktree::tree(&snapshot.repo, snapshot.file_mode, config)?.id;
                 if snapshot.manifest.tree != format!("{}:{tree}", snapshot.manifest.object_format) {
                     return Err(SnapshotError::new(
                         "snapshot-changed",

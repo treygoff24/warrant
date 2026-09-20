@@ -10,6 +10,29 @@ executed_stages=()
 
 cd "$repo_root"
 
+# Give this checkout its own cargo target directory.
+#
+# When a target directory is configured globally, every checkout of this
+# repository shares one directory and therefore one uplifted binary path. A
+# stage that runs a built binary can then execute a binary produced by a
+# different checkout, which makes the gate's result depend on what other
+# checkouts built rather than on the code under test. Keying the directory by
+# checkout path keeps concurrent worktrees from ever sharing an uplift.
+# WARRANT_GATE_TARGET_DIR overrides this for a caller that isolates builds
+# itself.
+if [ -n "${WARRANT_GATE_TARGET_DIR:-}" ]; then
+  CARGO_TARGET_DIR="$WARRANT_GATE_TARGET_DIR"
+else
+  target_base="${CARGO_TARGET_DIR:-}"
+  if [ -z "$target_base" ]; then
+    target_base="$(cargo metadata --format-version 1 --no-deps 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin).get("target_directory",""))' 2>/dev/null || true)"
+  fi
+  [ -n "$target_base" ] || target_base="$repo_root/target"
+  checkout_key="$(printf '%s' "$repo_root" | sha256sum | cut -c1-16)"
+  CARGO_TARGET_DIR="$target_base/gate-$checkout_key"
+fi
+export CARGO_TARGET_DIR
+
 rustc --version
 cargo --version
 cargo clippy --version
@@ -22,6 +45,7 @@ git --version
 if command -v node >/dev/null 2>&1; then
   node --version
 fi
+printf '%s\n' "gate: target dir $(basename -- "$CARGO_TARGET_DIR")"
 
 if [ ! -f "$required_file" ]; then
   printf '%s\n' "gate: required stage inventory is missing: $required_file" >&2

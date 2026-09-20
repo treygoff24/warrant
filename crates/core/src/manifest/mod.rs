@@ -120,6 +120,8 @@ impl UnknownTreatment {
 pub struct ClassDeclaration {
     pub class: InventoryClass,
     pub files: Vec<String>,
+    #[serde(default)]
+    pub replaces: Option<InventoryClass>,
 }
 
 /// A reproducible generated-path declaration.
@@ -128,6 +130,8 @@ pub struct ClassDeclaration {
 pub struct GeneratedDeclaration {
     pub files: Vec<String>,
     pub producer: String,
+    #[serde(default)]
+    pub inputs: Vec<String>,
     #[serde(default)]
     pub reproducible: bool,
 }
@@ -242,11 +246,11 @@ fn validate_fields(value: &Value) -> Result<(), ManifestError> {
             "inventory",
             &["classes", "unknown", "generated", "vendored"],
         )?;
-        check_object_list(inventory, "classes", &["class", "files"])?;
+        check_object_list(inventory, "classes", &["class", "files", "replaces"])?;
         check_object_list(
             inventory,
             "generated",
-            &["files", "producer", "reproducible"],
+            &["files", "producer", "inputs", "reproducible"],
         )?;
         check_object_list(
             inventory,
@@ -276,31 +280,33 @@ fn validate_classes(value: &Value) -> Result<(), ManifestError> {
         return Ok(());
     };
     for (index, declaration) in classes.iter().enumerate() {
-        let Some(class) = declaration.get("class").and_then(Value::as_str) else {
-            continue;
-        };
-        if !matches!(
-            class,
-            "source"
-                | "test"
-                | "config"
-                | "script"
-                | "migration"
-                | "schema"
-                | "generated"
-                | "vendored"
-                | "asset"
-                | "doc"
-                | "build-output"
-                | "submodule"
-                | "ignored"
-                | "unknown"
-                | "unread"
-        ) {
-            return Err(ManifestError::UnknownClass {
-                field: format!("inventory.classes[{index}].class"),
-                class: class.into(),
-            });
+        for name in ["class", "replaces"] {
+            let Some(class) = declaration.get(name).and_then(Value::as_str) else {
+                continue;
+            };
+            if !matches!(
+                class,
+                "source"
+                    | "test"
+                    | "config"
+                    | "script"
+                    | "migration"
+                    | "schema"
+                    | "generated"
+                    | "vendored"
+                    | "asset"
+                    | "doc"
+                    | "build-output"
+                    | "submodule"
+                    | "ignored"
+                    | "unknown"
+                    | "unread"
+            ) {
+                return Err(ManifestError::UnknownClass {
+                    field: format!("inventory.classes[{index}].{name}"),
+                    class: class.into(),
+                });
+            }
         }
     }
     Ok(())

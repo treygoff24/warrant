@@ -45,10 +45,32 @@
         "by"
       ]
     },
+    "GeneratedAbsent": {
+      "description": "A generated glob declaration that matched no snapshot path.",
+      "type": "object",
+      "properties": {
+        "declaration": {
+          "type": "string",
+          "default": ""
+        },
+        "producer": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false
+    },
     "GeneratedBy": {
       "description": "Producer provenance for generated content.",
       "type": "object",
       "properties": {
+        "inputs": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
         "producer": {
           "type": "string"
         },
@@ -182,6 +204,13 @@
           "format": "uint64",
           "minimum": 0
         },
+        "generated_absent": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/GeneratedAbsent"
+          }
+        },
         "ignored_files": {
           "type": [
             "integer",
@@ -194,6 +223,13 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/Submodule"
+          }
+        },
+        "unit_aliases": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/UnitAliasTable"
           }
         },
         "unknown": {
@@ -241,6 +277,28 @@
         "path",
         "commit"
       ]
+    },
+    "UnitAliasTable": {
+      "description": "The alias-table source, if any, that applies to one inventory unit.",
+      "type": "object",
+      "properties": {
+        "alias_table": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "by": {
+          "type": "string",
+          "default": ""
+        },
+        "unit": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false
     },
     "UnreadPath": {
       "description": "A path Warrant could not read and the reason why.",

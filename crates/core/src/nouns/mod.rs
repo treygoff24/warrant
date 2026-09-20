@@ -127,6 +127,8 @@ pub struct Entrypoint {
 pub struct GeneratedBy {
     pub producer: String,
     pub reproducible: bool,
+    #[serde(default)]
+    pub inputs: Vec<String>,
 }
 
 /// Source provenance for vendored content.
@@ -173,6 +175,28 @@ pub struct Submodule {
     pub commit: String,
 }
 
+/// The alias-table source, if any, that applies to one inventory unit.
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnitAliasTable {
+    #[serde(default)]
+    pub unit: String,
+    #[serde(default)]
+    pub alias_table: Option<String>,
+    #[serde(default)]
+    pub by: String,
+}
+
+/// A generated glob declaration that matched no snapshot path.
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeneratedAbsent {
+    #[serde(default)]
+    pub declaration: String,
+    #[serde(default)]
+    pub producer: String,
+}
+
 /// Completeness accounting for the entire inventory.
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -184,6 +208,10 @@ pub struct InventorySummary {
     pub unknown: Vec<String>,
     pub ignored_files: Option<u64>,
     pub submodules: Vec<Submodule>,
+    #[serde(default)]
+    pub unit_aliases: Vec<UnitAliasTable>,
+    #[serde(default)]
+    pub generated_absent: Vec<GeneratedAbsent>,
 }
 
 /// The complete classified inventory document.

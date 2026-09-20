@@ -497,13 +497,22 @@ fn snapshot_listing_controls_paths_blobs_and_ignored_count() {
     let clean = tempdir().expect("clean checkout");
     let dirty = tempdir().expect("checkout with ignored files");
     write(clean.path(), "src/value.ts", "export {};\n");
+    write(clean.path(), "src/z-other.ts", "export {};\n");
     write(dirty.path(), "src/value.ts", "export {};\n");
+    write(dirty.path(), "src/z-other.ts", "export {};\n");
     write(dirty.path(), "target/cache.bin", "ignored\n");
-    let listing = vec![snapshot_entry(
-        "src/value.ts",
-        InventoryClass::Unknown,
-        Some("sha1:0123456789012345678901234567890123456789"),
-    )];
+    let listing = vec![
+        snapshot_entry(
+            "src/value.ts",
+            InventoryClass::Unknown,
+            Some("0123456789012345678901234567890123456789"),
+        ),
+        snapshot_entry(
+            "src/z-other.ts",
+            InventoryClass::Unknown,
+            Some("0123456789012345678901234567890123456789012345678901234567890123"),
+        ),
+    ];
 
     let first = build(
         clean.path(),
@@ -524,6 +533,10 @@ fn snapshot_listing_controls_paths_blobs_and_ignored_count() {
     assert_eq!(
         first.document.entries[0].blob.as_deref(),
         Some("sha1:0123456789012345678901234567890123456789")
+    );
+    assert_eq!(
+        first.document.entries[1].blob.as_deref(),
+        Some("sha256:0123456789012345678901234567890123456789012345678901234567890123")
     );
     assert_eq!(first.document.summary.ignored_files, Some(0));
 

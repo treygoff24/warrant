@@ -200,7 +200,9 @@ pub fn build(
             snapshot_entry.class,
             InventoryClass::Ignored | InventoryClass::Submodule | InventoryClass::Unread
         ) {
-            entries.push(snapshot_entry.clone());
+            let mut entry = snapshot_entry.clone();
+            entry.blob = prefixed_git_oid(&entry.blob)?;
+            entries.push(entry);
             continue;
         }
         let default = default_class(relative, enabled);
@@ -280,7 +282,7 @@ pub fn build(
         let entrypoints = entrypoints_for(relative, manifest, &package_entrypoints);
         entries.push(InventoryEntry {
             path: relative.clone(),
-            blob: snapshot_entry.blob.clone(),
+            blob: prefixed_git_oid(&snapshot_entry.blob)?,
             class,
             language: language(relative, enabled),
             unit,
@@ -791,6 +793,30 @@ fn source_language(path: &str, enabled: EnabledIntegrations) -> Option<&'static 
 
 fn language(path: &str, enabled: EnabledIntegrations) -> Option<String> {
     source_language(path, enabled).map(str::to_owned)
+}
+
+fn prefixed_git_oid(blob: &Option<String>) -> Result<Option<String>, InventoryError> {
+    let Some(oid) = blob else {
+        return Ok(None);
+    };
+    if oid.starts_with("sha1:") || oid.starts_with("sha256:") {
+        return Ok(Some(oid.clone()));
+    }
+    let algorithm = match oid.len() {
+        40 => "sha1",
+        64 => "sha256",
+        _ => {
+            return Err(InventoryError::InvalidDeclaration {
+                reason: format!("snapshot blob `{oid}` has no recognized object format"),
+            });
+        }
+    };
+    if !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(InventoryError::InvalidDeclaration {
+            reason: format!("snapshot blob `{oid}` is not a hexadecimal object id"),
+        });
+    }
+    Ok(Some(format!("{algorithm}:{oid}")))
 }
 
 fn blob_id(path: &Path) -> Result<String, InventoryError> {

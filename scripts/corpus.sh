@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 MANIFEST="$ROOT/tests/corpus/manifest.yaml"
 CORPUS_DIR=${WARRANT_CORPUS_DIR:-${TMPDIR:-/tmp}/warrant-corpus}
 
@@ -53,7 +53,8 @@ sha256() {
 }
 
 verify_member() {
-  name=$1
+  local name=$1 source_artifact source_digest dependency_artifact dependency_digest
+  local actual lockfile lockfile_digest
   source_artifact=$(member_field "$name" source_artifact)
   source_digest=$(member_field "$name" tree_sha256)
   dependency_artifact=$(member_field "$name" dependency_artifact)
@@ -77,24 +78,35 @@ verify_member() {
     printf 'corpus: %s dependency digest mismatch\n' "$name" >&2
     return 1
   }
+  lockfile=$(member_field "$name" lockfile)
+  lockfile_digest=$(member_field "$name" lockfile_sha256)
+  actual=$(tar -xOzf "$CORPUS_DIR/$source_artifact" "$name/$lockfile" | sha256sum | cut -d' ' -f1)
+  [ "$actual" = "$lockfile_digest" ] || {
+    printf 'corpus: %s lockfile digest mismatch\n' "$name" >&2
+    return 1
+  }
   printf 'corpus: %s verified\n' "$name"
 }
 
 verify() {
   require_manifest
-  status=0
+  local list name count
+  local -a names
   if [ "$#" -eq 0 ]; then
-    names=$(member_names)
+    list=$(member_names)
+    [ -n "$list" ] || fail "no corpus members"
+    mapfile -t names <<< "$list"
   else
-    names=$1
+    names=("$@")
   fi
-  while IFS= read -r name; do
-    [ -n "$name" ] || continue
-    verify_member "$name" || status=1
-  done <<EOF
-$names
-EOF
-  return "$status"
+  count=${#names[@]}
+  [ "$count" -gt 0 ] || fail "no corpus members"
+  # With no arguments this is the manifest's own count, not a truncation check.
+  # A truncated manifest that still lists at least one member can pass.
+  for name in "${names[@]}"; do
+    verify_member "$name"
+  done
+  printf 'corpus: verified %s/%s members\n' "$count" "$count" >&2
 }
 
 make_source_archive() {
@@ -106,8 +118,10 @@ make_source_archive() {
 }
 
 make_dependency_archive() {
-  repository=$1
-  output=$2
+  local repository=$1 output=$2
+  # Prune each matched root: tar visits its contents once, in name order.
+  (cd "$repository" && find . -type d -name node_modules -print0 -prune) |
+    LC_ALL=C sort -z | sed -z 's|^\./||' |
   tar \
     --sort=name \
     --mtime=@0 \
@@ -117,7 +131,7 @@ make_dependency_archive() {
     --hard-dereference \
     --format=pax \
     --pax-option=delete=atime,delete=ctime \
-    -C "$repository" -cf - node_modules | gzip -n > "$output"
+    -C "$repository" --null -T - -cf - | gzip -n > "$output"
 }
 
 install_dependencies() {
@@ -182,7 +196,7 @@ PY
   esac
 }
 
-fetch_one() {
+fetch_one() (
   name=$1
   source=$(member_field "$name" source)
   public=$(member_field "$name" public_fetch)
@@ -192,13 +206,16 @@ fetch_one() {
   package_manager=$(member_field "$name" package_manager)
   source_artifact=$(member_field "$name" source_artifact)
   dependency_artifact=$(member_field "$name" dependency_artifact)
+  expected_platform=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"]["platform_observed"])' "$MANIFEST")
+  [ "$(uname -s -m)" = "$expected_platform" ] || fail "$name platform mismatch: expected $expected_platform"
   mkdir -p "$CORPUS_DIR"
 
-  tmp=$(mktemp -d "${TMPDIR:-/tmp}/warrant-corpus.${name}.XXXXXX")
+  tmp=$(mktemp -d "${TMPDIR:-/var/tmp}/warrant-corpus.${name}.XXXXXX")
   case "$tmp" in
-    "${TMPDIR:-/tmp}"/warrant-corpus."$name".*) ;;
+    "${TMPDIR:-/var/tmp}"/warrant-corpus."$name".*) ;;
     *) fail "refusing unexpected temporary path" ;;
   esac
+  trap 'rm -rf -- "$tmp"' EXIT
 
   git init -q "$tmp/repository"
   git -C "$tmp/repository" remote add origin "$source"
@@ -215,23 +232,32 @@ fetch_one() {
   [ -d "$tmp/repository/node_modules" ] || fail "$name install produced no node_modules"
   make_dependency_archive "$tmp/repository" "$tmp/$dependency_artifact"
 
+  # Both archives and the lockfile must match before replacing either artifact.
+  CORPUS_DIR=$tmp verify_member "$name"
   mv "$tmp/$source_artifact" "$CORPUS_DIR/$source_artifact"
   mv "$tmp/$dependency_artifact" "$CORPUS_DIR/$dependency_artifact"
-  verify_member "$name"
-  case "$tmp" in
-    "${TMPDIR:-/tmp}"/warrant-corpus."$name".*) rm -rf -- "$tmp" ;;
-    *) fail "refusing unexpected temporary path during cleanup" ;;
-  esac
-}
+)
 
 fetch() {
   require_manifest
+  local names name public fetched=0 expected=0
   [ "$#" -eq 1 ] || fail "usage: scripts/corpus.sh fetch <name|all>"
   if [ "$1" = all ]; then
+    names=$(member_names)
+    [ -n "$names" ] || fail "no corpus members"
     while IFS= read -r name; do
-      [ "$(member_field "$name" public_fetch)" = true ] || continue
+      public=$(member_field "$name" public_fetch)
+      case "$public" in
+        false) continue ;;
+        true) expected=$((expected + 1)) ;;
+        *) fail "$name invalid public_fetch" ;;
+      esac
       fetch_one "$name"
-    done < <(member_names)
+      fetched=$((fetched + 1))
+    done <<< "$names"
+    [ "$expected" -gt 0 ] || fail "no public corpus members"
+    [ "$fetched" -eq "$expected" ] || fail "public corpus member skipped"
+    printf 'corpus: fetched %s/%s public members\n' "$fetched" "$expected"
   else
     fetch_one "$1"
   fi
@@ -241,6 +267,7 @@ check_archive_paths() {
   archive=$1
   python3 - "$archive" <<'PY'
 import pathlib
+import posixpath
 import sys
 import tarfile
 
@@ -249,6 +276,11 @@ with tarfile.open(sys.argv[1], "r:gz") as archive:
         path = pathlib.PurePosixPath(member.name)
         if path.is_absolute() or ".." in path.parts:
             raise SystemExit(f"unsafe archive path: {member.name}")
+        if member.issym() or member.islnk():
+            target = pathlib.PurePosixPath(member.linkname)
+            resolved = posixpath.normpath(str(path.parent / target))
+            if target.is_absolute() or resolved == ".." or resolved.startswith("../"):
+                raise SystemExit(f"unsafe archive link: {member.name}")
 PY
 }
 
@@ -274,9 +306,12 @@ unpack() {
   printf 'corpus: %s unpacked\n' "$name"
 }
 
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
 case ${1:-} in
+  --self-test) python3 "$ROOT/tests/corpus/self-test.py" "$ROOT/scripts/corpus.sh" "$MANIFEST" "$CORPUS_DIR" ;;
   verify) shift; verify "$@" ;;
   fetch) shift; fetch "$@" ;;
   unpack) shift; unpack "$@" ;;
-  *) fail "usage: scripts/corpus.sh {verify [name]|fetch <name|all>|unpack <name> <empty-directory>}" ;;
+  *) fail "usage: scripts/corpus.sh {verify [name...]|fetch <name|all>|unpack <name> <empty-directory>|--self-test}" ;;
 esac
+fi

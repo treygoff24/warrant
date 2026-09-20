@@ -14,6 +14,7 @@ rustc --version
 cargo --version
 cargo clippy --version
 cargo deny --version
+python3 --version
 if mutants_version="$(cargo mutants --version 2>/dev/null)"; then
   printf '%s\n' "$mutants_version"
 fi

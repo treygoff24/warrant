@@ -9,11 +9,19 @@ member_list=""
 trap 'rm -f -- "$source_list" ${member_list:+"$member_list"}' EXIT
 member_list="$(mktemp "${TMPDIR:-/var/tmp}/warrant-budget-members.XXXXXX")"
 
+# Name the missing interpreter here. Without this, a box with no python3 fails
+# below with "cannot parse cargo metadata", which blames Cargo for a missing
+# tool and is exactly the misreporting this stage exists to prevent.
+if ! command -v python3 >/dev/null 2>&1; then
+  printf '%s\n' "budget: python3 is required to read cargo metadata and is not on PATH" >&2
+  exit 1
+fi
+
 if ! cargo metadata --format-version=1 --no-deps --manifest-path "$repo_root/Cargo.toml" >"$source_list"; then
   printf '%s\n' "budget: cargo metadata failed or is unavailable" >&2
   exit 1
 fi
-if ! python - "$source_list" >"$member_list" <<'PY'
+if ! python3 - "$source_list" >"$member_list" <<'PY'
 import json
 import os
 import sys
@@ -24,12 +32,18 @@ members = metadata["workspace_members"]
 if not isinstance(members, list) or not members:
     raise ValueError("expected nonempty workspace_members")
 packages = {package["id"]: package for package in metadata["packages"]}
+directories = []
 for member in members:
     manifest = packages[member]["manifest_path"]
     if (not isinstance(manifest, str) or not os.path.isabs(manifest)
             or os.path.basename(manifest) != "Cargo.toml" or "\0" in manifest):
         raise ValueError("invalid workspace member manifest_path")
-    sys.stdout.buffer.write(os.fsencode(os.path.dirname(manifest)) + b"\0")
+    directories.append(os.path.dirname(manifest))
+# Emit in a stable order so the budget output reads the same on every run and
+# two runs of the same workspace diff cleanly. The printed column is the
+# directory's base name, so that is the primary key.
+for directory in sorted(directories, key=lambda d: (os.path.basename(d), d)):
+    sys.stdout.buffer.write(os.fsencode(directory) + b"\0")
 PY
 then
   printf '%s\n' "budget: cannot parse cargo metadata workspace members" >&2

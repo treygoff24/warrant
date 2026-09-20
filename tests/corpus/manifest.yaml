@@ -2,7 +2,7 @@
   "schema_version": 1,
   "corpus_date": "2026-09-19",
   "artifact_layout": "Each member has a deterministic Git source archive and a deterministic node_modules dependency archive.",
-  "frameworks_rule": "Record application frameworks and build bundlers used by the pinned repository, with versions resolved from its installed dependency tree.",
+  "frameworks_rule": "Record the application frameworks the pinned repository is built on and the build bundlers its own build scripts invoke, with versions resolved from its installed dependency tree; a test runner's internal dependencies are not recorded, so a repository that builds with rollup and tests with vitest records rollup and not the vite that vitest installs.",
   "inputs": {
     "git": "git version 2.47.3",
     "platform_observed": "Linux x86_64",

@@ -1013,15 +1013,33 @@ entrypoints:
 #[test]
 fn generated_verification_reports_drift_and_absence() {
     let root = tempdir().expect("temporary repository");
+    let effects = tempdir().expect("producer execution sentinels");
+    let reproducible_effect = effects.path().join("reproducible-ran");
+    let unsafe_effect = effects.path().join("non-reproducible-ran");
     write(root.path(), "generated/value.txt", "stale\n");
+    write(root.path(), "generated/clean.txt", "same\n");
     write(root.path(), "source.txt", "input\n");
-    let manifest = manifest(
+    let clean_producer = serde_json::to_string(&format!(
+        "mkdir -p generated && printf 'same\\n' > generated/clean.txt && printf ran > '{}'",
+        reproducible_effect.display()
+    ))
+    .expect("quoted shell producer");
+    let unsafe_producer =
+        serde_json::to_string(&format!("printf ran > '{}'", unsafe_effect.display()))
+            .expect("quoted shell producer");
+    let manifest = manifest(&format!(
         r#"  generated:
     - files: ["generated/value.txt", "generated/missing.txt"]
       producer: "mkdir -p generated && printf 'fresh\\n' > generated/value.txt"
       reproducible: true
+    - files: ["generated/clean.txt"]
+      producer: {clean_producer}
+      reproducible: true
+    - files: ["generated/unsafe.txt"]
+      producer: {unsafe_producer}
+      reproducible: false
 "#,
-    );
+    ));
 
     let built = build(
         root.path(),
@@ -1048,6 +1066,14 @@ fn generated_verification_reports_drift_and_absence() {
     );
 
     let issues = verify_generated(root.path(), &manifest).expect("producer runs");
+    assert_eq!(
+        fs::read_to_string(&reproducible_effect).expect("reproducible producer ran"),
+        "ran"
+    );
+    assert!(
+        !unsafe_effect.exists(),
+        "non-reproducible producer must never execute"
+    );
     assert_eq!(
         issues,
         [

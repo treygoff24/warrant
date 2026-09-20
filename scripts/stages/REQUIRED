@@ -3,4 +3,5 @@
 25-deny.sh
 30-test.sh
 35-deps.sh
+40-schema.sh
 55-budget.sh

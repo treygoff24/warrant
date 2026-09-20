@@ -1,6 +1,8 @@
+use std::{collections::BTreeSet, fs, path::Path};
+
 use warrant_core::manifest::{ManifestError, WarrantManifest};
 use warrant_core::nouns::{InventoryClass, SnapshotKind, SnapshotManifest};
-use warrant_core::schema::DOCUMENTS;
+use warrant_core::schema::{DOCUMENTS, canonical_bytes};
 
 #[test]
 fn manifest_applies_documented_defaults() {
@@ -63,18 +65,57 @@ fn snapshot_manifest_round_trips() {
 
 #[test]
 fn implemented_document_schemas_are_stable_and_require_schema_version() {
+    let implemented: BTreeSet<_> = DOCUMENTS
+        .iter()
+        .filter(|document| document.implemented())
+        .map(|document| document.name.to_owned())
+        .collect();
+    for name in [
+        "warrant.snapshot",
+        "warrant.inventory",
+        "warrant.capabilities",
+        "warrant.manifest",
+        "warrant.error",
+    ] {
+        assert!(implemented.contains(name), "{name} must remain implemented");
+    }
+
+    let schemas = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas");
+    let checked_in: BTreeSet<_> = fs::read_dir(&schemas)
+        .expect("checked-in schemas directory should exist")
+        .map(|entry| {
+            entry
+                .expect("schema directory entry should be readable")
+                .path()
+        })
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .map(|path| {
+            path.file_stem()
+                .and_then(|name| name.to_str())
+                .expect("schema filename should be UTF-8")
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(
+        implemented, checked_in,
+        "implemented schemas must match files"
+    );
+
     for document in DOCUMENTS
         .iter()
         .copied()
         .filter(|document| document.implemented())
     {
-        let first = serde_json::to_vec_pretty(
+        let first = canonical_bytes(
             &document
                 .generate()
                 .expect("implemented schema should generate"),
         )
         .expect("schema should serialize");
-        let second = serde_json::to_vec_pretty(
+        let second = canonical_bytes(
             &document
                 .generate()
                 .expect("implemented schema should generate"),
@@ -84,6 +125,14 @@ fn implemented_document_schemas_are_stable_and_require_schema_version() {
             serde_json::from_slice(&first).expect("schema should round-trip as JSON");
 
         assert_eq!(first, second, "{} was not deterministic", document.name);
+        let checked_in = fs::read(schemas.join(format!("{}.json", document.name)))
+            .expect("implemented schema file should be readable");
+        pretty_assertions::assert_eq!(
+            std::str::from_utf8(&first).expect("generated JSON should be UTF-8"),
+            std::str::from_utf8(&checked_in).expect("checked-in JSON should be UTF-8"),
+            "{} differs from its checked-in bytes",
+            document.name
+        );
         assert!(
             schema["required"]
                 .as_array()

@@ -569,3 +569,28 @@ fn deleted_files_and_file_to_directory_replacements_match_git_tree() {
         format!("sha1:{}", git(dir.path(), &["write-tree"]))
     );
 }
+
+#[test]
+fn sparse_checkout_entries_carry_index_ids() {
+    let dir = repo();
+    for name in ["kept", "dropped"] {
+        fs::create_dir(dir.path().join(name)).unwrap();
+        fs::write(dir.path().join(name).join("code.rs"), name).unwrap();
+    }
+    git(dir.path(), &["add", "-A"]);
+    git(dir.path(), &["commit", "-qm", "directories"]);
+    git(dir.path(), &["sparse-checkout", "init", "--cone"]);
+    git(dir.path(), &["sparse-checkout", "set", "kept"]);
+    assert!(!dir.path().join("dropped/code.rs").exists());
+    let tree = git(dir.path(), &["write-tree"]);
+    let (manifest, entries) = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |s| Ok(s.entries().to_vec()),
+    )
+    .unwrap();
+    assert_eq!(manifest.tree, format!("sha1:{tree}"));
+    assert!(entries.iter().any(|entry| entry.path == "dropped/code.rs"));
+}

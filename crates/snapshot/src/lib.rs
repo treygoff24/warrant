@@ -1,7 +1,7 @@
 //! Exact Git snapshots. Consumers return data; callers publish only after capture succeeds.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 use warrant_core::{
@@ -63,6 +63,7 @@ pub struct Snapshot {
     manifest: SnapshotManifest,
     entries: Vec<InventoryEntry>,
     modes: BTreeMap<String, String>,
+    object_paths: BTreeSet<String>,
 }
 impl Snapshot {
     pub fn manifest(&self) -> &SnapshotManifest {
@@ -89,7 +90,7 @@ impl Snapshot {
             .blob
             .as_deref()
             .ok_or_else(|| SnapshotError::new("ignored", path))?;
-        if self.manifest.kind == SnapshotKind::Worktree {
+        if self.manifest.kind == SnapshotKind::Worktree && !self.object_paths.contains(path) {
             let (mode, bytes) = worktree::read(&self.repo, path)
                 .map_err(|_| SnapshotError::new("snapshot-changed", path))?;
             let hash_kind = if self.manifest.object_format == "sha256" {
@@ -230,6 +231,7 @@ fn capture_once(
         repo: repo.to_owned(),
         entries: Vec::new(),
         modes: BTreeMap::new(),
+        object_paths: BTreeSet::new(),
         manifest: SnapshotManifest {
             schema_version: "warrant.snapshot/1".into(),
             repo: format!("{format}:{root}"),

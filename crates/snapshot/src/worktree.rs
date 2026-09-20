@@ -26,11 +26,15 @@ pub(crate) fn capture(repo: &Path, config: &SnapshotConfig) -> Result<Snapshot, 
         None,
         None,
     )?)?;
-    let (tree, capture_kind) = match native::capture(&root, SnapshotKind::Worktree)? {
-        Some(tree) => (tree, "native-worktree"),
-        None => (portable(&root)?, "temporary-index"),
+    let (tree, carried, capture_kind) = match native::capture(&root, SnapshotKind::Worktree)? {
+        Some(tree) => (tree, BTreeSet::new(), "native-worktree"),
+        None => {
+            let (tree, carried) = portable(&root)?;
+            (tree, carried, "temporary-index")
+        }
     };
     let mut snapshot = crate::capture_once(&root, SnapshotKind::Tree, Some(&tree), config)?;
+    snapshot.object_paths = carried;
     snapshot.manifest.kind = SnapshotKind::Worktree;
     snapshot.manifest.capture.kind = capture_kind.into();
     snapshot.manifest.excluded.ignored_files = Some(ignored.len() as u64);
@@ -56,12 +60,13 @@ pub(crate) fn capture(repo: &Path, config: &SnapshotConfig) -> Result<Snapshot, 
     Ok(snapshot)
 }
 
-fn portable(repo: &Path) -> Result<String, SnapshotError> {
+fn portable(repo: &Path) -> Result<(String, BTreeSet<String>), SnapshotError> {
     let temporary = TemporaryIndex::new()?;
     let index = temporary.0.join("index");
     git::run(repo, &["read-tree", "--empty"], Some(&index), None)?;
-    let tracked = git::run(repo, &["ls-files", "--stage", "-z"], None, None)?;
+    let tracked = git::run(repo, &["ls-files", "--stage", "-t", "-z"], None, None)?;
     let mut files = BTreeMap::new();
+    let mut carried = BTreeSet::new();
     for record in tracked.split(|b| *b == 0).filter(|r| !r.is_empty()) {
         let record = std::str::from_utf8(record)
             .map_err(|_| SnapshotError::new("unsupported-path", "non-UTF-8 path"))?;
@@ -69,13 +74,14 @@ fn portable(repo: &Path) -> Result<String, SnapshotError> {
             .split_once('\t')
             .ok_or_else(|| SnapshotError::new("invalid-index", "missing path"))?;
         let fields: Vec<_> = meta.split_whitespace().collect();
-        if fields.len() != 3 {
+        if fields.len() != 4 {
             return Err(SnapshotError::new("invalid-index", "invalid entry"));
         }
         files.insert(
             path.to_owned(),
-            if fields[0] == "160000" {
-                Some(fields[1].to_owned())
+            if fields[0] == "S" || fields[1] == "160000" {
+                carried.insert(path.to_owned());
+                Some((fields[1].to_owned(), fields[2].to_owned()))
             } else {
                 None
             },
@@ -90,9 +96,9 @@ fn portable(repo: &Path) -> Result<String, SnapshotError> {
         files.entry(path).or_insert(None);
     }
     let mut index_info = Vec::new();
-    for (path, submodule) in files {
-        let (mode, oid) = if let Some(oid) = submodule {
-            ("160000".to_owned(), oid)
+    for (path, indexed) in files {
+        let (mode, oid) = if let Some(entry) = indexed {
+            entry
         } else {
             // A tracked deletion is absent, not a read failure; all other errors fail closed.
             match fs::symlink_metadata(repo.join(&path)) {
@@ -131,7 +137,7 @@ fn portable(repo: &Path) -> Result<String, SnapshotError> {
         Some(&index),
         Some(&index_info),
     )?;
-    git::text(repo, &["write-tree"], Some(&index))
+    Ok((git::text(repo, &["write-tree"], Some(&index))?, carried))
 }
 
 /// All source-byte reads, including symlink payloads and ignore inputs, pass here.

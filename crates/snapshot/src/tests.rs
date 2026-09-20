@@ -616,3 +616,38 @@ fn clean_filter_files_hash_like_git_add() {
     .unwrap();
     assert_eq!(manifest.tree, format!("sha1:{tree}"));
 }
+
+#[cfg(unix)]
+#[test]
+fn core_filemode_false_matches_git_modes() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = repo();
+    git(dir.path(), &["config", "core.fileMode", "false"]);
+    fs::write(dir.path().join("script"), "#!/bin/sh\n").unwrap();
+    fs::set_permissions(dir.path().join("script"), fs::Permissions::from_mode(0o755)).unwrap();
+    let (manifest, ()) = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |_| Ok(()),
+    )
+    .unwrap();
+    git(dir.path(), &["add", "-A"]);
+    assert_eq!(
+        manifest.tree,
+        format!("sha1:{}", git(dir.path(), &["write-tree"]))
+    );
+    capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |s| {
+            assert_eq!(s.mode("script"), Some("100644"));
+            assert_eq!(s.read("script")?, b"#!/bin/sh\n");
+            Ok(())
+        },
+    )
+    .unwrap();
+}

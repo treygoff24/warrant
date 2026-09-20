@@ -64,6 +64,7 @@ pub struct Snapshot {
     entries: Vec<InventoryEntry>,
     modes: BTreeMap<String, String>,
     object_paths: BTreeSet<String>,
+    file_mode: bool,
 }
 impl Snapshot {
     pub fn manifest(&self) -> &SnapshotManifest {
@@ -91,8 +92,16 @@ impl Snapshot {
             .as_deref()
             .ok_or_else(|| SnapshotError::new("ignored", path))?;
         if self.manifest.kind == SnapshotKind::Worktree && !self.object_paths.contains(path) {
-            let (mode, bytes) = worktree::read(&self.repo, path)
-                .map_err(|_| SnapshotError::new("snapshot-changed", path))?;
+            let (mode, bytes) = worktree::read(
+                &self.repo,
+                path,
+                if self.file_mode {
+                    None
+                } else {
+                    self.mode(path)
+                },
+            )
+            .map_err(|_| SnapshotError::new("snapshot-changed", path))?;
             let actual = worktree::hash(&self.repo, path, &mode, &bytes)?;
             if actual != oid || self.mode(path) != Some(mode.as_str()) {
                 return Err(SnapshotError::new("snapshot-changed", path));
@@ -226,6 +235,7 @@ fn capture_once(
         entries: Vec::new(),
         modes: BTreeMap::new(),
         object_paths: BTreeSet::new(),
+        file_mode: true,
         manifest: SnapshotManifest {
             schema_version: "warrant.snapshot/1".into(),
             repo: format!("{format}:{root}"),

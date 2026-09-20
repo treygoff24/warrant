@@ -2,7 +2,21 @@
 
 State, not orders. The first block is what is true right now, with pointers to the rulings that made it so. Update at every session closeout; earlier blocks are dated history.
 
-## Current: plan approved, build authorized, orchestrator starting
+## Current: pre-launch complete, plan-of-attack posted, two rulings open with Fable
+
+The orchestrator for this build is Plumb, an Opus 5 `high` session on Trey's personal subscription, Post participant `claude-a315b6e6` in room `plumb-devbox`, lineage `plumb`. Fable is coordinator of record in `#warrant-build`. The escalation contract is `2026-09-19-warrant-v1-orchestration.md`.
+
+The close scaffolding is committed at `00445c6`: `tests/acceptance.sh` (the plan's real acceptance, owned by no lane), `bin/delegate-audit` as an exec shim, and `docs/acceptance/build-start.txt`. Running the script rather than trusting it found two defects in it, both fixed before the commit: it matched only zero-padded item numbers while the plan's verify rows expect the unpadded token (W0.6 expects `ACCEPT 3`), which would have failed every acceptance row from W0.6 onward; and on a privacy-scan hit it still printed the offending line to stdout, the stream the final close commits as `docs/acceptance/demo-output.md` in this public repository. At the spine head the script correctly fails closed because `scripts/gate.sh` does not exist until W0.1 builds it.
+
+`plan-lint` and `plan-lint --check-routes` both exit 0 with no output, which is indistinguishable from a broken detector, so both were red-proofed: a planted unknown `blocked_by` gives `FAIL unknown-dep`, a planted unknown model alias gives `FAIL unknown-alias`. The rendered ROUTES match the plan's routing block exactly, including the `astra` `low` executors and the GLM-first adjudicator. Installed writing-plans payload digests match the checkout.
+
+The workflow is rendered and `delegate workflow check` and the nominal dry run are both clean: 70 items (38 tasks, 9 checkpoints, 23 closes), 207 stages, 113 declared-not-run verify rows, and every checkpoint resolving with `gate_required` true, so nothing self-approves. One orchestrator ruling cleared the dry run: the compiled script's `item_thread_cap()` reads the global delegate config by a hardcoded path and ignores the realm config, so the 70-item plan refused against a 64-item cap that could not be raised where it appeared to live. `workflows.itemThreads` is now 96 in the file the script actually reads. Runtime configuration only; no plan, route, or task change. Cost if wrong: a wider admission ceiling than needed, which does not force parallelism. A papercut is filed against writing-plans for the hardcoded path.
+
+Two rulings are open with Fable, posted with the plan of attack, neither blocking launch. First, the compiler bakes the final-close audit row with the plan's absolute path and the close step commits that output as `docs/acceptance/audit-report.md`, which puts a home path in a public repository; the exits are redaction at the close step, a summary instead of raw output, or keeping the receipts out of the tree. Second, `tests/acceptance.sh --final` asserts on stage markers that no task in the plan owns, so the orchestrator defined a fail-closed contract in the script header (`corpus: <name> ran` or `corpus: <name> not run: private member unavailable`; `schema: stub-documents <count>`) that W2.9 and W2.10 must emit, and wants the spellings ratified rather than discovered. The first binds before the W2.G close, the second before the M2 lanes that emit the markers.
+
+Nothing is built. The launch, once taken, uses `park_channel` `warrant-build` and no `auto_approve`; the run id, bundle path, and worktree land here and in epic bead `warrant-29b`.
+
+## Earlier: plan approved, build authorized, orchestrator starting
 
 Trey approved the plan (P1 to P13 plus the new P14 and P15) and authorized the build on 2026-09-19. The build runs under `2026-09-19-warrant-v1-orchestration.md`: an Opus 5 `high` session on Trey's personal subscription drives the workflow, Fable is coordinator of record and escalation layer in Post channel `#warrant-build`, and Trey keeps his gates. Blocker bead warrant-7gw is closed. P13's private runner is carried as a blocked prerequisite through R14. Nothing is built yet; the orchestrator's first work is the close scaffolding and the workflow render.
 

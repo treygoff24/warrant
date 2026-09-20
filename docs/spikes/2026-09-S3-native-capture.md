@@ -1,107 +1,116 @@
 # S3: native capture with `gix`
 
-Status: not met
+Status: met (six-case fixture matrix)
 
 ## Decision
 
-Keep native capture off. The pinned `gix` surface exposes APIs for
-constructing index trees and filtered worktree blobs, but this run could
-not execute the parity matrix: `warrant-snapshot` does not yet declare the
-`native-capture` feature. Its manifest is outside this lane's write boundary;
-the plan requires the coordinator to re-sequence manifest changes. This is a
-blocked experiment, not a measured disagreement between gix and Git. Source
-inspection is not parity evidence. Native implementation and tests remain
-undelivered.
+All six measured fixtures produce identical native and Git tree IDs. Keep
+native capture off by default: qualification over the frozen project corpus
+is still unmeasured, and the production `native::capture` still returns
+`None`. These measurements exercise a test-local implementation, not a
+shipping capture path. The broader S3 exit criterion in spec section 17.7
+has not been established; no measured divergence was found in these fixtures.
 
-## Question and frozen source
+`crates/snapshot/Cargo.toml` now declares `native-capture = []` with no default
+feature entry. The previous missing-feature prerequisite is resolved. Feature
+wiring and default selection concern shipping only: the unconditional `gix`
+dependency lets this integration target measure parity without any feature.
+No manifest change is required for the six-case measurement.
 
-Can `gix` 0.87.1 reproduce `git write-tree` tree IDs for index and worktree
-captures containing untracked, modified, ignored, symlinked, and executable
-files? The inspected repository source was frozen at
-`3d7405d8fa21d38cf5ca298ac3822fd4b057b39a`.
+## Question and source
+
+Can pinned `gix` 0.87.1 reproduce `git write-tree` IDs for an index baseline
+and worktrees with untracked, modified, ignored, symlinked, and executable
+files? This measurement was made on 2026-09-20 from repository base
+`6df9d1cf3a71c401574d8e22a81693263b402c65`, with the integration test added in
+this change at `crates/snapshot/tests/native.rs`.
+
+Observed tools: Git 2.47.3, rustc 1.98.1, Cargo 1.98.1, Linux x86_64. Both
+the workspace and the fixture temporary directory use ZFS. Repositories are
+explicitly SHA-1, with `core.fileMode=true` and `core.autocrlf=false`.
+Global/system Git configuration is excluded; attributes and excludes files
+outside the fixture are disabled. Native repositories use isolated open
+options. The Unix-only target does not establish parity on other filesystems
+or operating systems.
+
+## Fixture corpus and method
+
+Each test creates a fresh tempfile repository with staged `src/file.txt`
+containing `baseline\n` and `.gitattributes` containing `*.txt text eol=lf\n`.
+The index baseline rebuilds those index entries. The other cases change only
+the worktree: add `src/new.txt` with CRLF bytes, modify `src/file.txt` with
+CRLF bytes, add `.gitignore` plus an ignored file and directory, add a symlink
+to `src/file.txt`, or add an executable shell script. The CRLF cases exercise
+attribute-driven blob conversion as well as tree assembly.
+
+The native index route reads `open_index()` entries. The native worktree route
+enumerates fixture files without following symlinks, asks
+`Worktree::excludes(None)` and `at_entry` for ignore decisions, and hashes each
+included file with `filter_pipeline(None)` and `worktree_file_to_object`.
+Both routes assemble trees through `edit_tree` from the empty tree, using
+`Editor::upsert` and `write`. No Git subprocess computes the native result.
+
+The reference uses a separate temporary `GIT_INDEX_FILE` outside the worktree:
+`read-tree --empty`, `add -A`, then `write-tree`. This follows the temporary
+index shape of `portable()` for these simple fixtures; it does not exercise
+that function's carried entries or oversize handling. Native capture runs
+first, so Git cannot prepopulate the worktree blobs under measurement. Each
+case asserts equal tree IDs and unchanged original index bytes. Additional
+assertions check the staged baseline, untracked precondition, modified tree,
+ignored paths, symlink mode and target, and executable mode.
 
 ## Measurements
 
-No parity case ran. `cargo test --locked -p warrant-snapshot --features
-native-capture` exited 101 because the package does not contain that feature.
-`WARRANT_CORPUS_DIR` was unset; that records only this run's environment and
-does not establish that the private corpus is unavailable.
-
-The baseline `cargo test --locked -p warrant-snapshot --all-features` exited
-0 with 21 passing unit tests and zero doc tests. With no feature declared,
-that command exercises the native stub returning `None`, not native hashing.
-The report-marker check initially exited 2 because this report did not exist.
-The explicit feature invocation is the red prerequisite reproduction; no
-native behavioral red/green test has run.
-
-Observed tools: Git 2.47.3, rustc 1.98.1, Cargo 1.98.1, Linux x86_64.
-
-None of the frozen members in `tests/corpus/manifest.yaml` ran: `atlas`,
-`nextjs-app`, `pnpm-project-references`, `commonjs-library`, `vite-library`,
-and `path-aliases-exports`. Neither tree ID was measured for any member.
-Green fixture parity on this devbox would not establish parity on other
-filesystems.
+All rows executed. IDs below are the emitted values from
+`cargo test --locked -p warrant-snapshot --test native -- --nocapture`.
 
 | Case | Native tree ID | `git write-tree` tree ID | Result |
 | --- | --- | --- | --- |
-| index baseline | not run | not run | blocked by missing feature |
-| untracked file | not run | not run | blocked by missing feature |
-| modified tracked file | not run | not run | blocked by missing feature |
-| ignored file | not run | not run | blocked by missing feature |
-| symlink | not run | not run | blocked by missing feature |
-| executable file | not run | not run | blocked by missing feature |
+| index baseline | e133cdebf6ade6edb94c77645144487701bd5533 | e133cdebf6ade6edb94c77645144487701bd5533 | measured match |
+| untracked file | d34eaf67f45181fcc6aee8e6dff96035fb1dd933 | d34eaf67f45181fcc6aee8e6dff96035fb1dd933 | measured match |
+| modified tracked file | 0f108b169aa784f6c20b9e6b74b438e639b62f5a | 0f108b169aa784f6c20b9e6b74b438e639b62f5a | measured match |
+| ignored file | 675204872cb6e2dd6d03565f3d0f4382be1b34ad | 675204872cb6e2dd6d03565f3d0f4382be1b34ad | measured match |
+| symlink | d0e67e91813179bfbc7740920a6fedd6657f4123 | d0e67e91813179bfbc7740920a6fedd6657f4123 | measured match |
+| executable file | 6a3c4588750bdd7efccae95d739d002425af07db | 6a3c4588750bdd7efccae95d739d002425af07db | measured match |
 
-The exit criterion requires identical IDs in every row. It is **not met**.
+The six-case parity criterion is met: 6 passed, 0 failed. Before adding the
+target, its test command exited 101 because the native test target was absent.
+With the assertions installed and the native helper deliberately returning
+the empty tree `4b825dc642cb6eb9a060e54bf8d69288fbee4904`, the same command
+exited 101: all six tree-ID assertions failed. Replacing that empty-tree
+helper with the gix implementation made all six pass. This behavioral red
+result was an intentional control, not evidence of a gix divergence.
 
-## Pinned API findings
+## Unmeasured scope and shipping follow-up
 
-- Index trees have a small native route: `Repository::open_index()`, reject any
-  entry whose `Entry::stage()` is not `Stage::Unconflicted`, start from
-  `Repository::edit_tree(ObjectId::empty_tree(repo.object_hash()))`, add each
-  path with `Editor::upsert(path, mode.kind(), entry.id)`, where `mode` is the
-  non-`None` result of `Entry::mode.to_tree_entry_mode()`, then call
-  `Editor::write()`. The editor writes changed trees to
-  the object database, validates path components, and verifies referenced
-  non-tree objects exist. [Pinned `edit_tree` docs](https://docs.rs/gix/0.87.1/gix/struct.Repository.html#method.edit_tree),
-  [`gix-0.87.1/src/object/tree/editor.rs`](https://docs.rs/gix/0.87.1/src/gix/object/tree/editor.rs.html#228-327),
-  and [`gix-index-0.55.0` entry access](https://docs.rs/gix-index/0.55.0/gix_index/struct.State.html#method.entries).
-- Worktree bytes need a separate attribute/filter path. Create an attribute
-  stack, pass it to `gix::filter::Pipeline::new`, then call
-  `worktree_file_to_object(&mut self, rela_path: &BStr, index:
-  &gix_index::State)`. It applies to-Git filters for files, writes symlink
-  targets without filtering, preserves the executable mode from metadata, and
-  returns a gitlink for an openable nested repository. It explicitly performs
-  no submodule cross-check. [Pinned pipeline docs](https://docs.rs/gix/0.87.1/gix/filter/struct.Pipeline.html#method.worktree_file_to_object)
-  and [`gix-0.87.1/src/filter.rs`](https://docs.rs/gix/0.87.1/src/gix/filter.rs.html#227-275).
-- Ignore decisions are separate from blob creation. `Worktree::excludes(
-  overrides: Option<gix_ignore::Search>) -> Result<AttributeStack<'_>, Error>`
-  loads standard user and repository excludes; callers query it per path with
-  `AttributeStack::at_path`. [Pinned excludes docs](https://docs.rs/gix/0.87.1/gix/struct.Worktree.html#method.excludes)
-  and [`gix-0.87.1/src/attribute_stack.rs`](https://docs.rs/gix/0.87.1/src/gix/attribute_stack.rs.html#34-63).
-- The workspace pin enables both `sha1` and `sha256`, and `Repository::object_hash()`
-  drives empty-tree, blob, and tree hashing. That is compile-time capability,
-  not empirical SHA-256 parity. [`gix` 0.87.1 features](https://docs.rs/crate/gix/0.87.1/features).
+The frozen repositories in `tests/corpus/manifest.yaml` are outside this
+fixture run: `atlas`, `nextjs-app`, `pnpm-project-references`,
+`commonjs-library`, `vite-library`, and `path-aliases-exports`. Their native
+and reference IDs remain unmeasured. No availability claim is made about
+their artifacts.
 
-## Boundaries to test after the prerequisite lands
+The fixture walker is deliberately test-local. It does not qualify tracked
+ignored files, sparse/skip-worktree entries, submodules or embedded
+repositories, external clean/process filters and their failures, SHA-256,
+or `core.fileMode=false`. These require measurement before adopting it as a
+production capture algorithm.
 
-- Sparse indexes can contain `Mode::DIR`; a worktree-only walk must retain its
-  indexed subtree instead of treating an absent sparse path as deleted.
-- `worktree_file_to_object` can treat any openable nested repository as a
-  gitlink. The matrix must distinguish declared submodules from embedded repos
-  and compare moved or dirty submodule HEADs with Git.
-- Clean/process filters may execute configured helpers. The parity case must
-  cover required-filter failure and verify the same trusted configuration and
-  attributes are used as Git.
-- The existing `native::capture` result is only `Option<String>`. In the
-  worktree composition, `Some(id)` therefore supplies empty `carried` and
-  `oversize` sets. Enabling native worktree capture would silently lose the
-  temporary-index path's carried gitlink/skip-worktree protection and oversize
-  annotations unless that interface is widened or native worktree capture is
-  left unsupported.
+Production worktree capture also needs to preserve the portable path's
+`carried` and `oversize` sets. Its current `Option<String>` native interface
+cannot return them. Changing that interface and its caller exceeds this
+lane's owned files. The shipping path remains the portable implementation,
+including when the feature is explicitly enabled.
 
-## Smallest next step
+## API sources
 
-The coordinator must declare `native-capture` in `crates/snapshot/Cargo.toml`
-or reassign that file, keeping it out of the default feature set. Implement
-and test native capture, then measure the cases against both SHA-1 and SHA-256
-repositories. Enable it by default only after every recorded tree ID matches.
+The implementation was checked against the pinned dependency source shipped
+with gix 0.87.1:
+
+- [Filter pipeline construction](https://docs.rs/gix/0.87.1/src/gix/repository/filter.rs.html)
+  and [worktree blob conversion](https://docs.rs/gix/0.87.1/src/gix/filter.rs.html).
+- [Worktree excludes](https://docs.rs/gix/0.87.1/gix/struct.Worktree.html#method.excludes)
+  and [per-entry ignore lookup](https://docs.rs/gix/0.87.1/src/gix/attribute_stack.rs.html).
+- [Tree editor](https://docs.rs/gix/0.87.1/src/gix/object/tree/editor.rs.html).
+
+These APIs supply the mechanism; the six measured rows supply the parity
+evidence.

@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use pretty_assertions::assert_eq;
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 use warrant_core::manifest::WarrantManifest;
 use warrant_core::nouns::{InventoryClass, InventoryEntry};
@@ -47,11 +48,30 @@ fn snapshot(root: &Path) -> Vec<InventoryEntry> {
                     .expect("fixture path below root")
                     .to_string_lossy()
                     .replace('\\', "/");
-                entries.push(snapshot_entry(
-                    &relative,
-                    InventoryClass::Unknown,
-                    Some(&format!("sha1:fixture-{relative}")),
-                ));
+                // Inventory consumes captured blobs and read failures, not live file bytes.
+                let entry = match fs::read(&path) {
+                    Ok(bytes) => {
+                        let mut hash = Sha256::new();
+                        hash.update(format!("blob {}\0", bytes.len()));
+                        hash.update(bytes);
+                        let digest: String = hash
+                            .finalize()
+                            .iter()
+                            .map(|byte| format!("{byte:02x}"))
+                            .collect();
+                        snapshot_entry(
+                            &relative,
+                            InventoryClass::Unknown,
+                            Some(&format!("sha256:{digest}")),
+                        )
+                    }
+                    Err(error) => {
+                        let mut entry = snapshot_entry(&relative, InventoryClass::Unread, None);
+                        entry.unread = Some(error.to_string());
+                        entry
+                    }
+                };
+                entries.push(entry);
             }
         }
     }
@@ -178,7 +198,7 @@ fn declared_submodule_contents_are_not_first_party() {
 }
 
 #[test]
-fn classification_defaults_and_provenance_cover_every_class() {
+fn classification_defaults_and_snapshot_exclusions_preserve_classes() {
     let root = tempdir().expect("temporary repository");
     for (path, contents) in [
         ("src/main.ts", "export {};\n"),
@@ -1151,6 +1171,11 @@ fn completeness_counts_equal_entries_and_digest_is_stable() {
         InventoryClass::Submodule,
         Some("sha1:123"),
     ));
+    listing.push(snapshot_entry(
+        "ignored/cache.bin",
+        InventoryClass::Ignored,
+        None,
+    ));
 
     let first = build(root.path(), &listing, &empty_manifest(), &config).expect("first inventory");
     let second =
@@ -1161,5 +1186,77 @@ fn completeness_counts_equal_entries_and_digest_is_stable() {
     assert_eq!(first.document.summary.unowned_source, ["src/unowned.ts"]);
     assert_eq!(first.document.summary.unknown, ["mystery.xyz"]);
     assert_eq!(first.document.summary.submodules[0].path, "external");
+    assert_eq!(first.document.summary.ignored_files, Some(1));
     assert_eq!(first.digest, second.digest);
+}
+
+#[test]
+fn inventory_digest_changes_with_captured_file_content() {
+    let first_root = tempdir().expect("first repository");
+    let second_root = tempdir().expect("second repository");
+    write(
+        first_root.path(),
+        "src/value.ts",
+        "export const value = 1;\n",
+    );
+    write(
+        second_root.path(),
+        "src/value.ts",
+        "export const value = 2;\n",
+    );
+    let capture = |root: &Path| {
+        build(
+            root,
+            &snapshot(root),
+            &empty_manifest(),
+            &BuildConfig::default(),
+        )
+        .expect("inventory builds")
+    };
+    let first = capture(first_root.path());
+    let second = capture(second_root.path());
+    assert_ne!(
+        first.document.entries[0].blob,
+        second.document.entries[0].blob
+    );
+    assert!(first.digest.starts_with("sha256:"));
+    assert!(second.digest.starts_with("sha256:"));
+    assert_ne!(
+        first.digest, second.digest,
+        "content changes must change the inventory identity"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unread_snapshot_entry_preserves_read_failure_in_completeness() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "src/unread.ts", "export {};\n");
+    let path = root.path().join("src/unread.ts");
+    let permissions = fs::metadata(&path).expect("fixture metadata").permissions();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0)).expect("make fixture unreadable");
+    let read_result = fs::read(&path);
+    let listing = snapshot(root.path());
+    let result = build(
+        root.path(),
+        &listing,
+        &empty_manifest(),
+        &BuildConfig::default(),
+    );
+    fs::set_permissions(&path, permissions).expect("restore fixture permissions");
+    let error = read_result
+        .expect_err("this test needs an unprivileged user to exercise a real read failure");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    let built = result.expect("unread entries stay in the inventory");
+    assert_eq!(built.document.entries.len(), 1);
+    assert_eq!(built.document.entries[0].class, InventoryClass::Unread);
+    assert_eq!(
+        built.document.entries[0].unread.as_deref(),
+        Some(error.to_string().as_str())
+    );
+    assert_eq!(built.document.summary.unread.len(), 1);
+    assert_eq!(built.document.summary.unread[0].path, "src/unread.ts");
+    assert_eq!(built.document.summary.unread[0].reason, error.to_string());
 }

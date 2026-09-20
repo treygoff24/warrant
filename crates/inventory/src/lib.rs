@@ -209,17 +209,20 @@ pub fn build(
         let explicit = matching_rules(relative, &class_rules);
         let generated_match = matching_generated(relative, &generated);
         let vendored_match = matching_vendored(relative, &vendored);
-        let declaration_count = usize::from(generated_match.is_some())
-            + usize::from(vendored_match.is_some())
-            + usize::from(!explicit.is_empty());
+        let declaration_count =
+            generated_match.len() + vendored_match.len() + usize::from(!explicit.is_empty());
         if declaration_count > 1 {
             let mut names: Vec<String> = explicit.iter().map(|rule| rule.rule.id.clone()).collect();
-            if generated_match.is_some() {
-                names.push("manifest:generated".into());
-            }
-            if vendored_match.is_some() {
-                names.push("manifest:vendored".into());
-            }
+            names.extend(
+                generated_match
+                    .iter()
+                    .map(|item| format!("manifest:inventory.generated[{}]", item.declaration)),
+            );
+            names.extend(
+                vendored_match
+                    .iter()
+                    .map(|item| format!("manifest:inventory.vendored[{}]", item.declaration)),
+            );
             names.sort();
             return Err(InventoryError::ClassificationConflict {
                 path: relative.clone(),
@@ -227,41 +230,42 @@ pub fn build(
             });
         }
 
-        let (class, by, reason, generated_by, vendored_from) = if let Some(item) = generated_match {
-            (
-                InventoryClass::Generated,
-                "manifest:inventory.generated".into(),
-                format!("matched generated glob {}", item.pattern),
-                Some(GeneratedBy {
-                    producer: item.producer.clone(),
-                    reproducible: item.reproducible,
-                    inputs: item.inputs.clone(),
-                }),
-                None,
-            )
-        } else if let Some(item) = vendored_match {
-            (
-                InventoryClass::Vendored,
-                "manifest:inventory.vendored".into(),
-                format!("matched vendored glob {}", item.pattern),
-                None,
-                Some(VendoredFrom {
-                    source: item.source.clone(),
-                    version: item.version.clone(),
-                    treatment: item.treatment.clone(),
-                }),
-            )
-        } else if let Some(rule) = choose_explicit(relative, default.0, &explicit)? {
-            (
-                rule.rule.class,
-                format!("rule:{}", rule.rule.id),
-                format!("matched explicit class glob {}", rule.pattern),
-                None,
-                None,
-            )
-        } else {
-            (default.0, default.1, default.2, None, None)
-        };
+        let (class, by, reason, generated_by, vendored_from) =
+            if let Some(item) = generated_match.first() {
+                (
+                    InventoryClass::Generated,
+                    "manifest:inventory.generated".into(),
+                    format!("matched generated glob {}", item.pattern),
+                    Some(GeneratedBy {
+                        producer: item.producer.clone(),
+                        reproducible: item.reproducible,
+                        inputs: item.inputs.clone(),
+                    }),
+                    None,
+                )
+            } else if let Some(item) = vendored_match.first() {
+                (
+                    InventoryClass::Vendored,
+                    "manifest:inventory.vendored".into(),
+                    format!("matched vendored glob {}", item.pattern),
+                    None,
+                    Some(VendoredFrom {
+                        source: item.source.clone(),
+                        version: item.version.clone(),
+                        treatment: item.treatment.clone(),
+                    }),
+                )
+            } else if let Some(rule) = choose_explicit(relative, default.0, &explicit)? {
+                (
+                    rule.rule.class,
+                    format!("rule:{}", rule.rule.id),
+                    format!("matched explicit class glob {}", rule.pattern),
+                    None,
+                    None,
+                )
+            } else {
+                (default.0, default.1, default.2, None, None)
+            };
 
         let owners = matching_modules(relative, &modules);
         if owners.len() > 1 {
@@ -308,7 +312,7 @@ pub fn build(
         });
         units.sort_by(|left, right| left.root.cmp(&right.root));
     }
-    let generated_absent = add_absent_generated(&mut entries, &generated, &paths);
+    let generated_absent = add_absent_generated(&mut entries, &generated, &paths)?;
     entries.sort_by(|left, right| left.path.cmp(&right.path));
     let unit_aliases = alias_tables(root, &paths, &units)?;
     let summary = summarize(&entries, unit_aliases, generated_absent);
@@ -481,6 +485,7 @@ struct CompiledModule {
     matcher: GlobSet,
 }
 struct GeneratedPattern {
+    declaration: usize,
     matcher: GlobSet,
     pattern: String,
     producer: String,
@@ -488,6 +493,7 @@ struct GeneratedPattern {
     reproducible: bool,
 }
 struct VendoredPattern {
+    declaration: usize,
     matcher: GlobSet,
     pattern: String,
     source: String,
@@ -608,9 +614,10 @@ fn compile_rules(rules: &[ClassRule]) -> Result<Vec<CompiledRule>, InventoryErro
 
 fn compile_generated(manifest: &WarrantManifest) -> Result<Vec<GeneratedPattern>, InventoryError> {
     let mut patterns = Vec::new();
-    for declaration in &manifest.inventory.generated {
+    for (index, declaration) in manifest.inventory.generated.iter().enumerate() {
         for pattern in &declaration.files {
             patterns.push(GeneratedPattern {
+                declaration: index,
                 matcher: compile_glob(pattern)?,
                 pattern: pattern.clone(),
                 producer: declaration.producer.clone(),
@@ -624,9 +631,10 @@ fn compile_generated(manifest: &WarrantManifest) -> Result<Vec<GeneratedPattern>
 
 fn compile_vendored(manifest: &WarrantManifest) -> Result<Vec<VendoredPattern>, InventoryError> {
     let mut patterns = Vec::new();
-    for declaration in &manifest.inventory.vendored {
+    for (index, declaration) in manifest.inventory.vendored.iter().enumerate() {
         for pattern in &declaration.files {
             patterns.push(VendoredPattern {
+                declaration: index,
                 matcher: compile_glob(pattern)?,
                 pattern: pattern.clone(),
                 source: declaration.source.clone(),
@@ -695,15 +703,22 @@ fn choose_explicit<'a>(
 fn matching_generated<'a>(
     path: &str,
     patterns: &'a [GeneratedPattern],
-) -> Option<&'a GeneratedPattern> {
-    patterns.iter().find(|item| item.matcher.is_match(path))
+) -> Vec<&'a GeneratedPattern> {
+    let mut matches: Vec<_> = patterns
+        .iter()
+        .filter(|item| item.matcher.is_match(path))
+        .collect();
+    matches.dedup_by_key(|item| item.declaration);
+    matches
 }
 
-fn matching_vendored<'a>(
-    path: &str,
-    patterns: &'a [VendoredPattern],
-) -> Option<&'a VendoredPattern> {
-    patterns.iter().find(|item| item.matcher.is_match(path))
+fn matching_vendored<'a>(path: &str, patterns: &'a [VendoredPattern]) -> Vec<&'a VendoredPattern> {
+    let mut matches: Vec<_> = patterns
+        .iter()
+        .filter(|item| item.matcher.is_match(path))
+        .collect();
+    matches.dedup_by_key(|item| item.declaration);
+    matches
 }
 
 fn matching_modules(path: &str, modules: &[CompiledModule]) -> Vec<String> {
@@ -1277,7 +1292,7 @@ fn add_absent_generated(
     entries: &mut Vec<InventoryEntry>,
     patterns: &[GeneratedPattern],
     paths: &[String],
-) -> Vec<GeneratedAbsent> {
+) -> Result<Vec<GeneratedAbsent>, InventoryError> {
     let mut absent = Vec::new();
     for item in patterns {
         if paths.iter().any(|path| item.matcher.is_match(path)) {
@@ -1288,6 +1303,21 @@ fn add_absent_generated(
                 declaration: item.pattern.clone(),
                 producer: item.producer.clone(),
             });
+            continue;
+        }
+        let matches = matching_generated(&item.pattern, patterns);
+        if matches.len() > 1 {
+            let mut rules: Vec<_> = matches
+                .iter()
+                .map(|matched| format!("manifest:inventory.generated[{}]", matched.declaration))
+                .collect();
+            rules.sort();
+            return Err(InventoryError::ClassificationConflict {
+                path: item.pattern.clone(),
+                rules,
+            });
+        }
+        if entries.iter().any(|entry| entry.path == item.pattern) {
             continue;
         }
         entries.push(InventoryEntry {
@@ -1310,7 +1340,7 @@ fn add_absent_generated(
         });
     }
     absent.sort_by(|left, right| left.declaration.cmp(&right.declaration));
-    absent
+    Ok(absent)
 }
 
 fn summarize(

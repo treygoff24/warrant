@@ -372,6 +372,92 @@ fn conflicting_class_rules_are_order_independent_errors() {
 }
 
 #[test]
+fn overlapping_generated_declarations_are_order_independent_errors() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "generated/client.ts", "generated\n");
+    let first = "    - files: [\"generated/**\"]\n      producer: first\n";
+    let second = "    - files: [\"generated/client.ts\"]\n      producer: second\n";
+    for declarations in [format!("{first}{second}"), format!("{second}{first}")] {
+        let error = build(
+            root.path(),
+            &snapshot(root.path()),
+            &manifest(&format!("  generated:\n{declarations}")),
+            &BuildConfig::default(),
+        )
+        .expect_err("overlapping producers must fail");
+        assert!(
+            matches!(error, InventoryError::ClassificationConflict { path, rules }
+            if path == "generated/client.ts" && rules == ["manifest:inventory.generated[0]", "manifest:inventory.generated[1]"])
+        );
+    }
+}
+
+#[test]
+fn overlapping_vendored_declarations_are_order_independent_errors() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "vendor/client.ts", "vendored\n");
+    let first = "    - files: [\"vendor/**\"]\n      source: first\n      version: '1'\n";
+    let second = "    - files: [\"vendor/client.ts\"]\n      source: second\n      version: '2'\n";
+    for declarations in [format!("{first}{second}"), format!("{second}{first}")] {
+        let error = build(
+            root.path(),
+            &snapshot(root.path()),
+            &manifest(&format!("  vendored:\n{declarations}")),
+            &BuildConfig::default(),
+        )
+        .expect_err("overlapping vendors must fail");
+        assert!(
+            matches!(error, InventoryError::ClassificationConflict { path, rules }
+            if path == "vendor/client.ts" && rules == ["manifest:inventory.vendored[0]", "manifest:inventory.vendored[1]"])
+        );
+    }
+}
+
+#[test]
+fn duplicate_absent_generated_declarations_are_errors() {
+    let root = tempdir().expect("temporary repository");
+    for producers in [["first", "second"], ["second", "first"]] {
+        let declarations: String = producers
+            .iter()
+            .map(|producer| {
+                format!("    - files: [\"generated/missing.ts\"]\n      producer: {producer}\n")
+            })
+            .collect();
+        let error = build(
+            root.path(),
+            &[],
+            &manifest(&format!("  generated:\n{declarations}")),
+            &BuildConfig::default(),
+        )
+        .expect_err("an absent path cannot have conflicting producers");
+        assert!(
+            matches!(error, InventoryError::ClassificationConflict { path, rules }
+            if path == "generated/missing.ts" && rules == ["manifest:inventory.generated[0]", "manifest:inventory.generated[1]"])
+        );
+    }
+}
+
+#[test]
+fn overlapping_patterns_within_one_generated_declaration_are_not_conflicts() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "generated/client.ts", "generated\n");
+    let manifest = manifest(
+        "  generated:\n    - files: ['generated/**', 'generated/client.ts', 'absent.ts', 'absent.ts']\n      producer: generate\n",
+    );
+    let built = build(
+        root.path(),
+        &snapshot(root.path()),
+        &manifest,
+        &BuildConfig::default(),
+    )
+    .expect("one declaration owns both paths");
+    assert_eq!(built.document.entries.len(), 2);
+    assert_eq!(built.document.summary.files, 2);
+    assert_eq!(built.document.entries[0].path, "absent.ts");
+    assert_eq!(built.document.entries[1].path, "generated/client.ts");
+}
+
+#[test]
 fn explicit_override_must_name_the_default_it_replaces() {
     let root = tempdir().expect("temporary repository");
     write(root.path(), "src/value.ts", "export {};\n");

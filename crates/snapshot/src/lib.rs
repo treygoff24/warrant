@@ -1,7 +1,7 @@
 //! Exact Git snapshots. Consumers return data; callers publish only after capture succeeds.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 use warrant_core::{
@@ -63,6 +63,8 @@ pub struct Snapshot {
     manifest: SnapshotManifest,
     entries: Vec<InventoryEntry>,
     modes: BTreeMap<String, String>,
+    object_paths: BTreeSet<String>,
+    file_mode: bool,
 }
 impl Snapshot {
     pub fn manifest(&self) -> &SnapshotManifest {
@@ -89,16 +91,18 @@ impl Snapshot {
             .blob
             .as_deref()
             .ok_or_else(|| SnapshotError::new("ignored", path))?;
-        if self.manifest.kind == SnapshotKind::Worktree {
-            let (mode, bytes) = worktree::read(&self.repo, path)
-                .map_err(|_| SnapshotError::new("snapshot-changed", path))?;
-            let hash_kind = if self.manifest.object_format == "sha256" {
-                gix::hash::Kind::Sha256
-            } else {
-                gix::hash::Kind::Sha1
-            };
-            let actual = gix::objs::compute_hash(hash_kind, gix::objs::Kind::Blob, &bytes)
-                .map_err(|error| SnapshotError::new("snapshot-hash", error.to_string()))?;
+        if self.manifest.kind == SnapshotKind::Worktree && !self.object_paths.contains(path) {
+            let (mode, bytes) = worktree::read_bytes(
+                &self.repo,
+                path,
+                if self.file_mode {
+                    None
+                } else {
+                    self.mode(path)
+                },
+            )
+            .map_err(|_| SnapshotError::new("snapshot-changed", path))?;
+            let actual = worktree::hash(&self.repo, path, &mode, &bytes)?;
             if actual != oid || self.mode(path) != Some(mode.as_str()) {
                 return Err(SnapshotError::new("snapshot-changed", path));
             }
@@ -128,6 +132,13 @@ pub fn capture<T>(
                     if entry.blob.is_some() && entry.unread.is_none() {
                         snapshot.read(&entry.path)?;
                     }
+                }
+                let tree = worktree::tree(&snapshot.repo, snapshot.file_mode, config)?.id;
+                if snapshot.manifest.tree != format!("{}:{tree}", snapshot.manifest.object_format) {
+                    return Err(SnapshotError::new(
+                        "snapshot-changed",
+                        "worktree tree changed",
+                    ));
                 }
             }
             Ok((snapshot.manifest, result))
@@ -167,11 +178,6 @@ fn capture_once(
             "full history is required to identify the repository root",
         ));
     }
-    let roots = git::text(repo, &["rev-list", "--max-parents=0", "--all"], None)?;
-    let root = roots
-        .lines()
-        .min()
-        .ok_or_else(|| SnapshotError::new("missing-history", "repository has no root commit"))?;
     let mut commit = None;
     let (tree, capture_kind) = match kind {
         SnapshotKind::Commit => {
@@ -226,10 +232,19 @@ fn capture_once(
         }
         SnapshotKind::Worktree => return worktree::capture(repo, config),
     };
+    let subject = commit.as_deref().unwrap_or("HEAD");
+    let roots = git::text(repo, &["rev-list", "--max-parents=0", subject], None)
+        .map_err(|_| SnapshotError::new("missing-history", "cannot resolve repository roots"))?;
+    let root = roots
+        .lines()
+        .min()
+        .ok_or_else(|| SnapshotError::new("missing-history", "repository has no root commit"))?;
     let mut snapshot = Snapshot {
         repo: repo.to_owned(),
         entries: Vec::new(),
         modes: BTreeMap::new(),
+        object_paths: BTreeSet::new(),
+        file_mode: true,
         manifest: SnapshotManifest {
             schema_version: "warrant.snapshot/1".into(),
             repo: format!("{format}:{root}"),

@@ -1,6 +1,6 @@
 use crate::SnapshotError;
 use std::{
-    io::Write,
+    io::{self, Read},
     path::Path,
     process::{Command, Stdio},
 };
@@ -9,7 +9,21 @@ pub(crate) fn run(
     repo: &Path,
     args: &[&str],
     index: Option<&Path>,
-    input: Option<&[u8]>,
+    mut input: Option<&[u8]>,
+) -> Result<Vec<u8>, SnapshotError> {
+    run_stream(
+        repo,
+        args,
+        index,
+        input.as_mut().map(|bytes| bytes as &mut dyn Read),
+    )
+}
+
+pub(crate) fn run_stream(
+    repo: &Path,
+    args: &[&str],
+    index: Option<&Path>,
+    input: Option<&mut dyn Read>,
 ) -> Result<Vec<u8>, SnapshotError> {
     let mut command = Command::new("git");
     command
@@ -41,11 +55,11 @@ pub(crate) fn run(
     }
     let mut child = command.spawn()?;
     let written = if let Some(input) = input {
-        child
+        let mut stdin = child
             .stdin
             .take()
-            .ok_or_else(|| SnapshotError::new("snapshot-io", "missing Git stdin"))?
-            .write_all(input)
+            .ok_or_else(|| SnapshotError::new("snapshot-io", "missing Git stdin"))?;
+        io::copy(input, &mut stdin).map(|_| ())
     } else {
         Ok(())
     };

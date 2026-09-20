@@ -337,7 +337,6 @@ fn sha256_repositories_and_multiple_roots_have_stable_identity() {
     fs::write(dir.path().join("file"), "same bytes").unwrap();
     git(dir.path(), &["add", "file"]);
     git(dir.path(), &["commit", "-qm", "first root"]);
-    let first = git(dir.path(), &["rev-parse", "HEAD"]);
     git(dir.path(), &["checkout", "--orphan", "second"]);
     git(dir.path(), &["commit", "-qm", "second root"]);
     let second = git(dir.path(), &["rev-parse", "HEAD"]);
@@ -353,10 +352,7 @@ fn sha256_repositories_and_multiple_roots_have_stable_identity() {
         .unwrap();
         assert_eq!(manifest.object_format, "sha256");
         assert_eq!(manifest.tree, format!("sha256:{tree}"));
-        assert_eq!(
-            manifest.repo,
-            format!("sha256:{}", std::cmp::min(&first, &second))
-        );
+        assert_eq!(manifest.repo, format!("sha256:{second}"));
         assert_eq!(bytes, b"same bytes");
     }
 }
@@ -493,6 +489,18 @@ fn ignore_configuration_digest_changes_even_when_tree_and_exclusions_do_not() {
         |_| Ok(()),
     )
     .unwrap();
+    let (unchanged, ()) = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(
+        first.capture.manifest_digest,
+        unchanged.capture.manifest_digest
+    );
     fs::write(ignores.path(), "# second\n").unwrap();
     let (second, ()) = capture(
         dir.path(),
@@ -568,4 +576,227 @@ fn deleted_files_and_file_to_directory_replacements_match_git_tree() {
         manifest.tree,
         format!("sha1:{}", git(dir.path(), &["write-tree"]))
     );
+}
+
+#[test]
+fn sparse_checkout_entries_carry_index_ids() {
+    let dir = repo();
+    for name in ["kept", "dropped"] {
+        fs::create_dir(dir.path().join(name)).unwrap();
+        fs::write(dir.path().join(name).join("code.rs"), name).unwrap();
+    }
+    git(dir.path(), &["add", "-A"]);
+    git(dir.path(), &["commit", "-qm", "directories"]);
+    git(dir.path(), &["sparse-checkout", "init", "--cone"]);
+    git(dir.path(), &["sparse-checkout", "set", "kept"]);
+    assert!(!dir.path().join("dropped/code.rs").exists());
+    let tree = git(dir.path(), &["write-tree"]);
+    let (manifest, entries) = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |s| Ok(s.entries().to_vec()),
+    )
+    .unwrap();
+    assert_eq!(manifest.tree, format!("sha1:{tree}"));
+    assert!(entries.iter().any(|entry| entry.path == "dropped/code.rs"));
+}
+
+#[test]
+fn clean_filter_files_hash_like_git_add() {
+    let dir = repo();
+    fs::write(dir.path().join(".gitattributes"), "* text=auto\n").unwrap();
+    fs::write(dir.path().join("crlf"), b"first\r\nsecond\r\n").unwrap();
+    git(dir.path(), &["add", "-A"]);
+    let tree = git(dir.path(), &["write-tree"]);
+    let (manifest, ()) = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |s| {
+            assert_eq!(s.manifest().tree, format!("sha1:{tree}"));
+            assert_eq!(s.read("crlf")?, b"first\r\nsecond\r\n");
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(manifest.tree, format!("sha1:{tree}"));
+}
+
+#[cfg(unix)]
+#[test]
+fn core_filemode_false_matches_git_modes() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = repo();
+    git(dir.path(), &["config", "core.fileMode", "false"]);
+    fs::write(dir.path().join("script"), "#!/bin/sh\n").unwrap();
+    fs::set_permissions(dir.path().join("script"), fs::Permissions::from_mode(0o755)).unwrap();
+    let (manifest, ()) = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |_| Ok(()),
+    )
+    .unwrap();
+    git(dir.path(), &["add", "-A"]);
+    assert_eq!(
+        manifest.tree,
+        format!("sha1:{}", git(dir.path(), &["write-tree"]))
+    );
+    capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |s| {
+            assert_eq!(s.mode("script"), Some("100644"));
+            assert_eq!(s.read("script")?, b"#!/bin/sh\n");
+            Ok(())
+        },
+    )
+    .unwrap();
+}
+
+mod stable_identity {
+    use super::*;
+
+    #[test]
+    fn identity_is_stable_across_single_branch_clones() {
+        let dir = repo();
+        git(dir.path(), &["branch", "-M", "main"]);
+        let first = git(dir.path(), &["rev-parse", "HEAD"]);
+        git(dir.path(), &["checkout", "--orphan", "docs"]);
+        git(dir.path(), &["commit", "-qm", "docs root"]);
+        let second = git(dir.path(), &["rev-parse", "HEAD"]);
+        assert_ne!(first, second);
+        // Make the unrelated root sort first so --all deterministically fails.
+        git(
+            dir.path(),
+            &[
+                "update-ref",
+                "refs/heads/main",
+                std::cmp::max(&first, &second),
+            ],
+        );
+        git(
+            dir.path(),
+            &[
+                "update-ref",
+                "refs/heads/docs",
+                std::cmp::min(&first, &second),
+            ],
+        );
+        git(dir.path(), &["checkout", "main"]);
+        let cloned = tempfile::tempdir().unwrap();
+        git(
+            cloned.path(),
+            &[
+                "clone",
+                "--single-branch",
+                "--branch",
+                "main",
+                dir.path().to_str().unwrap(),
+                ".",
+            ],
+        );
+        let original = capture(
+            dir.path(),
+            SnapshotKind::Commit,
+            Some("HEAD"),
+            &SnapshotConfig::default(),
+            |_| Ok(()),
+        )
+        .unwrap()
+        .0;
+        let clone = capture(
+            cloned.path(),
+            SnapshotKind::Commit,
+            Some("HEAD"),
+            &SnapshotConfig::default(),
+            |_| Ok(()),
+        )
+        .unwrap()
+        .0;
+        assert_eq!(original.repo, clone.repo);
+        let docs = capture(
+            dir.path(),
+            SnapshotKind::Commit,
+            Some("docs"),
+            &SnapshotConfig::default(),
+            |_| Ok(()),
+        )
+        .unwrap()
+        .0;
+        assert_eq!(
+            docs.repo,
+            format!("sha1:{}", std::cmp::min(&first, &second))
+        );
+    }
+}
+
+#[test]
+fn created_mid_capture_file_invalidates_the_attempt() {
+    let dir = repo();
+    let mut attempts = 0;
+    let (manifest, entries) = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |s| {
+            attempts += 1;
+            if attempts == 1 {
+                fs::write(dir.path().join("created"), "new file\n").unwrap();
+            }
+            Ok(s.entries().to_vec())
+        },
+    )
+    .unwrap();
+    assert_eq!(attempts, 2);
+    assert!(entries.iter().any(|entry| entry.path == "created"));
+    git(dir.path(), &["add", "-A"]);
+    assert_eq!(
+        manifest.tree,
+        format!("sha1:{}", git(dir.path(), &["write-tree"]))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn exclusions_include_untracked_oversize_and_external_symlinks() {
+    use std::os::unix::fs::symlink;
+    let dir = repo();
+    fs::write(dir.path().join("big-untracked"), "x".repeat(100)).unwrap();
+    symlink("../outside", dir.path().join("external-untracked")).unwrap();
+    let (manifest, entries) = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig { max_file_bytes: 32 },
+        |s| Ok(s.entries().to_vec()),
+    )
+    .unwrap();
+    git(dir.path(), &["add", "-A"]);
+    assert_eq!(
+        manifest.tree,
+        format!("sha1:{}", git(dir.path(), &["write-tree"]))
+    );
+    assert_eq!(manifest.excluded.oversize, 1);
+    for (path, reason) in [
+        ("big-untracked", "oversize"),
+        ("external-untracked", "external-symlink"),
+    ] {
+        assert_eq!(
+            entries
+                .iter()
+                .find(|e| e.path == path)
+                .unwrap()
+                .unread
+                .as_deref(),
+            Some(reason)
+        );
+    }
 }

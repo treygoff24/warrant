@@ -171,11 +171,6 @@ fn capture_once(
             "full history is required to identify the repository root",
         ));
     }
-    let roots = git::text(repo, &["rev-list", "--max-parents=0", "--all"], None)?;
-    let root = roots
-        .lines()
-        .min()
-        .ok_or_else(|| SnapshotError::new("missing-history", "repository has no root commit"))?;
     let mut commit = None;
     let (tree, capture_kind) = match kind {
         SnapshotKind::Commit => {
@@ -230,6 +225,13 @@ fn capture_once(
         }
         SnapshotKind::Worktree => return worktree::capture(repo, config),
     };
+    let subject = commit.as_deref().unwrap_or("HEAD");
+    let roots = git::text(repo, &["rev-list", "--max-parents=0", subject], None)
+        .map_err(|_| SnapshotError::new("missing-history", "cannot resolve repository roots"))?;
+    let root = roots
+        .lines()
+        .min()
+        .ok_or_else(|| SnapshotError::new("missing-history", "repository has no root commit"))?;
     let mut snapshot = Snapshot {
         repo: repo.to_owned(),
         entries: Vec::new(),

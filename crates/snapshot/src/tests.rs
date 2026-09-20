@@ -337,7 +337,6 @@ fn sha256_repositories_and_multiple_roots_have_stable_identity() {
     fs::write(dir.path().join("file"), "same bytes").unwrap();
     git(dir.path(), &["add", "file"]);
     git(dir.path(), &["commit", "-qm", "first root"]);
-    let first = git(dir.path(), &["rev-parse", "HEAD"]);
     git(dir.path(), &["checkout", "--orphan", "second"]);
     git(dir.path(), &["commit", "-qm", "second root"]);
     let second = git(dir.path(), &["rev-parse", "HEAD"]);
@@ -353,10 +352,7 @@ fn sha256_repositories_and_multiple_roots_have_stable_identity() {
         .unwrap();
         assert_eq!(manifest.object_format, "sha256");
         assert_eq!(manifest.tree, format!("sha256:{tree}"));
-        assert_eq!(
-            manifest.repo,
-            format!("sha256:{}", std::cmp::min(&first, &second))
-        );
+        assert_eq!(manifest.repo, format!("sha256:{second}"));
         assert_eq!(bytes, b"same bytes");
     }
 }
@@ -650,4 +646,81 @@ fn core_filemode_false_matches_git_modes() {
         },
     )
     .unwrap();
+}
+
+mod stable_identity {
+    use super::*;
+
+    #[test]
+    fn identity_is_stable_across_single_branch_clones() {
+        let dir = repo();
+        git(dir.path(), &["branch", "-M", "main"]);
+        let first = git(dir.path(), &["rev-parse", "HEAD"]);
+        git(dir.path(), &["checkout", "--orphan", "docs"]);
+        git(dir.path(), &["commit", "-qm", "docs root"]);
+        let second = git(dir.path(), &["rev-parse", "HEAD"]);
+        assert_ne!(first, second);
+        // Make the unrelated root sort first so --all deterministically fails.
+        git(
+            dir.path(),
+            &[
+                "update-ref",
+                "refs/heads/main",
+                std::cmp::max(&first, &second),
+            ],
+        );
+        git(
+            dir.path(),
+            &[
+                "update-ref",
+                "refs/heads/docs",
+                std::cmp::min(&first, &second),
+            ],
+        );
+        git(dir.path(), &["checkout", "main"]);
+        let cloned = tempfile::tempdir().unwrap();
+        git(
+            cloned.path(),
+            &[
+                "clone",
+                "--single-branch",
+                "--branch",
+                "main",
+                dir.path().to_str().unwrap(),
+                ".",
+            ],
+        );
+        let original = capture(
+            dir.path(),
+            SnapshotKind::Commit,
+            Some("HEAD"),
+            &SnapshotConfig::default(),
+            |_| Ok(()),
+        )
+        .unwrap()
+        .0;
+        let clone = capture(
+            cloned.path(),
+            SnapshotKind::Commit,
+            Some("HEAD"),
+            &SnapshotConfig::default(),
+            |_| Ok(()),
+        )
+        .unwrap()
+        .0;
+        assert_eq!(original.repo, clone.repo);
+        let docs = capture(
+            dir.path(),
+            SnapshotKind::Commit,
+            Some("docs"),
+            &SnapshotConfig::default(),
+            |_| Ok(()),
+        )
+        .unwrap()
+        .0;
+        assert_eq!(
+            docs.repo,
+            format!("sha1:{}", std::cmp::min(&first, &second))
+        );
+    }
 }

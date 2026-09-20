@@ -5,11 +5,39 @@ set -Eeuo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 failed=0
 source_list="$(mktemp "${TMPDIR:-/var/tmp}/warrant-budget.XXXXXX")"
-trap 'rm -f -- "$source_list"' EXIT
+member_list=""
+trap 'rm -f -- "$source_list" ${member_list:+"$member_list"}' EXIT
+member_list="$(mktemp "${TMPDIR:-/var/tmp}/warrant-budget-members.XXXXXX")"
+
+if ! cargo metadata --format-version=1 --no-deps --manifest-path "$repo_root/Cargo.toml" >"$source_list"; then
+  printf '%s\n' "budget: cargo metadata failed or is unavailable" >&2
+  exit 1
+fi
+if ! python - "$source_list" >"$member_list" <<'PY'
+import json
+import os
+import sys
+
+with open(sys.argv[1]) as source:
+    metadata = json.load(source)
+members = metadata["workspace_members"]
+if not isinstance(members, list) or not members:
+    raise ValueError("expected nonempty workspace_members")
+packages = {package["id"]: package for package in metadata["packages"]}
+for member in members:
+    manifest = packages[member]["manifest_path"]
+    if (not isinstance(manifest, str) or not os.path.isabs(manifest)
+            or os.path.basename(manifest) != "Cargo.toml" or "\0" in manifest):
+        raise ValueError("invalid workspace member manifest_path")
+    sys.stdout.buffer.write(os.fsencode(os.path.dirname(manifest)) + b"\0")
+PY
+then
+  printf '%s\n' "budget: cannot parse cargo metadata workspace members" >&2
+  exit 1
+fi
 
 export LC_ALL=C
-for crate_dir in "$repo_root"/crates/*; do
-  [ -d "$crate_dir" ] && [ -f "$crate_dir/Cargo.toml" ] || continue
+while IFS= read -r -d '' crate_dir; do
   crate="$(basename -- "$crate_dir")"
   case "$crate" in
     core) limit=8000 ;;
@@ -51,6 +79,6 @@ for crate_dir in "$repo_root"/crates/*; do
   if [ "$lines" -gt "$limit" ]; then
     failed=1
   fi
-done
+done <"$member_list"
 
 exit "$failed"

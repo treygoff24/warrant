@@ -6,7 +6,7 @@ Warrant gives coding agents architectural context before they change code: where
 
 ## Status
 
-Specification version 0.3 was ratified by Trey on 2026-09-17 after Astra and Fable reached consensus. There is no implementation plan or code yet. Planning is next; building requires separate approval. The repository retains the vision, earlier spec revisions, and supporting research.
+Specification version 0.3 was ratified by Trey on 2026-09-17 after Astra and Fable reached consensus. The approved implementation plan is now in progress. The repository has its initial Cargo workspace, project gate, CI scaffold, and acceptance harness; product behavior is not implemented yet.
 
 Read in this order:
 

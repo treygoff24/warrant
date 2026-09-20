@@ -1,0 +1,9 @@
+[package]
+name = "warrant-evidence"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.90"
+license.workspace = true
+
+[dependencies]
+warrant-core = { version = "0.1.0", path = "../core" }

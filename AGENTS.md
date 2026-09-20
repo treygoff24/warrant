@@ -23,6 +23,24 @@ Research under `docs/research/` and `docs/design/` is the reasoning trail; spec 
 - Commit messages. `type(scope): summary`, subject at most 72 characters, a soft-wrapped body that states what was verified. Multi-line bodies go through `git commit -F <file>`.
 - Trey dictates. Read for intent; never nitpick a dictation glitch.
 
-## Conventions the build will follow (spec section 18)
+## Build conventions (spec section 18)
 
-A Cargo workspace under `crates/`; `core` depends on nothing inside the workspace and `cli` depends on everything; Rust edition 2024. Functions over traits until there are two implementations; every emitted document is a `serde` type with a `schemars` derive; comments say why. The workspace, the gate script, and CI do not exist yet. M0 writes them, and this section is replaced when it does.
+The root Cargo workspace uses Rust edition 2024 and contains twelve crates:
+`core`, `snapshot`, `inventory`, `model`, `lang-ts`, `lang-rust`, `evidence`,
+`authority`, `judgment`, `census`, `render`, and `cli`. Their packages use the
+`warrant-` prefix; `warrant-cli` builds the `warrant` binary.
+
+`core` has no workspace dependencies. `snapshot`, `inventory`, `model`,
+`evidence`, `authority`, `judgment`, `census`, and `render` depend only on
+`core`. The language crates depend only on `core` and `model`. `cli` depends on
+every other crate, and nothing depends on `cli`. `scripts/deps.sh` enforces this
+direction until Warrant's Rust integration takes over.
+
+Run `scripts/gate.sh` before integration. Its required-stage inventory is
+`scripts/stages/REQUIRED`; adding a stage and requiring it happen in the same
+change. Source-line alarms live in `scripts/budget.sh`. CI runs the same gate on
+stable Rust and the pinned MSRV. Acceptance demos live in
+`tests/acceptance.d/` and print `ACCEPT` or `REFUSE` as documented there.
+
+Use functions over traits until there are two implementations. Every emitted
+document is a `serde` type with a `schemars` derive. Comments explain why.

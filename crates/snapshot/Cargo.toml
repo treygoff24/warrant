@@ -5,6 +5,11 @@ edition.workspace = true
 rust-version = "1.90"
 license.workspace = true
 
+[features]
+# S3 native capture stays off by default: parity is unmeasured over the
+# corpus, so the temporary-index Git path remains authoritative (ruling F33).
+native-capture = []
+
 [dependencies]
 gix.workspace = true
 globset.workspace = true

@@ -2,7 +2,17 @@
 
 State, not orders. The first block is what is true right now, with pointers to the rulings that made it so. Update at every session closeout; earlier blocks are dated history.
 
-## Current: pre-launch complete, plan-of-attack posted, two rulings open with Fable
+## Current: M0 to M2 launched as wf_7816dc6fd0b9
+
+The run is `wf_7816dc6fd0b9`, launched from the integration worktree `.worktrees/plan-warrant-v1-m0-m2` on branch `plan/warrant-v1-m0-m2` against the bundle published for this plan under the delegate state root. It carries `park_channel` `warrant-build` and no `auto_approve`, so all nine checkpoints stay gated: W0.G, W1.D10, W1.G, W2.R and W2.R2 are Fable's, and W1.C1, W1.C2, W2.C1 and W2.G are Trey's, carried to him by Fable. The orchestrator is Plumb, Post participant in room `plumb-devbox`. Nothing may be approved on the orchestrator's authority.
+
+Two coordinator rulings landed before launch and are recorded on epic bead `warrant-29b`. F1 redacts the final-close audit receipt: the compiler bakes an absolute plan path into the close's `delegate-audit` row and the close commits that output into a public repository, so `bin/delegate-audit` rewrites the repository root to `.` and any home directory to `~`, every occurrence, then scans the result and refuses rather than printing a residual hit. The committed receipt is therefore not byte-identical to the tool's stdout, and the M2 review record says so. F2 corrected a real defect in the orchestrator's proposed marker contract: a bare `schema: stub-documents 0` cannot answer the plan's condition, which is zero stubs among the documents in scope at that milestone, and since W0.2 pre-declares all twenty-three documents while M0 delivers five, a correct M0 build has eighteen stubs and `--final M0` would have failed on a correct build. The schema stage now prints one line per document and `--final` carries a per-milestone in-scope list with each document's owning task beside it. The ownership correction matters more than the spelling: `scripts/stages/40-schema.sh` is W0.2's and `scripts/stages/45-corpus.sh` is W0.6's, both M0 tasks, so the contract had to reach their briefs before launch rather than at M2 as first posted.
+
+The amendment was made as one transaction at `55f120b`: plan edited, all three lints clean, wave map byte-identical to the previous commit, workflow re-rendered and passing `delegate workflow check`, and the contract confirmed present in all thirty-eight lane briefs. Every new assertion was red-proofed against a fixture rather than trusted: an in-scope document reported `stub` fails and names its owning task, an absent marker fails the same way, widening M0 to M1 to M2 raises the checked set from five to thirteen to twenty-three, a corpus member reporting it did not run fails, and an absent corpus marker fails. The redaction shim was red-proofed against a fake audit binary, including a third-party home path, an unredactable internal host exiting 3 with empty stdout, and the real tool's exit code surviving.
+
+One standing hazard for whoever holds this seat: a coordinator commit on `main` makes `main` stop being an ancestor of the spine, which fails the final close's fast-forward step. The spine was re-aligned after each of the two coordinator commits so far, and must be re-aligned after every later one before the W2.G close.
+
+## Earlier: pre-launch complete, plan-of-attack posted, two rulings open with Fable
 
 The orchestrator for this build is Plumb, an Opus 5 `high` session on Trey's personal subscription, Post participant `claude-a315b6e6` in room `plumb-devbox`, lineage `plumb`. Fable is coordinator of record in `#warrant-build`. The escalation contract is `2026-09-19-warrant-v1-orchestration.md`.
 

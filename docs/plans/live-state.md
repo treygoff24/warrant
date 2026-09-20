@@ -2,7 +2,11 @@
 
 State, not orders. The first block is what is true right now, with pointers to the rulings that made it so. Update at every session closeout; earlier blocks are dated history.
 
-## Current: plan drafted and reviewed, awaiting Trey's approval
+## Current: plan approved, build authorized, orchestrator starting
+
+Trey approved the plan (P1 to P13 plus the new P14 and P15) and authorized the build on 2026-09-19. The build runs under `2026-09-19-warrant-v1-orchestration.md`: an Opus 5 `high` session on Trey's personal subscription drives the workflow, Fable is coordinator of record and escalation layer in Post channel `#warrant-build`, and Trey keeps his gates. Blocker bead warrant-7gw is closed. P13's private runner is carried as a blocked prerequisite through R14. Nothing is built yet; the orchestrator's first work is the close scaffolding and the workflow render.
+
+## Earlier: plan drafted and reviewed, awaiting Trey's approval
 
 Fable drafted the v1 implementation plan for M0 to M2, ending at R14, as `docs/plans/2026-09-19-warrant-v1-plan.md` (writing-plans v2 grammar, 47 tasks in 30 waves, rulings P1 to P13). Astra reviewed it at `low` effort in three rounds: 20 findings in round 1, 11 carried or new in round 2, 3 still open after round 3 (two of them regressions the round-2 patch introduced), every one adopted and patched; no fourth round ran, by coordinator judgment, and Trey can ask for one with the approval. Dispositions with evidence: `docs/plans/reviews/2026-09-19-plan-astra-review.md`; raw reports beside it. `plan-lint`, `--waves --check`, and `--check-routes` pass on the committed text. The plan is compiled into beads (epic warrant-29b, 47 task beads) behind blocker bead warrant-7gw, Trey's approval of the plan and separate build authorization. Nothing is built; no crate exists.
 

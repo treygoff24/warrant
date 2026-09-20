@@ -2,7 +2,15 @@
 
 State, not orders. The first block is what is true right now, with pointers to the rulings that made it so. Update at every session closeout; earlier blocks are dated history.
 
-## Current: spec ratified, planning next
+## Current: plan drafted and reviewed, awaiting Trey's approval
+
+Fable drafted the v1 implementation plan for M0 to M2, ending at R14, as `docs/plans/2026-09-19-warrant-v1-plan.md` (writing-plans v2 grammar, 47 tasks in 30 waves, rulings P1 to P13). Astra reviewed it at `low` effort in three rounds: 20 findings in round 1, 11 carried or new in round 2, 3 still open after round 3 (two of them regressions the round-2 patch introduced), every one adopted and patched; no fourth round ran, by coordinator judgment, and Trey can ask for one with the approval. Dispositions with evidence: `docs/plans/reviews/2026-09-19-plan-astra-review.md`; raw reports beside it. `plan-lint`, `--waves --check`, and `--check-routes` pass on the committed text. The plan is compiled into beads (epic warrant-29b, 47 task beads) behind blocker bead warrant-7gw, Trey's approval of the plan and separate build authorization. Nothing is built; no crate exists.
+
+The executor experiment Trey asked for (2026-09-19) is encoded in the routing block: executors and fixers are Astra at `low` with Sol at `xhigh` as the retry, and the predeclared metric is review-and-fix loop rounds per task against the standard Value-tier baseline, recorded per task in the review records. P13's open half is Trey's: authorize a private CI runner (Forgejo Actions on the estate or a self-hosted runner holding the corpus) so the Atlas budget job runs in CI as spec 17.6 requires, or leave it a named blocked prerequisite through R14.
+
+A visual explainer of the plan, lanes, and wave graph is generated from the plan by a scratch script into `docs/explainers/warrant-v1-plan/index.html` and served to Trey through `show`; the served URL is not recorded here. Trey's next words decide everything: approve or amend P1 to P13, rule on the runner, then authorize the build. No GitHub push has occurred; the mirror stays behind.
+
+## Earlier: spec ratified, planning next
 
 Trey ratified version 0.3 on 2026-09-17 at 21:37 CDT: "spec approved." Spec R17 records his approval of the exact design at `7b30330`, already agreed by Astra and Fable, including the defaults, deferrals, and evidence conditions in section 20.2. Ratification warrant-wmz is closed. Writing-plans warrant-fyd is unblocked but unstarted. Trey asked to save that next leg for 2026-09-18; no implementation plan or build is authorized by this closeout.
 

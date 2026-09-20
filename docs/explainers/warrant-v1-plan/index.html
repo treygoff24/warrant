@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Warrant plan explainer</title>
+<meta name="description" content="What the Warrant v1 build plan does, which models run each lane, and where Trey decides.">
+<style>
+:root {
+  --bg: #f7f6f2; --panel: #ffffff; --ink: #1c1b18; --muted: #6b6860; --line: #e2dfd6;
+  --build: #2f6fdb; --spike: #d98a12; --trey: #d63b5a; --fable: #7b4fd6;
+  --edge: #b9b4a8; --band: #efece4; --accent: #1f5fc4;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #15151a; --panel: #1e1e25; --ink: #ecebe6; --muted: #a5a29a; --line: #2f2f38;
+  --build: #6f9ff2; --spike: #f0a73a; --trey: #f26a86; --fable: #a98af0; --edge: #4a4a56; --band: #1a1a21; --accent: #8ab4ff;
+} }
+:root[data-theme="dark"] {
+  --bg: #15151a; --panel: #1e1e25; --ink: #ecebe6; --muted: #a5a29a; --line: #2f2f38;
+  --build: #6f9ff2; --spike: #f0a73a; --trey: #f26a86; --fable: #a98af0; --edge: #4a4a56; --band: #1a1a21; --accent: #8ab4ff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 32px 16px 80px; }
+h1 { font-size: 2rem; margin: 0 0 8px; letter-spacing: -0.01em; }
+h2 { font-size: 1.35rem; margin: 48px 0 12px; }
+p.lede { font-size: 1.15rem; color: var(--muted); margin: 0 0 24px; max-width: 800px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+.card h3 { margin: 0 0 6px; font-size: 1.05rem; }
+.card p { margin: 0; color: var(--muted); font-size: 0.95rem; }
+.card .n { font-size: 1.6rem; font-weight: 700; margin-bottom: 2px; }
+table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; font-size: 0.93rem; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; }
+tr:last-child td { border-bottom: 0; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
+.muted { color: var(--muted); }
+.pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 0.8rem; font-weight: 600; color: #fff; white-space: nowrap; }
+.pill.build { background: var(--build); } .pill.spike { background: var(--spike); } .pill.trey { background: var(--trey); } .pill.fable { background: var(--fable); }
+.flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; }
+.step { flex: 1 1 150px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; position: relative; }
+.step b { display: block; margin-bottom: 4px; }
+.step small { color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0 16px; font-size: 0.9rem; color: var(--muted); }
+.legend span::before { content: ""; display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; background: var(--c); }
+.graphwrap { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px; overflow-x: auto; }
+svg .band { fill: var(--band); stroke: var(--line); }
+svg .bandlabel { font-size: 15px; font-weight: 700; fill: var(--muted); }
+svg .wave { font-size: 12px; fill: var(--muted); }
+svg .edge { fill: none; stroke: var(--edge); stroke-width: 1.5; opacity: 0.55; }
+svg .node rect { fill: var(--panel); stroke-width: 2.2; }
+svg .node.build rect { stroke: var(--build); } svg .node.spike rect { stroke: var(--spike); }
+svg .node.trey rect { stroke: var(--trey); fill: color-mix(in srgb, var(--trey) 12%, var(--panel)); }
+svg .node.fable rect { stroke: var(--fable); fill: color-mix(in srgb, var(--fable) 12%, var(--panel)); }
+svg .node.critical rect { stroke-dasharray: 6 3; stroke-width: 2.6; }
+svg .nid { font-size: 12px; font-weight: 700; fill: var(--ink); font-family: ui-monospace, monospace; }
+svg .ntitle { font-size: 12px; fill: var(--ink); }
+.gates li { margin-bottom: 8px; }
+.rulings td:first-child { white-space: nowrap; font-weight: 600; }
+footer { margin-top: 56px; color: var(--muted); font-size: 0.88rem; }
+@media (max-width: 640px) { h1 { font-size: 1.5rem; } th, td { padding: 8px; } .hide-sm { display: none; } }
+</style>
+</head>
+<body>
+<main>
+<h1>Warrant v1 build plan, M0 to M2</h1>
+<p class="lede">From an empty repo to a working advisory checker on Atlas, then a measurement of whether the map actually changes how agents work. The plan stops at R14, the spec's stop-and-rethink checkpoint, where you decide whether the protected gate (M3 to M5) gets built. Reviewed by Astra in three rounds (20 findings in round 1, 11 carried or new in round 2, 3 left open in round 3, all adopted and patched); the review record has every disposition.</p>
+
+<div class="cards">
+  <div class="card"><div class="n">31</div><h3>Build tasks</h3><p>Each one a crate, a command surface, or a fixture area with its own close condition.</p></div>
+  <div class="card"><div class="n">7</div><h3>Spikes</h3><p>S1, S3, S6, S7, the dogfood, and the early comparison. Each ends in "met" or "not met", never a vibe.</p></div>
+  <div class="card"><div class="n">5</div><h3>Your decisions</h3><p>D10, the Atlas declarations, the S7 sample, the comparison rubric, and R14 itself.</p></div>
+  <div class="card"><div class="n">6</div><h3>Critical-tier tasks</h3><p>Obligations, authority, widening classifier, verdict, receipt verifier, gate hardening. Attacker seat replaces conventions.</p></div>
+</div>
+
+<h2>The three milestones</h2>
+<div class="cards">
+  <div class="card"><h3>M0 · exact inputs and a testable foundation</h3><p>Workspace, gate with CI on stable and MSRV, core nouns and schemas, snapshot (what exactly are we looking at), inventory (every file classified or listed as unowned), the CLI shell, the conformance and corpus stages, the six-repository corpus pin. Closes with a Fable-run critical review of the whole diff.</p></div>
+  <div class="card"><h3>M1 · a useful map before decisions</h3><p>Program model, TypeScript and Cargo integrations, policy language, declared facts in the model, query, census, context, propose, map, the Claude Code hook. Three spikes measure what we only believe today: compiler references (S1, then your D10 decision applied), parity with tsc (S6), retrieval usefulness (S7, which must pass for M1 to close). Two of your approvals sit in the path by design.</p></div>
+  <div class="card"><h3>M2 · honest advisory checks, then R14</h3><p>Obligations, patterns, evidence binding with real report predicates, signals, the four-facet verdict with its receipt, signing you confirm before ssh-keygen runs, the widening classifier, the receipt verifier, mutation testing, adversarial fixtures. Then the Atlas dogfood, a Fable code review of the whole M2 diff, an S7 rerun on that exact build, your approval of the frozen reference policy, and the early comparison: benefit, mixed, or no benefit.</p></div>
+</div>
+
+<h2>Who does what</h2>
+<p class="muted">This is the experiment you asked for: subscription-backed apex implementers instead of value-tier executors, to see whether first attempts arrive with fewer major findings and shorter fix loops. Reviewers are deliberately from other families so OpenAI never grades its own work.</p>
+<table>
+<tr><th>Role</th><th>Primary route</th><th>Behind it</th><th>What the role does</th></tr>
+<tr><td><b>Executor</b></td><td>Astra, effort <code>low</code> (Codex)</td><td>Sol, <code>xhigh</code></td><td>Builds every task and runs every spike. Briefed with the objective, never the mechanism. The retry stays in the OpenAI family so no fallback can put the executor's family in a review seat.</td></tr>
+<tr><td><b>Fixer</b></td><td>Astra <code>low</code></td><td>Sol <code>high</code></td><td>Applies adopted review findings in the lane that already holds the context.</td></tr>
+<tr><td><b>Reviewer seats</b></td><td>Opus 5 <code>xhigh</code> · Cursor Grok 4.6 · GLM 5.3</td><td>round-robin over the pool</td><td>Three seats, three families on every build task: refuter, conventions, test-skeptic. Prose tasks get one spec-fidelity seat.</td></tr>
+<tr><td><b>Attacker</b></td><td>Grok Build 4.6</td><td>Cursor Grok 4.6</td><td>Takes the conventions seat on critical tasks: tries to make missing authority or evidence look like acceptance.</td></tr>
+<tr><td><b>Adjudicator</b></td><td>Opus 5 <code>xhigh</code></td><td>GLM 5.3</td><td>Settles disputed findings. Never the executor's family, never the coordinator's own session.</td></tr>
+<tr><td><b>Integrator</b></td><td>Luna <code>medium</code></td><td>Gemini 3.8 Flash</td><td>Mechanical merges into the integration worktree.</td></tr>
+<tr><td><b>Verifier</b></td><td>Luna <code>xhigh</code></td><td>Gemini 3.8 Flash</td><td>Close verification and fix re-checks.</td></tr>
+<tr><td><b>Fable</b></td><td>this session</td><td></td><td>Coordinates, runs the two milestone gates (W0.G, W1.G), writes the acceptance script and audit shim before launch, dispositions every finding.</td></tr>
+<tr><td><b>Trey</b></td><td>you</td><td></td><td>Five decisions, listed below. Plus plan approval and build authorization, which are separate.</td></tr>
+</table>
+
+<h2>How one task flows</h2>
+<div class="flow">
+  <div class="step"><b>1 · Astra builds</b><small>One lane, owned files only, verify rows must pass. Retry slot is Sol xhigh if Astra stalls.</small></div>
+  <div class="step"><b>2 · Three reviews</b><small>Opus, Grok, GLM in parallel from a frozen checkout; adversarial seats use isolated worktrees.</small></div>
+  <div class="step"><b>3 · Fix round</b><small>Adopted majors go back to the same Astra lane. Standard: one round. Critical: two.</small></div>
+  <div class="step"><b>4 · Scoped re-review</b><small>Only the changed surface is re-read. Disputes go to the Opus adjudicator.</small></div>
+  <div class="step"><b>5 · Integrate and verify</b><small>Luna merges, Luna verifies, full gate runs at HEAD before anything closes.</small></div>
+</div>
+<p class="muted">What the experiment records per task: major findings on the first review round, fix rounds consumed, and the route that closed it. Compared against prior Luna-executor runs on this estate, stated as an observation, not a controlled result.</p>
+
+<h2>Your five decisions inside the plan</h2>
+<ol class="gates">
+  <li><b>W1.D10</b> (after S1): adopt a compiler-reference surface as a pinned instrument, or stay at binding level with the affected contracts labeled.</li>
+  <li><b>W1.C1</b> (after census on Atlas): read and amend the Atlas module and ownership declarations. S7 queries run against what you approve here.</li>
+  <li><b>W1.C2</b>: freeze the S7 sample, the failure-cost criteria, and the output budget before the held-out measurement, so a result cannot be relabeled a pass later.</li>
+  <li><b>W2.C1</b>: approve the full Atlas reference policy, the comparison rubric, and what counts as useful, after the M2 build is reviewed and requalified.</li>
+  <li><b>W2.G = R14</b>: benefit, mixed, or no benefit. Proceed to M3, rethink the guidance, or rule on a split result.</li>
+</ol>
+<p class="muted">Not inside the plan, carried forward by name: D2 permanent identifiers before durable signing, the D5 deployment choice and its authorization, S5 on macOS, the deferred adversarial rows, and everything M3 to M5.</p>
+
+<h2>The whole graph</h2>
+<div class="legend">
+  <span style="--c: var(--build)">build</span>
+  <span style="--c: var(--spike)">spike</span>
+  <span style="--c: var(--trey)">Trey decides</span>
+  <span style="--c: var(--fable)">Fable milestone gate</span>
+  <span class="muted">dashed border = critical review tier</span>
+</div>
+<div class="graphwrap">
+<svg viewBox="0 0 922 2620" width="100%" role="img" aria-label="Dependency graph of the plan, waves top to bottom">
+<rect x="8" y="-10" width="906" height="530" rx="14" class="band"/>
+<text x="22" y="12" class="bandlabel">M0 · foundation</text>
+<rect x="8" y="506" width="906" height="960" rx="14" class="band"/>
+<text x="22" y="528" class="bandlabel">M1 · the map</text>
+<rect x="8" y="1452" width="906" height="1132" rx="14" class="band"/>
+<text x="22" y="1474" class="bandlabel">M2 · advisory check, then R14</text>
+<text x="112" y="57.0" class="wave" text-anchor="end">wave 1</text>
+<text x="112" y="143.0" class="wave" text-anchor="end">wave 2</text>
+<text x="112" y="229.0" class="wave" text-anchor="end">wave 3</text>
+<text x="112" y="315.0" class="wave" text-anchor="end">wave 4</text>
+<text x="112" y="401.0" class="wave" text-anchor="end">wave 5</text>
+<text x="112" y="487.0" class="wave" text-anchor="end">wave 6</text>
+<text x="112" y="573.0" class="wave" text-anchor="end">wave 7</text>
+<text x="112" y="659.0" class="wave" text-anchor="end">wave 8</text>
+<text x="112" y="745.0" class="wave" text-anchor="end">wave 9</text>
+<text x="112" y="831.0" class="wave" text-anchor="end">wave 10</text>
+<text x="112" y="917.0" class="wave" text-anchor="end">wave 11</text>
+<text x="112" y="1003.0" class="wave" text-anchor="end">wave 12</text>
+<text x="112" y="1089.0" class="wave" text-anchor="end">wave 13</text>
+<text x="112" y="1175.0" class="wave" text-anchor="end">wave 14</text>
+<text x="112" y="1261.0" class="wave" text-anchor="end">wave 15</text>
+<text x="112" y="1347.0" class="wave" text-anchor="end">wave 16</text>
+<text x="112" y="1433.0" class="wave" text-anchor="end">wave 17</text>
+<text x="112" y="1519.0" class="wave" text-anchor="end">wave 18</text>
+<text x="112" y="1605.0" class="wave" text-anchor="end">wave 19</text>
+<text x="112" y="1691.0" class="wave" text-anchor="end">wave 20</text>
+<text x="112" y="1777.0" class="wave" text-anchor="end">wave 21</text>
+<text x="112" y="1863.0" class="wave" text-anchor="end">wave 22</text>
+<text x="112" y="1949.0" class="wave" text-anchor="end">wave 23</text>
+<text x="112" y="2035.0" class="wave" text-anchor="end">wave 24</text>
+<text x="112" y="2121.0" class="wave" text-anchor="end">wave 25</text>
+<text x="112" y="2207.0" class="wave" text-anchor="end">wave 26</text>
+<text x="112" y="2293.0" class="wave" text-anchor="end">wave 27</text>
+<text x="112" y="2379.0" class="wave" text-anchor="end">wave 28</text>
+<text x="112" y="2465.0" class="wave" text-anchor="end">wave 29</text>
+<text x="112" y="2551.0" class="wave" text-anchor="end">wave 30</text>
+<path d="M531,76 C531,96 436,96 436,116" class="edge"/>
+<path d="M531,76 C531,96 626,96 626,116" class="edge"/>
+<path d="M436,162 C436,182 436,182 436,202" class="edge"/>
+<path d="M436,162 C436,182 626,182 626,202" class="edge"/>
+<path d="M436,248 C436,268 436,268 436,288" class="edge"/>
+<path d="M436,248 C436,268 626,268 626,288" class="edge"/>
+<path d="M626,248 C626,268 626,268 626,288" class="edge"/>
+<path d="M626,334 C626,354 531,354 531,374" class="edge"/>
+<path d="M626,162 C626,268 531,268 531,374" class="edge"/>
+<path d="M531,420 C531,440 531,440 531,460" class="edge"/>
+<path d="M436,334 C436,397 531,397 531,460" class="edge"/>
+<path d="M531,506 C531,526 436,526 436,546" class="edge"/>
+<path d="M531,506 C531,526 626,526 626,546" class="edge"/>
+<path d="M436,592 C436,612 531,612 531,632" class="edge"/>
+<path d="M436,592 C436,655 626,655 626,718" class="edge"/>
+<path d="M531,678 C531,698 626,698 626,718" class="edge"/>
+<path d="M531,678 C531,698 436,698 436,718" class="edge"/>
+<path d="M436,764 C436,784 721,784 721,804" class="edge"/>
+<path d="M626,592 C626,698 721,698 721,804" class="edge"/>
+<path d="M436,764 C436,784 341,784 341,804" class="edge"/>
+<path d="M626,162 C626,483 341,483 341,804" class="edge"/>
+<path d="M436,764 C436,784 531,784 531,804" class="edge"/>
+<path d="M626,162 C626,483 531,483 531,804" class="edge"/>
+<path d="M531,850 C531,870 626,870 626,890" class="edge"/>
+<path d="M626,936 C626,956 816,956 816,976" class="edge"/>
+<path d="M341,850 C341,913 816,913 816,976" class="edge"/>
+<path d="M721,850 C721,870 436,870 436,890" class="edge"/>
+<path d="M626,764 C626,827 436,827 436,890" class="edge"/>
+<path d="M436,936 C436,956 246,956 246,976" class="edge"/>
+<path d="M436,936 C436,956 436,956 436,976" class="edge"/>
+<path d="M436,936 C436,956 626,956 626,976" class="edge"/>
+<path d="M436,1022 C436,1042 436,1042 436,1062" class="edge"/>
+<path d="M626,1022 C626,1042 436,1042 436,1062" class="edge"/>
+<path d="M246,1022 C246,1042 626,1042 626,1062" class="edge"/>
+<path d="M626,1108 C626,1128 531,1128 531,1148" class="edge"/>
+<path d="M531,1194 C531,1214 531,1214 531,1234" class="edge"/>
+<path d="M531,1280 C531,1300 531,1300 531,1320" class="edge"/>
+<path d="M436,1108 C436,1214 531,1214 531,1320" class="edge"/>
+<path d="M341,850 C341,1085 531,1085 531,1320" class="edge"/>
+<path d="M816,1022 C816,1171 531,1171 531,1320" class="edge"/>
+<path d="M531,1366 C531,1386 531,1386 531,1406" class="edge"/>
+<path d="M626,1022 C626,1214 531,1214 531,1406" class="edge"/>
+<path d="M341,850 C341,1128 531,1128 531,1406" class="edge"/>
+<path d="M816,1022 C816,1214 531,1214 531,1406" class="edge"/>
+<path d="M531,1452 C531,1472 341,1472 341,1492" class="edge"/>
+<path d="M531,1452 C531,1472 721,1472 721,1492" class="edge"/>
+<path d="M531,1452 C531,1472 531,1472 531,1492" class="edge"/>
+<path d="M341,1538 C341,1558 246,1558 246,1578" class="edge"/>
+<path d="M341,1538 C341,1558 436,1558 436,1578" class="edge"/>
+<path d="M341,1538 C341,1558 626,1558 626,1578" class="edge"/>
+<path d="M721,1538 C721,1558 816,1558 816,1578" class="edge"/>
+<path d="M341,1538 C341,1558 816,1558 816,1578" class="edge"/>
+<path d="M246,1624 C246,1644 531,1644 531,1664" class="edge"/>
+<path d="M531,1710 C531,1730 531,1730 531,1750" class="edge"/>
+<path d="M436,1624 C436,1687 531,1687 531,1750" class="edge"/>
+<path d="M626,1624 C626,1687 531,1687 531,1750" class="edge"/>
+<path d="M721,1538 C721,1644 531,1644 531,1750" class="edge"/>
+<path d="M816,1624 C816,1687 531,1687 531,1750" class="edge"/>
+<path d="M531,1796 C531,1816 531,1816 531,1836" class="edge"/>
+<path d="M721,1538 C721,1687 531,1687 531,1836" class="edge"/>
+<path d="M816,1624 C816,1730 531,1730 531,1836" class="edge"/>
+<path d="M816,1624 C816,1773 531,1773 531,1922" class="edge"/>
+<path d="M531,1882 C531,1902 531,1902 531,1922" class="edge"/>
+<path d="M531,1968 C531,1988 531,1988 531,2008" class="edge"/>
+<path d="M531,2054 C531,2074 531,2074 531,2094" class="edge"/>
+<path d="M531,2140 C531,2160 531,2160 531,2180" class="edge"/>
+<path d="M531,1538 C531,1902 531,1902 531,2266" class="edge"/>
+<path d="M531,2226 C531,2246 531,2246 531,2266" class="edge"/>
+<path d="M531,2312 C531,2332 531,2332 531,2352" class="edge"/>
+<path d="M531,2398 C531,2418 531,2418 531,2438" class="edge"/>
+<path d="M531,2484 C531,2504 531,2504 531,2524" class="edge"/>
+<g class="node build"><title>W0.1: Create the Cargo workspace, gate, and acceptance scaffolding</title><rect x="447" y="30" width="168" height="46" rx="9"/><text x="457" y="48" class="nid">W0.1</text><text x="457" y="65" class="ntitle">workspace + gate</text></g>
+<g class="node build"><title>W0.2: Define the core nouns, manifest, and schema generation</title><rect x="352" y="116" width="168" height="46" rx="9"/><text x="362" y="134" class="nid">W0.2</text><text x="362" y="151" class="ntitle">core nouns + schemas</text></g>
+<g class="node build"><title>W0.8: Pin the corpus: Atlas plus the five public shapes</title><rect x="542" y="116" width="168" height="46" rx="9"/><text x="552" y="134" class="nid">W0.8</text><text x="552" y="151" class="ntitle">corpus pin (6 repos)</text></g>
+<g class="node build"><title>W0.3: Implement snapshot capture, identity, and verified reads</title><rect x="352" y="202" width="168" height="46" rx="9"/><text x="362" y="220" class="nid">W0.3</text><text x="362" y="237" class="ntitle">snapshot crate</text></g>
+<g class="node build"><title>W0.5: Implement the inventory classifier and completeness accounting</title><rect x="542" y="202" width="168" height="46" rx="9"/><text x="552" y="220" class="nid">W0.5</text><text x="552" y="237" class="ntitle">inventory crate</text></g>
+<g class="node spike"><title>W0.4: Spike S3: native worktree and index hashing with gix</title><rect x="352" y="288" width="168" height="46" rx="9"/><text x="362" y="306" class="nid">W0.4</text><text x="362" y="323" class="ntitle">S3 native hashing</text></g>
+<g class="node build"><title>W0.7: Build the CLI shell with snapshot, inventory, schema, and capabilities</title><rect x="542" y="288" width="168" height="46" rx="9"/><text x="552" y="306" class="nid">W0.7</text><text x="552" y="323" class="ntitle">CLI shell</text></g>
+<g class="node build"><title>W0.6: Build the conformance harness and seed the inventory and snapshot fixtures</title><rect x="447" y="374" width="168" height="46" rx="9"/><text x="457" y="392" class="nid">W0.6</text><text x="457" y="409" class="ntitle">conformance harness</text></g>
+<g class="node fable"><title>W0.G: Close M0 after the milestone review</title><rect x="447" y="460" width="168" height="46" rx="9"/><text x="457" y="478" class="nid">W0.G</text><text x="457" y="495" class="ntitle">M0 gate review</text></g>
+<g class="node build"><title>W1.1: Implement the program model store</title><rect x="352" y="546" width="168" height="46" rx="9"/><text x="362" y="564" class="nid">W1.1</text><text x="362" y="581" class="ntitle">model store (SQLite)</text></g>
+<g class="node build"><title>W1.7: Implement the policy language, compiler, and canonical digest</title><rect x="542" y="546" width="168" height="46" rx="9"/><text x="552" y="564" class="nid">W1.7</text><text x="552" y="581" class="ntitle">policy language</text></g>
+<g class="node build"><title>W1.2: Implement TypeScript parsing, bindings, and the capability report</title><rect x="447" y="632" width="168" height="46" rx="9"/><text x="457" y="650" class="nid">W1.2</text><text x="457" y="667" class="ntitle">TS parse + bindings</text></g>
+<g class="node build"><title>W1.6: Implement the minimal Cargo integration</title><rect x="542" y="718" width="168" height="46" rx="9"/><text x="552" y="736" class="nid">W1.6</text><text x="552" y="753" class="ntitle">Cargo integration</text></g>
+<g class="node build"><title>W1.3: Implement TypeScript module resolution and observed interfaces</title><rect x="352" y="718" width="168" height="46" rx="9"/><text x="362" y="736" class="nid">W1.3</text><text x="362" y="753" class="ntitle">TS resolution</text></g>
+<g class="node build"><title>W1.8: Populate declared facts and registry entrypoints into the model</title><rect x="637" y="804" width="168" height="46" rx="9"/><text x="647" y="822" class="nid">W1.8</text><text x="647" y="839" class="ntitle">declared facts + adapters</text></g>
+<g class="node spike"><title>W1.4: Spike S6: parity qualification against tsc --traceResolution</title><rect x="257" y="804" width="168" height="46" rx="9"/><text x="267" y="822" class="nid">W1.4</text><text x="267" y="839" class="ntitle">S6 tsc parity</text></g>
+<g class="node spike"><title>W1.5: Spike S1: compiler-authority references on TypeScript 7</title><rect x="447" y="804" width="168" height="46" rx="9"/><text x="457" y="822" class="nid">W1.5</text><text x="457" y="839" class="ntitle">S1 compiler refs</text></g>
+<g class="node trey"><title>W1.D10: Decide D10: the compiler-reference surface</title><rect x="542" y="890" width="168" height="46" rx="9"/><text x="552" y="908" class="nid">W1.D10</text><text x="552" y="925" class="ntitle">D10: reference surface</text></g>
+<g class="node build"><title>W1.16: Apply the D10 decision to lang-ts</title><rect x="732" y="976" width="168" height="46" rx="9"/><text x="742" y="994" class="nid">W1.16</text><text x="742" y="1011" class="ntitle">apply D10</text></g>
+<g class="node build"><title>W1.9: Implement the query surface</title><rect x="352" y="890" width="168" height="46" rx="9"/><text x="362" y="908" class="nid">W1.9</text><text x="362" y="925" class="ntitle">query surface</text></g>
+<g class="node build"><title>W1.10: Implement census observe and propose</title><rect x="162" y="976" width="168" height="46" rx="9"/><text x="172" y="994" class="nid">W1.10</text><text x="172" y="1011" class="ntitle">census + propose</text></g>
+<g class="node build"><title>W1.11: Implement context and propose</title><rect x="352" y="976" width="168" height="46" rx="9"/><text x="362" y="994" class="nid">W1.11</text><text x="362" y="1011" class="ntitle">context + propose</text></g>
+<g class="node build"><title>W1.12: Implement the map renderer</title><rect x="542" y="976" width="168" height="46" rx="9"/><text x="552" y="994" class="nid">W1.12</text><text x="552" y="1011" class="ntitle">map renderer</text></g>
+<g class="node build"><title>W1.13: Build the Claude Code delivery adapter and record a harness run</title><rect x="352" y="1062" width="168" height="46" rx="9"/><text x="362" y="1080" class="nid">W1.13</text><text x="362" y="1097" class="ntitle">Claude Code hook</text></g>
+<g class="node trey"><title>W1.C1: Review the Atlas module and ownership declarations</title><rect x="542" y="1062" width="168" height="46" rx="9"/><text x="552" y="1080" class="nid">W1.C1</text><text x="552" y="1097" class="ntitle">Atlas declarations</text></g>
+<g class="node build"><title>W1.14: Draft the S7 sample, failure-cost criteria, and output budget</title><rect x="447" y="1148" width="168" height="46" rx="9"/><text x="457" y="1166" class="nid">W1.14</text><text x="457" y="1183" class="ntitle">S7 protocol draft</text></g>
+<g class="node trey"><title>W1.C2: Approve the S7 sample, criteria, and budget</title><rect x="447" y="1234" width="168" height="46" rx="9"/><text x="457" y="1252" class="nid">W1.C2</text><text x="457" y="1269" class="ntitle">approve S7 sample</text></g>
+<g class="node spike"><title>W1.15: Spike S7: qualify retrieval and delivery</title><rect x="447" y="1320" width="168" height="46" rx="9"/><text x="457" y="1338" class="nid">W1.15</text><text x="457" y="1355" class="ntitle">S7 measurement</text></g>
+<g class="node fable"><title>W1.G: Close M1 after the milestone review</title><rect x="447" y="1406" width="168" height="46" rx="9"/><text x="457" y="1424" class="nid">W1.G</text><text x="457" y="1441" class="ntitle">M1 gate review</text></g>
+<g class="node build critical"><title>W2.1: Implement obligation derivation and evaluation</title><rect x="257" y="1492" width="168" height="46" rx="9"/><text x="267" y="1510" class="nid">W2.1 · critical</text><text x="267" y="1527" class="ntitle">obligations + eval</text></g>
+<g class="node build critical"><title>W2.7: Implement rulings, signing glue, verification, and exceptions</title><rect x="637" y="1492" width="168" height="46" rx="9"/><text x="647" y="1510" class="nid">W2.7 · critical</text><text x="647" y="1527" class="ntitle">authority + signing</text></g>
+<g class="node build"><title>W2.12: Draft the early comparison protocol and rubric</title><rect x="447" y="1492" width="168" height="46" rx="9"/><text x="457" y="1510" class="nid">W2.12</text><text x="457" y="1527" class="ntitle">comparison protocol</text></g>
+<g class="node build"><title>W2.2: Implement pattern contracts, registries, and structural capability links</title><rect x="162" y="1578" width="168" height="46" rx="9"/><text x="172" y="1596" class="nid">W2.2</text><text x="172" y="1613" class="ntitle">patterns + registries</text></g>
+<g class="node build"><title>W2.4: Implement evidence binding, the attest wrapper, and two report adapters</title><rect x="352" y="1578" width="168" height="46" rx="9"/><text x="362" y="1596" class="nid">W2.4</text><text x="362" y="1613" class="ntitle">evidence + attest</text></g>
+<g class="node build"><title>W2.6: Implement signals and the taste profile</title><rect x="542" y="1578" width="168" height="46" rx="9"/><text x="552" y="1596" class="nid">W2.6</text><text x="552" y="1613" class="ntitle">signals + profile</text></g>
+<g class="node build critical"><title>W2.8: Implement the policy-widening classifier and amendment chain</title><rect x="732" y="1578" width="168" height="46" rx="9"/><text x="742" y="1596" class="nid">W2.8 · critical</text><text x="742" y="1613" class="ntitle">widening classifier</text></g>
+<g class="node build"><title>W2.3: Implement findings, explanations, grouping, and stable identity</title><rect x="447" y="1664" width="168" height="46" rx="9"/><text x="457" y="1682" class="nid">W2.3</text><text x="457" y="1699" class="ntitle">findings + identity</text></g>
+<g class="node build critical"><title>W2.5: Implement the four-facet verdict, check, and human rendering</title><rect x="447" y="1750" width="168" height="46" rx="9"/><text x="457" y="1768" class="nid">W2.5 · critical</text><text x="457" y="1785" class="ntitle">verdict + check</text></g>
+<g class="node build critical"><title>W2.9: Implement the receipt verifier and exception batches from receipts</title><rect x="447" y="1836" width="168" height="46" rx="9"/><text x="457" y="1854" class="nid">W2.9 · critical</text><text x="457" y="1871" class="ntitle">receipt + verify</text></g>
+<g class="node build critical"><title>W2.10: Add mutation testing, fault injection, and adversarial conformance</title><rect x="447" y="1922" width="168" height="46" rx="9"/><text x="457" y="1940" class="nid">W2.10 · critical</text><text x="457" y="1957" class="ntitle">mutants + adversarial</text></g>
+<g class="node spike"><title>W2.11: Dogfood the advisory check on Atlas and record the onboarding burden</title><rect x="447" y="2008" width="168" height="46" rx="9"/><text x="457" y="2026" class="nid">W2.11</text><text x="457" y="2043" class="ntitle">Atlas dogfood</text></g>
+<g class="node fable"><title>W2.R: Close M2 code after the milestone review</title><rect x="447" y="2094" width="168" height="46" rx="9"/><text x="457" y="2112" class="nid">W2.R</text><text x="457" y="2129" class="ntitle">M2 gate review</text></g>
+<g class="node spike"><title>W2.14: Requalify retrieval on the M2 checker build</title><rect x="447" y="2180" width="168" height="46" rx="9"/><text x="457" y="2198" class="nid">W2.14</text><text x="457" y="2215" class="ntitle">S7 requalify</text></g>
+<g class="node trey"><title>W2.C1: Approve the reference policy, comparison rubric, and usefulness criteria</title><rect x="447" y="2266" width="168" height="46" rx="9"/><text x="457" y="2284" class="nid">W2.C1</text><text x="457" y="2301" class="ntitle">approve rubric</text></g>
+<g class="node spike"><title>W2.13: Run the early advisory comparison</title><rect x="447" y="2352" width="168" height="46" rx="9"/><text x="457" y="2370" class="nid">W2.13</text><text x="457" y="2387" class="ntitle">early comparison</text></g>
+<g class="node fable"><title>W2.R2: Review the M2 delta after the comparison</title><rect x="447" y="2438" width="168" height="46" rx="9"/><text x="457" y="2456" class="nid">W2.R2</text><text x="457" y="2473" class="ntitle">M2 delta review</text></g>
+<g class="node trey"><title>W2.G: R14: proceed to M3, rethink the guidance, or rule on a mixed result</title><rect x="447" y="2524" width="168" height="46" rx="9"/><text x="457" y="2542" class="nid">W2.G</text><text x="457" y="2559" class="ntitle">R14 decision</text></g>
+</svg>
+</div>
+<p class="muted">Rows are waves derived from <code>blocked_by</code>; tasks in the same row can run in parallel. The runtime schedules per item, so anything whose blockers are done starts immediately; the rows are a reading aid. Hover a node for its full title.</p>
+
+<h2>Every task</h2>
+<table>
+<tr><th>Wave</th><th>Id</th><th>Title</th><th>Kind</th><th class="hide-sm">Who</th><th class="hide-sm">Review</th></tr>
+<tr><td>1</td><td><code>W0.1</code></td><td>Create the Cargo workspace, gate, and acceptance scaffolding</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>2</td><td><code>W0.2</code></td><td>Define the core nouns, manifest, and schema generation</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>2</td><td><code>W0.8</code></td><td>Pin the corpus: Atlas plus the five public shapes</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, provenance-auditor, test-skeptic</td></tr>
+<tr><td>3</td><td><code>W0.3</code></td><td>Implement snapshot capture, identity, and verified reads</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>3</td><td><code>W0.5</code></td><td>Implement the inventory classifier and completeness accounting</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>4</td><td><code>W0.4</code></td><td>Spike S3: native worktree and index hashing with gix</td><td><span class="pill spike">spike</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, provenance-auditor, test-skeptic</td></tr>
+<tr><td>4</td><td><code>W0.7</code></td><td>Build the CLI shell with snapshot, inventory, schema, and capabilities</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>5</td><td><code>W0.6</code></td><td>Build the conformance harness and seed the inventory and snapshot fixtures</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>6</td><td><code>W0.G</code></td><td>Close M0 after the milestone review</td><td><span class="pill fable">Fable gate</span></td><td>Fable</td><td class="muted"></td></tr>
+<tr><td>7</td><td><code>W1.1</code></td><td>Implement the program model store</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>7</td><td><code>W1.7</code></td><td>Implement the policy language, compiler, and canonical digest</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>8</td><td><code>W1.2</code></td><td>Implement TypeScript parsing, bindings, and the capability report</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>9</td><td><code>W1.3</code></td><td>Implement TypeScript module resolution and observed interfaces</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>9</td><td><code>W1.6</code></td><td>Implement the minimal Cargo integration</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>10</td><td><code>W1.4</code></td><td>Spike S6: parity qualification against tsc --traceResolution</td><td><span class="pill spike">spike</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, provenance-auditor, test-skeptic</td></tr>
+<tr><td>10</td><td><code>W1.5</code></td><td>Spike S1: compiler-authority references on TypeScript 7</td><td><span class="pill spike">spike</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, provenance-auditor, test-skeptic</td></tr>
+<tr><td>10</td><td><code>W1.8</code></td><td>Populate declared facts and registry entrypoints into the model</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>11</td><td><code>W1.9</code></td><td>Implement the query surface</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>11</td><td><code>W1.D10</code></td><td>Decide D10: the compiler-reference surface</td><td><span class="pill trey">Trey decides</span></td><td>Trey</td><td class="muted"></td></tr>
+<tr><td>12</td><td><code>W1.10</code></td><td>Implement census observe and propose</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>12</td><td><code>W1.11</code></td><td>Implement context and propose</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>12</td><td><code>W1.12</code></td><td>Implement the map renderer</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>12</td><td><code>W1.16</code></td><td>Apply the D10 decision to lang-ts</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>13</td><td><code>W1.13</code></td><td>Build the Claude Code delivery adapter and record a harness run</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>13</td><td><code>W1.C1</code></td><td>Review the Atlas module and ownership declarations</td><td><span class="pill trey">Trey decides</span></td><td>Trey</td><td class="muted"></td></tr>
+<tr><td>14</td><td><code>W1.14</code></td><td>Draft the S7 sample, failure-cost criteria, and output budget</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">prose: spec-fidelity</td></tr>
+<tr><td>15</td><td><code>W1.C2</code></td><td>Approve the S7 sample, criteria, and budget</td><td><span class="pill trey">Trey decides</span></td><td>Trey</td><td class="muted"></td></tr>
+<tr><td>16</td><td><code>W1.15</code></td><td>Spike S7: qualify retrieval and delivery</td><td><span class="pill spike">spike</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, provenance-auditor, test-skeptic</td></tr>
+<tr><td>17</td><td><code>W1.G</code></td><td>Close M1 after the milestone review</td><td><span class="pill fable">Fable gate</span></td><td>Fable</td><td class="muted"></td></tr>
+<tr><td>18</td><td><code>W2.1</code></td><td>Implement obligation derivation and evaluation</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">critical: refuter, attacker, test-skeptic</td></tr>
+<tr><td>18</td><td><code>W2.12</code></td><td>Draft the early comparison protocol and rubric</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">prose: spec-fidelity</td></tr>
+<tr><td>18</td><td><code>W2.7</code></td><td>Implement rulings, signing glue, verification, and exceptions</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">critical: refuter, attacker, test-skeptic</td></tr>
+<tr><td>19</td><td><code>W2.2</code></td><td>Implement pattern contracts, registries, and structural capability links</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>19</td><td><code>W2.4</code></td><td>Implement evidence binding, the attest wrapper, and two report adapters</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>19</td><td><code>W2.6</code></td><td>Implement signals and the taste profile</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>19</td><td><code>W2.8</code></td><td>Implement the policy-widening classifier and amendment chain</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">critical: refuter, attacker, test-skeptic</td></tr>
+<tr><td>20</td><td><code>W2.3</code></td><td>Implement findings, explanations, grouping, and stable identity</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, conventions, test-skeptic</td></tr>
+<tr><td>21</td><td><code>W2.5</code></td><td>Implement the four-facet verdict, check, and human rendering</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">critical: refuter, attacker, test-skeptic</td></tr>
+<tr><td>22</td><td><code>W2.9</code></td><td>Implement the receipt verifier and exception batches from receipts</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">critical: refuter, attacker, test-skeptic</td></tr>
+<tr><td>23</td><td><code>W2.10</code></td><td>Add mutation testing, fault injection, and adversarial conformance</td><td><span class="pill build">build</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">critical: refuter, attacker, test-skeptic</td></tr>
+<tr><td>24</td><td><code>W2.11</code></td><td>Dogfood the advisory check on Atlas and record the onboarding burden</td><td><span class="pill spike">spike</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, provenance-auditor, test-skeptic</td></tr>
+<tr><td>25</td><td><code>W2.R</code></td><td>Close M2 code after the milestone review</td><td><span class="pill fable">Fable gate</span></td><td>Fable</td><td class="muted"></td></tr>
+<tr><td>26</td><td><code>W2.14</code></td><td>Requalify retrieval on the M2 checker build</td><td><span class="pill spike">spike</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, provenance-auditor, test-skeptic</td></tr>
+<tr><td>27</td><td><code>W2.C1</code></td><td>Approve the reference policy, comparison rubric, and usefulness criteria</td><td><span class="pill trey">Trey decides</span></td><td>Trey</td><td class="muted"></td></tr>
+<tr><td>28</td><td><code>W2.13</code></td><td>Run the early advisory comparison</td><td><span class="pill spike">spike</span></td><td>Astra low → Sol xhigh retry</td><td class="muted">standard: refuter, provenance-auditor, test-skeptic</td></tr>
+<tr><td>29</td><td><code>W2.R2</code></td><td>Review the M2 delta after the comparison</td><td><span class="pill fable">Fable gate</span></td><td>Fable</td><td class="muted"></td></tr>
+<tr><td>30</td><td><code>W2.G</code></td><td>R14: proceed to M3, rethink the guidance, or rule on a mixed result</td><td><span class="pill trey">Trey decides</span></td><td>Trey</td><td class="muted"></td></tr>
+</table>
+
+<h2>Rulings you can flip at approval</h2>
+<table class="rulings">
+<tr><th>#</th><th>Ruling</th></tr>
+<tr><td>P1</td><td>Plan stops at R14; M3 to M5 compile into a second plan after your decision.</td></tr>
+<tr><td>P2</td><td>Astra <code>low</code> executes, Sol <code>xhigh</code> retries (same family on purpose); reviewers and the adjudicator only from other families.</td></tr>
+<tr><td>P3</td><td>Standard regime is three seats, three families, same as the last Atlas build, so the experiment has a comparable baseline.</td></tr>
+<tr><td>P4</td><td>Atlas tarball and dependency bundle live in a local private directory, referenced by digest only.</td></tr>
+<tr><td>P12</td><td>The corpus is Atlas plus the five open-source TypeScript shapes the spec names; a member that cannot be obtained is reported, never dropped from a denominator.</td></tr>
+<tr><td>P13</td><td>The gate's corpus stage runs public members everywhere and Atlas wherever the private directory exists. The spec wants Atlas budgets measured in CI, which public GitHub CI cannot do; until you authorize a private runner, every milestone close records that as a blocked prerequisite, never a local run dressed as CI.</td></tr>
+<tr><td>P5</td><td>CI is a GitHub workflow running <code>scripts/gate.sh</code> on stable and MSRV; it must be seen executing before M0 closes, which needs one GitHub push from you.</td></tr>
+<tr><td>P6</td><td>Core pre-declares its module tree and one schema stub per document, the CLI pre-registers every command as a stub, and only rechecked dependencies the slice needs get pinned.</td></tr>
+<tr><td>P7</td><td>Crates are <code>warrant-&lt;name&gt;</code>; the binary is <code>warrant</code>.</td></tr>
+<tr><td>P8</td><td>S4 is the authority task's fixture suite; S5 (macOS limits) is carried to M3.</td></tr>
+<tr><td>P9</td><td>Evidence adapters are vitest and Fallow only; judgment backends and importers wait.</td></tr>
+<tr><td>P10</td><td>The experiment metric is two counts per task from the workflow journal, with every executable task as the denominator.</td></tr>
+<tr><td>P11</td><td>The one verified harness adapter is Claude Code.</td></tr>
+</table>
+
+<footer>Source of truth: <code>docs/plans/2026-09-19-warrant-v1-plan.md</code> in the warrant repository, compiled from spec 0.3 (<code>docs/specs/2026-09-16-warrant-v1-spec.md</code>). This page is generated from the plan's parsed task graph; if they disagree, the plan wins.</footer>
+</main>
+</body>
+</html>

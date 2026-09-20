@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  stable:
+    name: gate (stable)
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - name: Install cargo-deny
+        run: cargo +stable install cargo-deny --locked
+      - name: Run gate
+        run: scripts/gate.sh
+
+  msrv:
+    name: gate (MSRV 1.96.0)
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.96.0
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
+          components: clippy,rustfmt
+      - name: Install cargo-deny
+        run: cargo +stable install cargo-deny --locked
+      - name: Run gate
+        run: scripts/gate.sh

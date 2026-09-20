@@ -1,0 +1,23 @@
+[package]
+name = "warrant-cli"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.90"
+license.workspace = true
+
+[[bin]]
+name = "warrant"
+path = "src/main.rs"
+
+[dependencies]
+warrant-authority = { version = "0.1.0", path = "../authority" }
+warrant-census = { version = "0.1.0", path = "../census" }
+warrant-core = { version = "0.1.0", path = "../core" }
+warrant-evidence = { version = "0.1.0", path = "../evidence" }
+warrant-inventory = { version = "0.1.0", path = "../inventory" }
+warrant-judgment = { version = "0.1.0", path = "../judgment" }
+warrant-lang-rust = { version = "0.1.0", path = "../lang-rust" }
+warrant-lang-ts = { version = "0.1.0", path = "../lang-ts" }
+warrant-model = { version = "0.1.0", path = "../model" }
+warrant-render = { version = "0.1.0", path = "../render" }
+warrant-snapshot = { version = "0.1.0", path = "../snapshot" }

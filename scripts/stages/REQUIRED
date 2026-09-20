@@ -1,0 +1,6 @@
+10-fmt.sh
+20-clippy.sh
+25-deny.sh
+30-test.sh
+35-deps.sh
+55-budget.sh

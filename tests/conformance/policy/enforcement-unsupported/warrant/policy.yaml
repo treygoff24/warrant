@@ -1,0 +1,11 @@
+schema_version: warrant.policy/1
+contracts:
+  - id: data.private
+    kind: data
+    intent: Restrict private-data consumers at binding level.
+    owner: trey
+    authority: draft
+    sources: { symbols: ["mail::fetch"] }
+    permitted_sinks: { modules: [core.actions] }
+    enforcement: pattern
+    limits: Binding-level only, not taint flow.

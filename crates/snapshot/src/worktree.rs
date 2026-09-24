@@ -51,11 +51,11 @@ pub(crate) fn capture(repo: &Path, config: &SnapshotConfig) -> Result<Snapshot, 
             entry.reason = "undeclared-nested-repository".into();
         }
     }
-    for path in captured.unborn {
+    for path in &captured.unborn {
         snapshot.manifest.excluded.submodules += 1;
         snapshot.modes.insert(path.clone(), "160000".into());
         snapshot.entries.push(InventoryEntry {
-            path,
+            path: path.clone(),
             blob: None,
             class: InventoryClass::Submodule,
             language: None,
@@ -69,7 +69,7 @@ pub(crate) fn capture(repo: &Path, config: &SnapshotConfig) -> Result<Snapshot, 
             vendored_from: None,
         });
     }
-    snapshot.object_paths = captured.carried;
+    snapshot.object_paths = captured.carried.clone();
     snapshot.file_mode = file_mode;
     snapshot.manifest.kind = SnapshotKind::Worktree;
     snapshot.manifest.capture.kind = captured.kind.into();
@@ -98,15 +98,18 @@ pub(crate) fn capture(repo: &Path, config: &SnapshotConfig) -> Result<Snapshot, 
         });
     }
     snapshot.entries.sort_by(|a, b| a.path.cmp(&b.path));
+    snapshot.captured_tree = Some(captured);
     Ok(snapshot)
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct CapturedTree {
     pub id: String,
     carried: BTreeSet<String>,
     oversize: BTreeSet<String>,
     undeclared: BTreeSet<String>,
     unborn: BTreeSet<String>,
+    pub(crate) untracked: BTreeSet<String>,
     kind: &'static str,
 }
 
@@ -142,6 +145,7 @@ pub(crate) fn tree(
             oversize: BTreeSet::new(),
             undeclared: BTreeSet::new(),
             unborn: BTreeSet::new(),
+            untracked: BTreeSet::new(),
             kind: "native-worktree",
         }),
         None => portable(repo, file_mode, config),
@@ -181,12 +185,13 @@ fn portable(
             Some((fields[1].to_owned(), fields[2].to_owned(), carry)),
         );
     }
-    for path in paths(&git::run(
+    let untracked = paths(&git::run(
         repo,
         &["ls-files", "--others", "--exclude-standard", "-z"],
         None,
         None,
-    )?)? {
+    )?)?;
+    for path in &untracked {
         files
             .entry(path.trim_end_matches('/').to_owned())
             .or_insert(None);
@@ -210,7 +215,8 @@ fn portable(
                     // Empty directories retain the recorded gitlink. Local metadata
                     // prevents rev-parse from discovering the parent repository.
                     let oid = if submodule.join(".git").try_exists()? {
-                        git::text(&submodule, &["rev-parse", "--verify", "HEAD"], None)?
+                        nested_head(&submodule)?
+                            .ok_or_else(|| SnapshotError::new("unborn-submodule", &path))?
                     } else {
                         oid.clone()
                     };
@@ -218,24 +224,9 @@ fn portable(
                 }
                 None if submodule.join(".git").try_exists()? => {
                     undeclared.insert(path.clone());
-                    let oid = match git::text(&submodule, &["rev-parse", "--verify", "HEAD"], None)
-                    {
-                        Ok(oid) => oid,
-                        Err(error) => {
-                            // Only a symbolic HEAD with no matching ref is unborn.
-                            // Other repository failures must still fail capture.
-                            let reference = git::text(&submodule, &["symbolic-ref", "HEAD"], None)?;
-                            let refs = git::text(
-                                &submodule,
-                                &["for-each-ref", "--format=%(refname)", &reference],
-                                None,
-                            )?;
-                            if refs.lines().any(|name| name == reference) {
-                                return Err(error);
-                            }
-                            unborn.insert(path.clone());
-                            continue;
-                        }
+                    let Some(oid) = nested_head(&submodule)? else {
+                        unborn.insert(path.clone());
+                        continue;
                     };
                     ("160000".into(), oid)
                 }
@@ -296,8 +287,29 @@ fn portable(
         oversize,
         undeclared,
         unborn,
+        untracked,
         kind: "temporary-index",
     })
+}
+
+// A symbolic HEAD without a matching ref is unborn; other failures propagate.
+fn nested_head(repo: &Path) -> Result<Option<String>, SnapshotError> {
+    match git::text(repo, &["rev-parse", "--verify", "HEAD"], None) {
+        Ok(oid) => Ok(Some(oid)),
+        Err(error) => {
+            let reference = git::text(repo, &["symbolic-ref", "HEAD"], None)?;
+            let refs = git::text(
+                repo,
+                &["for-each-ref", "--format=%(refname)", &reference],
+                None,
+            )?;
+            if refs.lines().any(|name| name == reference) {
+                Err(error)
+            } else {
+                Ok(None)
+            }
+        }
+    }
 }
 
 // Git does not apply clean filters to symlink payloads.

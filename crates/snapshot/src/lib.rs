@@ -64,6 +64,7 @@ pub struct Snapshot {
     entries: Vec<InventoryEntry>,
     modes: BTreeMap<String, String>,
     object_paths: BTreeSet<String>,
+    captured_tree: Option<worktree::CapturedTree>,
     file_mode: bool,
 }
 impl Snapshot {
@@ -75,6 +76,26 @@ impl Snapshot {
     }
     pub fn mode(&self, path: &str) -> Option<&str> {
         self.modes.get(path).map(String::as_str)
+    }
+
+    /// Resolve an internal symlink chain to its final snapshot entry.
+    pub fn resolve(&self, path: &str) -> Result<String, SnapshotError> {
+        links::resolve(self, path)
+    }
+    /// Compute the prefixed blob identity using the path's Git attributes.
+    pub fn blob_id(&self, path: &str, bytes: &[u8]) -> Result<String, SnapshotError> {
+        Ok(format!(
+            "{}:{}",
+            self.manifest.object_format,
+            worktree::hash(&self.repo, path, self.mode(path).unwrap_or("100644"), bytes)?
+        ))
+    }
+    /// Return the untracked listing observed while capturing the worktree.
+    pub fn untracked(&self) -> &BTreeSet<String> {
+        static EMPTY: BTreeSet<String> = BTreeSet::new();
+        self.captured_tree
+            .as_ref()
+            .map_or(&EMPTY, |tree| &tree.untracked)
     }
 
     /// Read exact bytes, refusing exclusions and detecting worktree drift.
@@ -138,8 +159,8 @@ pub fn capture<T>(
                         snapshot.read(&entry.path)?;
                     }
                 }
-                let tree = worktree::tree(&snapshot.repo, snapshot.file_mode, config)?.id;
-                if snapshot.manifest.tree != format!("{}:{tree}", snapshot.manifest.object_format) {
+                let tree = worktree::tree(&snapshot.repo, snapshot.file_mode, config)?;
+                if snapshot.captured_tree.as_ref() != Some(&tree) {
                     return Err(SnapshotError::new(
                         "snapshot-changed",
                         "worktree tree changed",
@@ -248,6 +269,7 @@ fn capture_once(
         entries: Vec::new(),
         modes: BTreeMap::new(),
         object_paths: BTreeSet::new(),
+        captured_tree: None,
         file_mode: true,
         manifest: SnapshotManifest {
             schema_version: "warrant.snapshot/1".into(),

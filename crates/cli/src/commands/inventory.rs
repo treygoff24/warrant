@@ -1,9 +1,9 @@
-use std::{env, fs, path::Path};
+use std::env;
 
 use clap::Args as ClapArgs;
-use warrant_core::{manifest::WarrantManifest, nouns::SnapshotKind};
+use warrant_core::nouns::SnapshotKind;
 
-use crate::{cache, cancel, cli::Format, error::CommandError, output};
+use crate::{cache, cancel, cli::Format, error::CommandError, manifest::load_manifest, output};
 
 use super::page;
 
@@ -67,30 +67,6 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
     document.total = page.total;
     document.next_cursor = page.next_cursor;
     output::document(&document, format)
-}
-
-fn load_manifest(root: &Path) -> crate::error::Result<WarrantManifest> {
-    let path = root.join("warrant/warrant.yaml");
-    let text = match fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            "schema_version: warrant.manifest/1\n".into()
-        }
-        Err(error) => {
-            return Err(CommandError::evaluation(
-                "manifest-io",
-                format!("{}: {error}", path.display()),
-                None,
-            ));
-        }
-    };
-    WarrantManifest::parse(&text).map_err(|error| {
-        CommandError::evaluation(
-            "invalid-manifest",
-            error.to_string(),
-            Some(path.display().to_string()),
-        )
-    })
 }
 
 fn error_document(code: &str, reason: String) -> warrant_core::nouns::ErrorDocument {

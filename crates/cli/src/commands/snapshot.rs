@@ -1,9 +1,9 @@
 use std::{env, path::PathBuf};
 
 use clap::{ArgGroup, Args as ClapArgs};
-use warrant_core::{manifest::SnapshotConfig, nouns::SnapshotKind};
+use warrant_core::nouns::SnapshotKind;
 
-use crate::{cache, cancel, cli::Format, error::CommandError, output};
+use crate::{cache, cancel, cli::Format, error::CommandError, manifest::load_manifest, output};
 
 #[derive(Debug, ClapArgs)]
 #[command(group(ArgGroup::new("source").required(true).multiple(false)))]
@@ -20,20 +20,16 @@ pub struct Args {
 
 pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
     let root = current_dir()?;
+    let manifest = load_manifest(&root)?;
     let (kind, revision) = args.source();
-    let (manifest, ()) = warrant_snapshot::capture(
-        &root,
-        kind,
-        revision.as_deref(),
-        &SnapshotConfig::default(),
-        |_| {
+    let (manifest, ()) =
+        warrant_snapshot::capture(&root, kind, revision.as_deref(), &manifest.snapshot, |_| {
             cancel::check().map_err(|error| warrant_snapshot::SnapshotError {
                 document: error.document.clone(),
             })?;
             Ok(())
-        },
-    )
-    .map_err(snapshot_error)?;
+        })
+        .map_err(snapshot_error)?;
     cancel::check()?;
     let bytes = serde_json::to_vec(&manifest)
         .map_err(|error| CommandError::internal(format!("could not encode snapshot: {error}")))?;

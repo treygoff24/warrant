@@ -530,19 +530,29 @@ fn run_cli(repository: &Path, cache: &Path, args: &[String]) -> Observation {
         .current_dir(repository)
         .env("XDG_CACHE_HOME", cache.join("cache"));
     neutralize_git_environment(&mut command);
-    let output = command.output().expect("run warrant");
-    let mut observation = output_observation(output);
+    // The oracles are Git's answers before Warrant runs, so a run that rewrote the index
+    // could not move the oracle along with its own answer. `write-tree` may store a
+    // cache tree in the index, so the bytes are read after the oracles are taken.
     let format = git(repository, &["rev-parse", "--show-object-format"]);
-    observation.index_tree = Some(format!("{format}:{}", git(repository, &["write-tree"])));
-    observation.git_ignored = Some(
-        git(
-            repository,
-            &["ls-files", "--others", "--ignored", "--exclude-standard"],
-        )
-        .lines()
-        .map(str::to_owned)
-        .collect(),
+    let index_tree = format!("{format}:{}", git(repository, &["write-tree"]));
+    let git_ignored = git(
+        repository,
+        &["ls-files", "--others", "--ignored", "--exclude-standard"],
+    )
+    .lines()
+    .map(str::to_owned)
+    .collect();
+    let index_path = repository.join(git(repository, &["rev-parse", "--git-path", "index"]));
+    let index_before = fs::read(&index_path).expect("read index before warrant");
+    let output = command.output().expect("run warrant");
+    assert!(
+        fs::read(&index_path).expect("read index after warrant") == index_before,
+        "warrant {args:?} changed the index file in {}",
+        repository.display()
     );
+    let mut observation = output_observation(output);
+    observation.index_tree = Some(index_tree);
+    observation.git_ignored = Some(git_ignored);
     observation
 }
 

@@ -4,6 +4,17 @@ Each case is copied into a temporary Git repository. `expect.json` describes
 semantic fields, not serialized bytes; timestamps, object IDs, and JSON key
 order are deliberately outside the comparison.
 
+The document comparison (`semantic_subset` in `crates/cli/tests/conformance.rs`)
+is a subset check. It walks only the keys `expect.json` names, so a key the
+product emits and the expectation omits is never compared: an extra or wrong
+value there passes. Arrays are compared whole after sorting both sides by each
+element's canonical JSON string, so element order is never compared either.
+An expectation that must pin a field has to name it.
+
+For `cli` cases the Git oracles (`index_tree`, `git_ignored`) are taken before
+Warrant runs, and the runner fails the case if the run changed the index
+file's bytes.
+
 Every M0 control has an ordinary positive case, a non-applicable or boundary
 case, and a `break-control` case. The runner also mutates the observed
 unowned-source and unread-exclusion fields in memory and proves the same

@@ -187,7 +187,8 @@ pub struct UnitAliasTable {
     pub by: String,
 }
 
-/// A generated glob declaration that matched no snapshot path.
+/// A generated declaration with no captured match: a glob that matched no snapshot
+/// path, or a declared path present only as an ignored file.
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GeneratedAbsent {

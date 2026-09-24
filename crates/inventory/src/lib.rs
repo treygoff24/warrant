@@ -389,7 +389,16 @@ pub fn build(
         });
         units.sort_by(|left, right| left.root.cmp(&right.root));
     }
-    let generated_absent = add_absent_generated(&mut entries, &generated, &paths)?;
+    // Spec 5.3: an ignored file is absent from the snapshot even when a copy is on disk,
+    // so generated presence is decided against captured paths, not the exclusion listing.
+    let captured: Vec<&str> = snapshot_entries
+        .iter()
+        .filter(|entry| {
+            entry.class != InventoryClass::Ignored && paths.binary_search(&entry.path).is_ok()
+        })
+        .map(|entry| entry.path.as_str())
+        .collect();
+    let generated_absent = add_absent_generated(&mut entries, &generated, &captured)?;
     entries.sort_by(|left, right| left.path.cmp(&right.path));
     let unit_aliases = alias_tables(read, &discovery_paths, &units)?;
     let summary = summarize(&entries, unit_aliases, generated_absent);
@@ -1427,11 +1436,11 @@ fn alias_tables(
 fn add_absent_generated(
     entries: &mut Vec<InventoryEntry>,
     patterns: &[GeneratedPattern],
-    paths: &[String],
+    captured: &[&str],
 ) -> Result<Vec<GeneratedAbsent>, InventoryError> {
     let mut absent = Vec::new();
     for item in patterns {
-        if paths.iter().any(|path| item.matcher.is_match(path)) {
+        if captured.iter().any(|path| item.matcher.is_match(path)) {
             continue;
         }
         if !is_literal(&item.pattern) {
@@ -1453,7 +1462,13 @@ fn add_absent_generated(
                 rules,
             });
         }
+        // The path is listed as an ignored entry; keep that entry and record the
+        // absence with its producer in the summary rather than duplicating the path.
         if entries.iter().any(|entry| entry.path == item.pattern) {
+            absent.push(GeneratedAbsent {
+                declaration: item.pattern.clone(),
+                producer: item.producer.clone(),
+            });
             continue;
         }
         entries.push(InventoryEntry {

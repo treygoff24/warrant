@@ -1,0 +1,11 @@
+{
+  "driver":"cli","args":["inventory"],"exit_code":0,
+  "setup":{"worktree_files":{"gen/a.ts":"generated\n","gen/b.ts":"generated\n"}},
+  "git_ignored":["gen/a.ts","gen/b.ts"],
+  "inventory":{
+    "classes":{"gen/a.ts":"ignored","gen/b.ts":"ignored"},
+    "generated_absent":["gen/*.ts"],
+    "generated_absent_producers":{"gen/*.ts":"printf generated"},
+    "ignored_files":2
+  }
+}

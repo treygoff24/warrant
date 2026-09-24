@@ -1660,3 +1660,68 @@ fn refused_snapshot_read_keeps_the_snapshot_code() {
         "{error:?}"
     );
 }
+
+/// Spec 5.3: "Generated files that are gitignored and therefore absent from the snapshot
+/// are recorded as `generated-absent` with their producer".
+#[test]
+fn generated_declarations_matched_only_by_ignored_files_are_absent() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "src/index.ts", "export {};\n");
+    write(root.path(), "lib/tracked.ts", "export {};\n");
+    let ignored = |path: &str| {
+        let mut entry = snapshot_entry(path, InventoryClass::Ignored, None);
+        entry.by = "git-ignore".into();
+        entry
+    };
+    // A copy of each ignored output is on disk, as it is after a local build.
+    let mut listing = snapshot(root.path());
+    for path in ["gen/client.ts", "out/a.js", "out/b.js", "lib/extra.ts"] {
+        write(root.path(), path, "generated\n");
+        listing.push(ignored(path));
+    }
+    listing.sort_by(|left, right| left.path.cmp(&right.path));
+    let manifest = manifest(
+        r#"  generated:
+    - files: ["gen/client.ts"]
+      producer: "make client"
+    - files: ["out/*.js"]
+      producer: "make out"
+    - files: ["lib/*.ts"]
+      producer: "make lib"
+"#,
+    );
+    let built = build_on_disk(root.path(), &listing, &manifest, &BuildConfig::default())
+        .expect("inventory builds");
+
+    let absent: Vec<_> = built
+        .document
+        .summary
+        .generated_absent
+        .iter()
+        .map(|item| (item.declaration.as_str(), item.producer.as_str()))
+        .collect();
+    // lib/*.ts also matches the captured lib/tracked.ts, so it is present.
+    assert_eq!(
+        absent,
+        [("gen/client.ts", "make client"), ("out/*.js", "make out")]
+    );
+    // The ignored entries stay as they were; no path is duplicated.
+    for path in ["gen/client.ts", "out/a.js", "out/b.js", "lib/extra.ts"] {
+        let matching: Vec<_> = built
+            .document
+            .entries
+            .iter()
+            .filter(|entry| entry.path == path)
+            .collect();
+        assert_eq!(matching.len(), 1, "{path}");
+        assert_eq!(matching[0].class, InventoryClass::Ignored, "{path}");
+        assert_eq!(matching[0].generated_by, None, "{path}");
+    }
+    let tracked = built
+        .document
+        .entries
+        .iter()
+        .find(|entry| entry.path == "lib/tracked.ts")
+        .expect("captured generated file");
+    assert_eq!(tracked.class, InventoryClass::Generated);
+}

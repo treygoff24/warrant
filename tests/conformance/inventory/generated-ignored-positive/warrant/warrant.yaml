@@ -1,0 +1,5 @@
+schema_version: warrant.manifest/1
+inventory:
+  generated:
+    - files: ["gen/client.ts"]
+      producer: "printf generated"

@@ -1,0 +1,10 @@
+{
+  "driver":"cli","args":["inventory"],"exit_code":0,
+  "setup":{"worktree_files":{"gen/extra.ts":"generated\n"}},
+  "git_ignored":["gen/extra.ts"],
+  "inventory":{
+    "classes":{"gen/client.ts":"generated","gen/extra.ts":"ignored"},
+    "generated_absent":[],
+    "ignored_files":1
+  }
+}

@@ -65,7 +65,7 @@
       ]
     },
     "GeneratedAbsent": {
-      "description": "A generated glob declaration that matched no snapshot path.",
+      "description": "A generated declaration with no captured match: a glob that matched no snapshot\npath, or a declared path present only as an ignored file.",
       "type": "object",
       "properties": {
         "declaration": {

@@ -74,6 +74,9 @@ struct InventoryExpect {
     unread: Option<BTreeMap<String, String>>,
     #[serde(default)]
     generated_absent: Option<Vec<String>>,
+    /// Declaration to producer for each `generated_absent` row named here.
+    #[serde(default)]
+    generated_absent_producers: BTreeMap<String, String>,
     #[serde(default)]
     ignored_files: Option<u64>,
     #[serde(default)]
@@ -111,6 +114,9 @@ struct Expectation {
     generated_issues: Option<Vec<Value>>,
     #[serde(default)]
     tree_matches_index: Option<bool>,
+    /// What `git ls-files --others --ignored --exclude-standard` prints for the case.
+    #[serde(default)]
+    git_ignored: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -119,6 +125,7 @@ struct Observation {
     document: Option<Value>,
     stderr: String,
     index_tree: Option<String>,
+    git_ignored: Option<Vec<String>>,
 }
 
 #[test]
@@ -311,6 +318,9 @@ fn run_area(area: &str) {
             "generated-drift-break-control",
             "generated-drift-negative",
             "generated-drift-positive",
+            "generated-ignored-break-control",
+            "generated-ignored-negative",
+            "generated-ignored-positive",
             "unowned-source-break-control",
             "unowned-source-negative",
             "unowned-source-positive",
@@ -475,6 +485,15 @@ fn run_cli(repository: &Path, cache: &Path, args: &[String]) -> Observation {
     let mut observation = output_observation(output);
     let format = git(repository, &["rev-parse", "--show-object-format"]);
     observation.index_tree = Some(format!("{format}:{}", git(repository, &["write-tree"])));
+    observation.git_ignored = Some(
+        git(
+            repository,
+            &["ls-files", "--others", "--ignored", "--exclude-standard"],
+        )
+        .lines()
+        .map(str::to_owned)
+        .collect(),
+    );
     observation
 }
 
@@ -496,6 +515,7 @@ fn output_observation(output: Output) -> Observation {
         document,
         stderr,
         index_tree: None,
+        git_ignored: None,
     }
 }
 
@@ -560,6 +580,7 @@ fn run_inventory_api(repository: &Path, expectation: &Expectation) -> Observatio
             document: Some(serde_json::to_value(built.document).expect("inventory JSON")),
             stderr: String::new(),
             index_tree: None,
+            git_ignored: None,
         },
         Err(error) => {
             let stderr = error.to_string();
@@ -568,6 +589,7 @@ fn run_inventory_api(repository: &Path, expectation: &Expectation) -> Observatio
                 document: Some(serde_json::to_value(error.document).expect("error JSON")),
                 stderr,
                 index_tree: None,
+                git_ignored: None,
             }
         }
     }
@@ -581,12 +603,14 @@ fn run_verify_generated(repository: &Path) -> Observation {
             document: Some(serde_json::to_value(issues).expect("generated issue JSON")),
             stderr: String::new(),
             index_tree: None,
+            git_ignored: None,
         },
         Err(error) => Observation {
             exit_code: 2,
             document: None,
             stderr: error.to_string(),
             index_tree: None,
+            git_ignored: None,
         },
     }
 }
@@ -660,6 +684,13 @@ fn check_expectation(expectation: &Expectation, observation: &Observation) -> Re
                 "generated issues {actual:?}, expected {expected:?}"
             ));
         }
+    }
+    if let Some(expected) = &expectation.git_ignored {
+        let actual = observation
+            .git_ignored
+            .as_ref()
+            .ok_or("git ignored listing was not observed")?;
+        compare_sorted("git_ignored", actual, expected)?;
     }
     if let Some(should_match) = expectation.tree_matches_index {
         let document = observation.document.as_ref().ok_or("missing snapshot")?;
@@ -736,6 +767,20 @@ fn check_inventory(expected: &InventoryExpect, actual: &Value) -> Result<(), Str
             .map(|entry| entry.declaration.clone())
             .collect::<Vec<_>>();
         compare_sorted("generated_absent", &actual, expected)?;
+    }
+    for (declaration, producer) in &expected.generated_absent_producers {
+        let row = document
+            .summary
+            .generated_absent
+            .iter()
+            .find(|row| &row.declaration == declaration)
+            .ok_or_else(|| format!("generated_absent lacks {declaration}"))?;
+        if &row.producer != producer {
+            return Err(format!(
+                "generated_absent {declaration} producer {:?}, expected {producer:?}",
+                row.producer
+            ));
+        }
     }
     if let Some(expected) = &expected.unread {
         let actual = document

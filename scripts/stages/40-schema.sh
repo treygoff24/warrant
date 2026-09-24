@@ -13,4 +13,7 @@ trap cleanup EXIT
 
 cd "$repo_root"
 cargo run --locked --quiet -p warrant-core --bin warrant-core-schema -- "$generated"
-diff -ru -- "$repo_root/schemas" "$generated"
+# The stage asks whether the checked-in generated schemas are current. Hand-written
+# documentation beside them (schemas/model.md, spec 6.2) is not generated and is
+# excluded; every JSON file on either side is still compared.
+diff -ru --exclude='*.md' -- "$repo_root/schemas" "$generated"

@@ -2,6 +2,29 @@ use std::{fs, path::Path, process::Command};
 
 use warrant_core::nouns::{CommandStatus, CommandsDocument, InventoryDocument};
 
+const STUB_COMMANDS: &[&str] = &[
+    "model",
+    "query",
+    "context",
+    "propose",
+    "check",
+    "gate",
+    "explain",
+    "verify",
+    "policy",
+    "rule",
+    "attest",
+    "evidence",
+    "instrument",
+    "census",
+    "map",
+    "serve",
+    "hook",
+    "selftest",
+    "self-qualify",
+    "judgment",
+];
+
 fn warrant(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_warrant"))
         .args(args)
@@ -110,29 +133,26 @@ fn capabilities_document_and_page_walk() {
 }
 
 #[test]
+fn capabilities_names_implemented_and_stub_commands() {
+    let output = warrant(&["capabilities"]);
+    assert!(output.status.success(), "{output:?}");
+    let document: CommandsDocument = serde_json::from_slice(&output.stdout).expect("commands");
+    assert_eq!(
+        document.implemented,
+        ["snapshot", "inventory", "schema", "capabilities"]
+    );
+    let stubs: Vec<_> = document
+        .commands
+        .iter()
+        .filter(|record| record.status == CommandStatus::Stub)
+        .map(|record| record.name.as_str())
+        .collect();
+    assert_eq!(stubs, STUB_COMMANDS);
+}
+
+#[test]
 fn every_stub_returns_the_error_contract() {
-    for command in [
-        "model",
-        "query",
-        "context",
-        "propose",
-        "check",
-        "gate",
-        "explain",
-        "verify",
-        "policy",
-        "rule",
-        "attest",
-        "evidence",
-        "instrument",
-        "census",
-        "map",
-        "serve",
-        "hook",
-        "selftest",
-        "self-qualify",
-        "judgment",
-    ] {
+    for command in STUB_COMMANDS {
         let output = warrant(&[command]);
         assert_eq!(output.status.code(), Some(2), "{command}");
         let error: serde_json::Value =
@@ -145,10 +165,22 @@ fn every_stub_returns_the_error_contract() {
 
 #[test]
 fn schema_prints_an_implemented_document_schema() {
-    let output = warrant(&["schema", "warrant.snapshot"]);
-    assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid schema");
-    assert_eq!(value["title"], "SnapshotManifest");
+    for (name, title) in [
+        ("warrant.snapshot", "SnapshotManifest"),
+        ("warrant.inventory", "InventoryDocument"),
+    ] {
+        let output = warrant(&["schema", name]);
+        assert!(output.status.success(), "{output:?}");
+        let value: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("valid schema");
+        assert_eq!(value["title"], title);
+    }
+    let output = warrant(&["schema", "warrant.policy"]);
+    assert_eq!(output.status.code(), Some(2));
+    let error: warrant_core::nouns::ErrorDocument =
+        serde_json::from_slice(&output.stderr).expect("schema error");
+    assert_eq!(error.schema_version, "warrant.error/1");
+    assert_eq!(error.code, "not-implemented");
 }
 
 #[test]
@@ -309,11 +341,42 @@ fn inventory_pages_entries_without_changing_cached_full_document() {
 
 #[test]
 fn human_format_contains_the_same_data() {
-    let json = warrant(&["capabilities", "--format", "json"]);
-    let human = warrant(&["capabilities", "--format", "human"]);
-    let json: serde_json::Value = serde_json::from_slice(&json.stdout).expect("machine JSON");
-    let human: serde_json::Value = serde_json::from_slice(&human.stdout).expect("human JSON");
-    assert_eq!(json, human);
+    let repository = repository();
+    let cache = tempfile::tempdir().expect("temp cache");
+    for command in [
+        &["capabilities"][..],
+        &["snapshot", "--worktree"],
+        &["inventory"],
+    ] {
+        let mut documents = Vec::new();
+        for format in ["json", "human"] {
+            let args: Vec<_> = command
+                .iter()
+                .copied()
+                .chain(["--format", format])
+                .collect();
+            let output = warrant_in(repository.path(), cache.path(), &args);
+            assert!(output.status.success(), "{output:?}");
+            assert!(!output.stdout.contains(&0x1b));
+            let mut document: serde_json::Value =
+                serde_json::from_slice(&output.stdout).expect("formatted document");
+            if command[0] == "snapshot" {
+                // Separate captures have different clocks; all other data must match.
+                let taken_at = document
+                    .as_object_mut()
+                    .expect("snapshot object")
+                    .remove("taken_at")
+                    .expect("capture timestamp");
+                taken_at
+                    .as_str()
+                    .expect("timestamp string")
+                    .parse::<jiff::Timestamp>()
+                    .expect("valid timestamp");
+            }
+            documents.push(document);
+        }
+        assert_eq!(documents[0], documents[1], "{command:?}");
+    }
 }
 
 #[cfg(unix)]

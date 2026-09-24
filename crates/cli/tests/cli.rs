@@ -1408,6 +1408,98 @@ fn verify_generated_reruns_producers_over_the_snapshot_only() {
     assert_eq!(document["summary"]["ignored_files"], 1);
 }
 
+/// B26 (spec 5.3): verification compares Git blob identities. Under a clean filter the
+/// captured blob holds the filtered bytes; a producer that writes the worktree's raw bytes
+/// reproduces the same blob, which is not drift.
+#[cfg(unix)]
+#[test]
+fn verify_generated_compares_blob_identities_under_a_clean_filter() {
+    let repository = repository();
+    let root = repository.path();
+    git(root, &["config", "filter.canonical.clean", "tr a-z A-Z"]);
+    fs::write(
+        root.join(".gitattributes"),
+        "gen/out.txt filter=canonical\n",
+    )
+    .expect("attributes");
+    fs::create_dir_all(root.join("gen")).expect("generated directory");
+    fs::write(root.join("gen/out.txt"), "lower\n").expect("generated output");
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\ninventory:\n  generated:\n    - files: [\"gen/out.txt\"]\n      producer: \"mkdir -p gen && printf 'lower\\\\n' > gen/out.txt\"\n      reproducible: true\n",
+    )
+    .expect("manifest");
+    git(
+        root,
+        &[
+            "add",
+            ".gitattributes",
+            "gen/out.txt",
+            "warrant/warrant.yaml",
+        ],
+    );
+    commit(root, "filtered generated output");
+    assert_eq!(
+        git(root, &["cat-file", "blob", "HEAD:gen/out.txt"]),
+        "LOWER",
+        "the captured blob must hold the clean-filtered bytes"
+    );
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(root, cache.path(), &["inventory", "--verify-generated"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("inventory document");
+    assert_eq!(
+        document["summary"]["generated_drift"],
+        serde_json::json!([])
+    );
+}
+
+/// B26: a symlink output is a blob of its target path, as Git stores it; a producer that
+/// recreates the link reproduces that blob.
+#[cfg(unix)]
+#[test]
+fn verify_generated_hashes_symlink_outputs_by_target_path() {
+    let repository = repository();
+    let root = repository.path();
+    fs::create_dir_all(root.join("gen")).expect("generated directory");
+    fs::write(root.join("gen/target.txt"), "target contents\n").expect("link target");
+    std::os::unix::fs::symlink("target.txt", root.join("gen/link")).expect("generated link");
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\ninventory:\n  generated:\n    - files: [\"gen/link\"]\n      producer: \"mkdir -p gen && ln -s target.txt gen/link\"\n      reproducible: true\n",
+    )
+    .expect("manifest");
+    git(
+        root,
+        &["add", "gen/target.txt", "gen/link", "warrant/warrant.yaml"],
+    );
+    commit(root, "generated link");
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(root, cache.path(), &["inventory", "--verify-generated"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("inventory document");
+    assert_eq!(
+        document["summary"]["generated_drift"],
+        serde_json::json!([])
+    );
+}
+
 /// Without `--verify-generated` no producer ran, so drift is unknown (null), not none.
 #[cfg(unix)]
 #[test]

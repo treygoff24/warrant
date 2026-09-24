@@ -59,7 +59,15 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
             .map_err(inventory_error)?;
             if args.verify_generated {
                 let mode = |path: &str| captured.mode(path).map(str::to_owned);
-                let issues = warrant_inventory::verify_generated(view, &mode, &manifest)
+                let hash = |path: &str, bytes: &[u8]| {
+                    captured
+                        .blob_id(path, bytes)
+                        .map_err(|error| warrant_inventory::ReadError {
+                            code: error.document.code,
+                            reason: error.document.reason,
+                        })
+                };
+                let issues = warrant_inventory::verify_generated(view, &mode, &hash, &manifest)
                     .map_err(inventory_error)?;
                 // Verification adds drift and the absences discovery could not see.
                 warrant_inventory::record_verification(&mut built.document.summary, issues)

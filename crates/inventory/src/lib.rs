@@ -573,6 +573,11 @@ pub fn discover_units(root: &Path) -> Result<Vec<Unit>, InventoryError> {
 /// A captured path's Git mode (`100644`, `100755`, `120000`), as the snapshot recorded it.
 pub type ModeOf<'a> = &'a dyn Fn(&str) -> Option<String>;
 
+/// The prefixed blob id (`sha1:<oid>`) Git assigns `bytes` at a captured path, under the
+/// repository's attributes and the path's captured mode. The CLI supplies it, so this
+/// crate keeps no Git dependency.
+pub type HashOf<'a> = &'a dyn Fn(&str, &[u8]) -> Result<String, ReadError>;
+
 /// Spec 5.3: re-run each reproducible producer over a copy of the captured snapshot and
 /// compare what it writes with the captured bytes. The copy is the snapshot's readable,
 /// non-ignored entries in their captured bytes and modes, never the disk tree: ignored
@@ -581,6 +586,7 @@ pub type ModeOf<'a> = &'a dyn Fn(&str) -> Option<String>;
 pub fn verify_generated(
     snapshot: CapturedSnapshot<'_>,
     mode: ModeOf<'_>,
+    hash: HashOf<'_>,
     manifest: &WarrantManifest,
 ) -> Result<Vec<GeneratedIssue>, InventoryError> {
     let declarations = compile_generated(manifest)?;
@@ -660,9 +666,7 @@ pub fn verify_generated(
             let code = if !present.contains(path.as_str()) {
                 Some(GeneratedIssueCode::GeneratedAbsent)
             } else if !(reproduced.is_file() || reproduced.is_symlink())
-                // A refused read (an oversize or external-symlink output) is an error,
-                // never a silent pass.
-                || digest_bytes(&read_captured(snapshot.read, &path)?) != blob_id(&reproduced)?
+                || captured_blob(snapshot, &path)? != reproduced_blob(hash, &path, &reproduced)?
             {
                 Some(GeneratedIssueCode::GeneratedDrift)
             } else {
@@ -1165,14 +1169,34 @@ fn prefixed_git_oid(blob: &Option<String>) -> Result<Option<String>, InventoryEr
     Ok(Some(format!("{algorithm}:{oid}")))
 }
 
-fn blob_id(path: &Path) -> Result<String, InventoryError> {
-    let bytes = if path.is_symlink() {
-        fs::read_link(path).map(|target| target.to_string_lossy().into_owned().into_bytes())
+/// The captured output's Git blob id. A refused read (an oversize or external-symlink
+/// output) is an error, never a silent pass.
+fn captured_blob(snapshot: CapturedSnapshot<'_>, path: &str) -> Result<String, InventoryError> {
+    read_captured(snapshot.read, path)?;
+    let blob = snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.path == path)
+        .and_then(|entry| entry.blob.clone());
+    prefixed_git_oid(&blob)?.ok_or_else(|| InventoryError::InvalidDeclaration {
+        reason: format!("captured output `{path}` has no blob"),
+    })
+}
+
+/// The blob id Git would assign the reproduced output at `path`; a symlink hashes its
+/// target path, as Git stores it.
+fn reproduced_blob(hash: HashOf<'_>, path: &str, file: &Path) -> Result<String, InventoryError> {
+    let bytes = if file.is_symlink() {
+        fs::read_link(file).map(|target| target.to_string_lossy().into_owned().into_bytes())
     } else {
-        fs::read(path)
+        fs::read(file)
     }
     .map_err(|error| io_error(path, error))?;
-    Ok(digest_bytes(&bytes))
+    hash(path, &bytes).map_err(|error| InventoryError::Read {
+        path: path.into(),
+        code: error.code,
+        reason: error.reason,
+    })
 }
 
 fn digest_bytes(bytes: &[u8]) -> String {

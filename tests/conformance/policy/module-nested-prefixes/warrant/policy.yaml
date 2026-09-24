@@ -1,0 +1,20 @@
+schema_version: warrant.policy/1
+contracts:
+  - id: module.one
+    kind: module
+    intent: First owner.
+    owner: trey
+    authority: draft
+    files: ["src/**"]
+    interface: { entry: src/shared/index.ts, exports: [] }
+    enforcement: static
+    limits: Ownership is declared.
+  - id: module.two
+    kind: module
+    intent: Conflicting owner.
+    owner: trey
+    authority: draft
+    files: ["src/actions/**"]
+    interface: { entry: src/shared/other.ts, exports: [] }
+    enforcement: static
+    limits: Ownership is declared.

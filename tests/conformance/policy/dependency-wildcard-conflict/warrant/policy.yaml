@@ -1,0 +1,20 @@
+schema_version: warrant.policy/1
+contracts:
+  - id: dep.allow
+    kind: dependency
+    intent: Allow an edge.
+    owner: trey
+    authority: draft
+    from: { modules: ["core.*"] }
+    allow: { packages: [react] }
+    enforcement: static
+    limits: Resolved edges.
+  - id: dep.deny
+    kind: dependency
+    intent: Deny the same edge.
+    owner: trey
+    authority: draft
+    from: { modules: [core.actions] }
+    deny: { packages: [react] }
+    enforcement: static
+    limits: Resolved edges.

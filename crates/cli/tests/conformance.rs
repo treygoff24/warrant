@@ -183,6 +183,9 @@ mod policy_conformance {
     }
 
     cases! {
+        module_sibling_prefixes => "module-sibling-prefixes",
+        module_nested_prefixes => "module-nested-prefixes",
+        dependency_wildcard_conflict => "dependency-wildcard-conflict",
         digest_stability => "digest-stability",
         enforcement_unsupported => "enforcement-unsupported",
         structural_conflict => "structural-conflict",

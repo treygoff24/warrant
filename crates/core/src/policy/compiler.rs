@@ -346,7 +346,7 @@ fn lint_module_conflicts(contracts: &[EffectiveContract], issues: &mut Vec<LintI
                 right_module
                     .files
                     .iter()
-                    .any(|right_pattern| patterns_overlap(left_pattern, right_pattern))
+                    .any(|right_pattern| file_selectors_overlap(left_pattern, right_pattern))
             }) {
                 issues.push(issue(
                     "module-files-conflict",
@@ -370,6 +370,7 @@ fn lint_dependency_conflicts(contracts: &[EffectiveContract], issues: &mut Vec<L
             if !selector_sets_overlap(
                 &left_dependency.from.modules,
                 &right_dependency.from.modules,
+                module_selectors_overlap,
             ) || overrides(left, right)
             {
                 continue;
@@ -554,30 +555,61 @@ fn overrides(left: &EffectiveContract, right: &EffectiveContract) -> bool {
 }
 
 fn targets_overlap(left: &DependencyTargets, right: &DependencyTargets) -> bool {
-    selector_sets_overlap(&left.modules, &right.modules)
-        || selector_sets_overlap(&left.packages, &right.packages)
+    selector_sets_overlap(&left.modules, &right.modules, module_selectors_overlap)
+        || selector_sets_overlap(&left.packages, &right.packages, package_selectors_overlap)
 }
 
-fn selector_sets_overlap(left: &BTreeSet<String>, right: &BTreeSet<String>) -> bool {
+fn selector_sets_overlap(
+    left: &BTreeSet<String>,
+    right: &BTreeSet<String>,
+    overlaps: fn(&str, &str) -> bool,
+) -> bool {
     left.iter().any(|left_item| {
         right
             .iter()
-            .any(|right_item| patterns_overlap(left_item, right_item))
+            .any(|right_item| overlaps(left_item, right_item))
     })
 }
 
-fn patterns_overlap(left: &str, right: &str) -> bool {
+fn segment_prefix(value: &str, prefix: &str, separator: char) -> bool {
+    value == prefix
+        || value
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with(separator))
+}
+
+fn file_selectors_overlap(left: &str, right: &str) -> bool {
     if left == right {
         return true;
     }
     match (left.strip_suffix("/**"), right.strip_suffix("/**")) {
         (Some(left_prefix), Some(right_prefix)) => {
-            left_prefix.starts_with(right_prefix) || right_prefix.starts_with(left_prefix)
+            segment_prefix(left_prefix, right_prefix, '/')
+                || segment_prefix(right_prefix, left_prefix, '/')
         }
-        (Some(prefix), None) => right.starts_with(prefix),
-        (None, Some(prefix)) => left.starts_with(prefix),
+        (Some(prefix), None) => segment_prefix(right, prefix, '/'),
+        (None, Some(prefix)) => segment_prefix(left, prefix, '/'),
         (None, None) => false,
     }
+}
+
+fn module_selectors_overlap(left: &str, right: &str) -> bool {
+    let matches = |pattern: &str, value: &str| {
+        pattern.strip_suffix('*').is_some_and(|prefix| {
+            prefix.is_empty() || segment_prefix(value, prefix.trim_end_matches('.'), '.')
+        })
+    };
+    left == right || matches(left, right) || matches(right, left)
+}
+
+fn package_selectors_overlap(left: &str, right: &str) -> bool {
+    left == right
+        || left
+            .strip_suffix('*')
+            .is_some_and(|prefix| right.starts_with(prefix))
+        || right
+            .strip_suffix('*')
+            .is_some_and(|prefix| left.starts_with(prefix))
 }
 
 fn issue<I, S>(code: &str, contracts: I, reason: String) -> LintIssue

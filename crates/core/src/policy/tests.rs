@@ -534,3 +534,83 @@ contracts:
     enforcement: static
     limits: Declared exports.
 "#;
+
+#[test]
+fn policy_file_overlap_respects_segment_boundaries() {
+    for (left, right, conflict) in [
+        ("src/auth/**", "src/authz/**", false),
+        ("src/auth/**", "src/authz/file.ts", false),
+        ("src/**", "src/actions/**", true),
+        ("src/auth/**", "src/auth/file.ts", true),
+        ("src/auth/**", "src/auth", true),
+    ] {
+        for (left, right) in [(left, right), (right, left)] {
+            let first = MODULE.replace("src/actions/**", left);
+            let second = MODULE
+                .replace("core.actions", "other")
+                .replace("src/actions/**", right);
+            let result = compile_at(
+                &[
+                    PolicySource::new("a.yaml", &first),
+                    PolicySource::new("b.yaml", &second),
+                ],
+                fixed_now(),
+            );
+            if conflict {
+                assert_issue(
+                    &result.expect_err("overlapping file selectors"),
+                    "module-files-conflict",
+                );
+            } else {
+                result.expect("disjoint file selectors compile");
+            }
+        }
+    }
+}
+
+#[test]
+fn policy_dependency_overlap_expands_typed_wildcards() {
+    let fixture =
+        fs::read_to_string(fixture_root().join("dependency-conflict/warrant/policy.yaml"))
+            .expect("fixture");
+    for (left, right, conflict) in [
+        ("core.*", "core.actions", true),
+        ("core.*", "core.actions.*", true),
+        ("*", "core.actions", true),
+        ("core.*", "corex.actions", false),
+    ] {
+        for (left, right) in [(left, right), (right, left)] {
+            let yaml = fixture
+                .replacen("[module.one]", &format!("[\"{left}\"]"), 1)
+                .replace("[module.one]", &format!("[\"{right}\"]"));
+            let result = compile_one(&yaml);
+            if conflict {
+                assert_issue(
+                    &result.expect_err("overlapping dependency selectors"),
+                    "dependency-conflict",
+                );
+            } else {
+                result.expect("disjoint module selectors compile");
+            }
+        }
+    }
+    for (left, right, conflict) in [
+        ("@dbos-inc/*", "@dbos-inc/sdk", true),
+        ("@dbos-inc/*", "@dbos-other/sdk", false),
+    ] {
+        for (left, right) in [(left, right), (right, left)] {
+            let yaml = fixture
+                .replacen("[react]", &format!("[\"{left}\"]"), 1)
+                .replace("[react]", &format!("[\"{right}\"]"));
+            let result = compile_one(&yaml);
+            if conflict {
+                assert_issue(
+                    &result.expect_err("overlapping package selectors"),
+                    "dependency-conflict",
+                );
+            } else {
+                result.expect("disjoint package selectors compile");
+            }
+        }
+    }
+}

@@ -51,6 +51,24 @@ pub(crate) fn capture(repo: &Path, config: &SnapshotConfig) -> Result<Snapshot, 
             entry.reason = "undeclared-nested-repository".into();
         }
     }
+    for path in captured.unborn {
+        snapshot.manifest.excluded.submodules += 1;
+        snapshot.modes.insert(path.clone(), "160000".into());
+        snapshot.entries.push(InventoryEntry {
+            path,
+            blob: None,
+            class: InventoryClass::Submodule,
+            language: None,
+            unit: None,
+            module: None,
+            by: "snapshot".into(),
+            reason: "undeclared-nested-repository".into(),
+            entrypoints: Vec::new(),
+            unread: Some("submodule-not-descended".into()),
+            generated_by: None,
+            vendored_from: None,
+        });
+    }
     snapshot.object_paths = captured.carried;
     snapshot.file_mode = file_mode;
     snapshot.manifest.kind = SnapshotKind::Worktree;
@@ -88,6 +106,7 @@ pub(crate) struct CapturedTree {
     carried: BTreeSet<String>,
     oversize: BTreeSet<String>,
     undeclared: BTreeSet<String>,
+    unborn: BTreeSet<String>,
     kind: &'static str,
 }
 
@@ -122,6 +141,7 @@ pub(crate) fn tree(
             carried: BTreeSet::new(),
             oversize: BTreeSet::new(),
             undeclared: BTreeSet::new(),
+            unborn: BTreeSet::new(),
             kind: "native-worktree",
         }),
         None => portable(repo, file_mode, config),
@@ -141,6 +161,7 @@ fn portable(
     let mut carried = BTreeSet::new();
     let mut oversize = BTreeSet::new();
     let mut undeclared = BTreeSet::new();
+    let mut unborn = BTreeSet::new();
     for record in tracked.split(|b| *b == 0).filter(|r| !r.is_empty()) {
         let record = std::str::from_utf8(record)
             .map_err(|_| SnapshotError::new("unsupported-path", "non-UTF-8 path"))?;
@@ -197,10 +218,26 @@ fn portable(
                 }
                 None if submodule.join(".git").try_exists()? => {
                     undeclared.insert(path.clone());
-                    (
-                        "160000".into(),
-                        git::text(&submodule, &["rev-parse", "--verify", "HEAD"], None)?,
-                    )
+                    let oid = match git::text(&submodule, &["rev-parse", "--verify", "HEAD"], None)
+                    {
+                        Ok(oid) => oid,
+                        Err(error) => {
+                            // Only a symbolic HEAD with no matching ref is unborn.
+                            // Other repository failures must still fail capture.
+                            let reference = git::text(&submodule, &["symbolic-ref", "HEAD"], None)?;
+                            let refs = git::text(
+                                &submodule,
+                                &["for-each-ref", "--format=%(refname)", &reference],
+                                None,
+                            )?;
+                            if refs.lines().any(|name| name == reference) {
+                                return Err(error);
+                            }
+                            unborn.insert(path.clone());
+                            continue;
+                        }
+                    };
+                    ("160000".into(), oid)
                 }
                 _ => continue,
             }
@@ -258,6 +295,7 @@ fn portable(
         carried,
         oversize,
         undeclared,
+        unborn,
         kind: "temporary-index",
     })
 }

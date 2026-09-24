@@ -1239,3 +1239,68 @@ fn fixture_git_ignores_ambient_global_excludes() {
         "fixture Git must stage TypeScript files despite ambient global excludes"
     );
 }
+
+#[test]
+fn unborn_nested_repository_is_recorded_without_descending() {
+    let dir = repo();
+    let nested = dir.path().join("vendor/nested");
+    fs::create_dir_all(&nested).unwrap();
+    git(&nested, &["init", "-q"]);
+    fs::write(nested.join("file"), "uncommitted nested content\n").unwrap();
+    let untracked = git(
+        dir.path(),
+        &["status", "--porcelain", "--untracked-files=all"],
+    );
+    let temporary = tempfile::tempdir().unwrap();
+    let index = temporary.path().join("index");
+    git::run(dir.path(), &["read-tree", "HEAD"], Some(&index), None).unwrap();
+    let refused = git::run(dir.path(), &["add", "-A"], Some(&index), None).unwrap_err();
+    let captured = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |s| {
+            Ok(s.entries()
+                .iter()
+                .filter(|entry| entry.path.starts_with("vendor/nested"))
+                .map(|entry| {
+                    (
+                        entry.path.clone(),
+                        entry.blob.clone(),
+                        entry.class,
+                        entry.reason.clone(),
+                        entry.unread.clone(),
+                    )
+                })
+                .collect::<Vec<_>>())
+        },
+    )
+    .map(|(manifest, entries)| (manifest.excluded.submodules, entries))
+    .map_err(|error| error.to_string());
+    assert_eq!(
+        (
+            untracked.as_str(),
+            refused
+                .document
+                .reason
+                .contains("does not have a commit checked out"),
+            captured
+        ),
+        (
+            "?? vendor/nested/",
+            true,
+            Ok((
+                1,
+                vec![(
+                    "vendor/nested".into(),
+                    None,
+                    InventoryClass::Submodule,
+                    "undeclared-nested-repository".into(),
+                    Some("submodule-not-descended".into())
+                )]
+            ))
+        ),
+        "an unborn nested repository must be recorded without a blob or descendant entries even though Git refuses staging"
+    );
+}

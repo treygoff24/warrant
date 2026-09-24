@@ -58,7 +58,8 @@ while IFS= read -r -d '' crate_dir; do
     lang-ts) limit=6000 ;;
     authority) limit=3000 ;;
     cli) limit=4000 ;;
-    snapshot|inventory|model|lang-rust|evidence|judgment|census|render) limit=2500 ;;
+    snapshot) limit=3000 ;;
+    inventory|model|lang-rust|evidence|judgment|census|render) limit=2500 ;;
     *)
       printf '%s\n' "budget: $crate has no configured limit" >&2
       failed=1

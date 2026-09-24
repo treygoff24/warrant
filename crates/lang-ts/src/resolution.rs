@@ -283,7 +283,7 @@ fn legacy_typescript(path: &Path, packages: &BTreeMap<PathBuf, serde_json::Value
             });
         if let Some(version) = installed.or(declared) {
             return version
-                .trim_start_matches(['^', '~'])
+                .trim_start_matches(['>', '<', '=', 'v', '^', '~'])
                 .split('.')
                 .next()
                 .and_then(|major| major.parse::<u64>().ok())

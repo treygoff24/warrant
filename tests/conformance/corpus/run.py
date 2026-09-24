@@ -21,7 +21,7 @@ def redact_paths(message, corpus_dir):
     return message
 
 
-def run(args, cwd=ROOT, env=None, *, public=False, corpus_dir=None):
+def run(args, cwd=ROOT, env=None, *, public=False, corpus_dir=None, index_file=None):
     environment = dict(
         os.environ if env is None else env,
         GIT_CONFIG_NOSYSTEM="1",
@@ -36,6 +36,8 @@ def run(args, cwd=ROOT, env=None, *, public=False, corpus_dir=None):
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     ):
         environment.pop(key, None)
+    if index_file is not None:
+        environment["GIT_INDEX_FILE"] = str(index_file)
     result = subprocess.run(
         args,
         cwd=cwd,
@@ -108,6 +110,22 @@ def observe(binary, member, corpus_dir, destination):
             snapshots[kind] = {
                 key: document[key] for key in ("schema_version", "kind", "excluded")
             }
+        with tempfile.TemporaryDirectory(prefix="warrant-corpus-index-") as temporary_index:
+            index_file = Path(temporary_index) / "index"
+            # Git must retain tracked files even when an ignore rule now matches them.
+            run(["git", "read-tree", "HEAD"], destination, public=public, corpus_dir=corpus_dir, index_file=index_file)
+            run(["git", "add", "-A"], destination, public=public, corpus_dir=corpus_dir, index_file=index_file)
+            worktree_tree = "sha1:" + run(
+                ["git", "write-tree"],
+                destination,
+                public=public,
+                corpus_dir=corpus_dir,
+                index_file=index_file,
+            )
+        document = json.loads(
+            run([binary, "snapshot", "--worktree"], destination, environment, public=public, corpus_dir=corpus_dir)
+        )
+        assert document["tree"] == worktree_tree, "worktree snapshot differs from Git staged worktree"
         manifest = destination / "warrant/warrant.yaml"
         assert not manifest.exists(), "corpus already carries Warrant configuration"
         manifest.parent.mkdir(exist_ok=True)

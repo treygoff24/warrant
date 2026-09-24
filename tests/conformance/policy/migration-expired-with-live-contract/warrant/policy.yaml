@@ -1,0 +1,23 @@
+schema_version: warrant.policy/1
+contracts:
+  - id: module.live
+    kind: module
+    intent: The live owner.
+    owner: trey
+    authority: draft
+    files: ["src/live/**"]
+    interface: { entry: src/live/index.ts, exports: [run] }
+    class: invariant
+    enforcement: static
+    limits: Declared ownership.
+  - id: module.expired
+    kind: module
+    intent: A temporary owner.
+    owner: trey
+    authority: draft
+    files: ["src/legacy/**"]
+    interface: { entry: src/legacy/index.ts, exports: [run] }
+    class: migration
+    expires: 2000-01-01T00:00:00Z
+    enforcement: static
+    limits: Declared ownership.

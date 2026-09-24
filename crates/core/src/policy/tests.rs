@@ -199,6 +199,78 @@ contracts:
 }
 
 #[test]
+fn expired_migration_is_reported_and_stops_applying_under_a_stable_digest() {
+    let yaml = r#"
+schema_version: warrant.policy/1
+contracts:
+  - id: core.actions
+    kind: module
+    intent: The dispatcher owns actions.
+    owner: trey
+    authority: draft
+    files: ["src/actions/**"]
+    interface: { entry: src/actions/index.ts, exports: [run] }
+    enforcement: static
+    limits: Ownership is declared.
+  - id: temporary.rule
+    kind: pattern
+    intent: A temporary structural rule.
+    owner: trey
+    authority: draft
+    class: migration
+    expires: 2026-09-24T00:00:00Z
+    scope: { modules: [core.actions] }
+    rule: { pattern: "x()" }
+    enforcement: pattern
+    limits: Syntactic.
+"#;
+    let sources = [PolicySource::new("policy.yaml", yaml)];
+    let before = compile_at(&sources, "2026-09-23T23:59:59Z".parse().expect("timestamp"))
+        .expect("an unexpired migration compiles");
+    let after = compile_at(&sources, fixed_now()).expect("an expired migration still compiles");
+
+    assert_eq!(
+        before.policy_digest, after.policy_digest,
+        "digest is clock-independent"
+    );
+    assert!(before.reports.is_empty(), "{:?}", before.reports);
+    assert_eq!(before.contracts.len(), 2);
+    assert_eq!(
+        after
+            .contracts
+            .iter()
+            .map(|contract| contract.id.as_str())
+            .collect::<Vec<_>>(),
+        ["core.actions"],
+        "the expired migration stops applying"
+    );
+    assert_eq!(after.reports.len(), 1, "{:?}", after.reports);
+    assert_eq!(after.reports[0].code, "expired-contract");
+    assert_eq!(after.reports[0].contracts, ["temporary.rule"]);
+}
+
+#[test]
+fn migration_without_expiry_still_fails_compilation() {
+    let yaml = r#"
+schema_version: warrant.policy/1
+contracts:
+  - id: temporary.rule
+    kind: pattern
+    intent: A temporary structural rule.
+    owner: trey
+    authority: draft
+    class: migration
+    scope: { modules: [core.actions] }
+    rule: { pattern: "x()" }
+    enforcement: pattern
+    limits: Syntactic.
+"#;
+    let error = compile_one(yaml).expect_err("a migration needs an expiry");
+    assert_issue(&error, "migration-missing-expiry");
+    assert_eq!(error.code(), "policy-lint");
+}
+
+#[test]
 fn structural_conflict_classes_compile_without_a_snapshot() {
     let error = compile_one(CONFLICTS).expect_err("structural conflicts must fail");
     let codes: Vec<_> = error

@@ -436,6 +436,10 @@ pub struct EffectivePolicy {
     pub policy_digest: String,
     pub contracts: Vec<EffectiveContract>,
     pub declarations: Declarations,
+    /// Non-fatal structural reports: `expired-contract` for each migration past its
+    /// expiry. The reported contracts are absent from `contracts`; not a digest input.
+    #[serde(default)]
+    pub reports: Vec<LintIssue>,
     pub sources: Vec<PolicySourceRecord>,
 }
 

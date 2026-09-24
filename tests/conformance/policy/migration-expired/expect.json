@@ -1,7 +1,7 @@
 {
-  "exit_code": 2,
-  "error": {
-    "code": "expired-contract",
-    "reason_contains": "expired-contract"
-  }
+  "exit_code": 0,
+  "contract_ids": [],
+  "reports": [
+    { "code": "expired-contract", "contracts": ["module.one"] }
+  ]
 }

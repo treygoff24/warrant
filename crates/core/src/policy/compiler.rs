@@ -11,6 +11,8 @@ use super::types::{
     LintIssue, POLICY_SCHEMA, PolicyContract, PolicyDocument, PolicySourceRecord,
 };
 
+const EXPIRED_CONTRACT: &str = "expired-contract";
+
 #[derive(Clone, Copy, Debug)]
 pub struct PolicySource<'a> {
     pub path: &'a str,
@@ -42,7 +44,6 @@ impl PolicyError {
             Self::SchemaVersion { .. } => "unsupported-policy-version",
             Self::Lint { issues } => match issues.first() {
                 Some(issue) if issue.code == "enforcement-unsupported" => "enforcement-unsupported",
-                Some(issue) if issue.code == "expired-contract" => "expired-contract",
                 _ => "policy-lint",
             },
             Self::Canonical(_) => "policy-canonicalization",
@@ -69,6 +70,11 @@ pub fn compile_at(
     let (mut contracts, mut issues) = expand(contracts);
     issues.extend(lint_effective(&contracts, &declarations, now));
     sort_issues(&mut issues);
+    // Spec 7.6: an expired migration still present is reported and stops applying;
+    // it does not abort compilation. Every other structural issue stays fatal.
+    let (reports, issues): (Vec<_>, Vec<_>) = issues
+        .into_iter()
+        .partition(|issue| issue.code == EXPIRED_CONTRACT);
     if !issues.is_empty() {
         return Err(PolicyError::Lint { issues });
     }
@@ -77,12 +83,20 @@ pub fn compile_at(
     let mut declarations = declarations;
     declarations.sort();
     source_records.sort_by(|left, right| left.path.cmp(&right.path));
+    // The digest covers the declared contracts, expired ones included, so it does not
+    // change on a clock tick with no policy edit (rulings bind to it, spec section 11).
     let policy_digest = semantic_digest(&contracts, &declarations)?;
+    let expired: BTreeSet<&str> = reports
+        .iter()
+        .flat_map(|report| report.contracts.iter().map(String::as_str))
+        .collect();
+    contracts.retain(|contract| !expired.contains(contract.id.as_str()));
     Ok(EffectivePolicy {
         schema_version: EFFECTIVE_POLICY_SCHEMA.into(),
         policy_digest,
         contracts,
         declarations,
+        reports,
         sources: source_records,
     })
 }
@@ -286,7 +300,7 @@ fn lint_migration(contract: &EffectiveContract, now: Timestamp, issues: &mut Vec
     };
     match expires.parse::<Timestamp>() {
         Ok(expiry) if expiry <= now => issues.push(issue(
-            "expired-contract",
+            EXPIRED_CONTRACT,
             [&contract.id],
             format!("migration expired at {expiry}"),
         )),

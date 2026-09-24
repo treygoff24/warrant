@@ -15,6 +15,7 @@ use warrant_core::{
 pub(crate) fn capture(repo: &Path, config: &SnapshotConfig) -> Result<Snapshot, SnapshotError> {
     git::check_index(repo)?;
     let root = PathBuf::from(git::text(repo, &["rev-parse", "--show-toplevel"], None)?);
+    let configured_ignores = configured_ignores(&root)?;
     let ignored = paths(&git::run(
         &root,
         &[
@@ -51,7 +52,12 @@ pub(crate) fn capture(repo: &Path, config: &SnapshotConfig) -> Result<Snapshot, 
     snapshot.manifest.capture.kind = captured.kind.into();
     snapshot.manifest.excluded.ignored_files = Some(ignored.len() as u64);
     snapshot.manifest.excluded.ignored_count_reason = None;
-    snapshot.manifest.capture.manifest_digest = Some(ignore_digest(&root, &snapshot, &ignored)?);
+    snapshot.manifest.capture.manifest_digest = Some(ignore_digest(
+        &root,
+        &snapshot,
+        &ignored,
+        &configured_ignores,
+    )?);
     for path in ignored {
         snapshot.entries.push(InventoryEntry {
             path,
@@ -248,7 +254,7 @@ pub(crate) fn read_bytes(
     })
 }
 
-/// All source-byte reads, including symlink payloads and ignore inputs, pass here.
+/// Source-byte reads, including symlink payloads and repository ignore inputs, pass here.
 /// Symlink payloads are read without following them; non-directory ancestors fail closed.
 fn read<T>(
     repo: &Path,
@@ -312,6 +318,7 @@ fn ignore_digest(
     repo: &Path,
     snapshot: &Snapshot,
     ignored: &BTreeSet<String>,
+    configured_ignores: &[(&str, Vec<u8>)],
 ) -> Result<String, SnapshotError> {
     let mut digest = Sha256::new();
     hash_field(&mut digest, snapshot.manifest.tree.as_bytes());
@@ -336,6 +343,22 @@ fn ignore_digest(
             hash_field(&mut digest, &bytes);
         }
     }
+    for (label, bytes) in configured_ignores {
+        hash_field(&mut digest, label.as_bytes());
+        hash_field(&mut digest, bytes);
+    }
+    for path in ignored {
+        hash_field(&mut digest, path.as_bytes());
+    }
+    let hex: String = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Ok(format!("sha256:{hex}"))
+}
+fn configured_ignores(repo: &Path) -> Result<Vec<(&'static str, Vec<u8>)>, SnapshotError> {
+    let mut inputs = Vec::new();
     let exclude = git::text(
         repo,
         &[
@@ -370,32 +393,36 @@ fn ignore_digest(
             } else {
                 repo.join(path)
             };
-            if path.exists() {
-                // Git follows explicitly configured ignore files, unlike source symlinks.
-                let path = fs::canonicalize(path)?;
-                let parent = path
-                    .parent()
-                    .ok_or_else(|| SnapshotError::new("unsupported-path", label))?;
-                let name = path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .ok_or_else(|| SnapshotError::new("unsupported-path", label))?;
-                let (_, bytes) = read_bytes(parent, name, None)?;
-                hash_field(&mut digest, label.as_bytes());
-                hash_field(&mut digest, &bytes);
+            let mut file = match fs::File::open(&path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(ignore_error(label, &path, error)),
+            };
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)
+                .map_err(|error| ignore_error(label, &path, error))?;
+            // Preserve regular-file digests; an empty device such as /dev/null
+            // contributes nothing, just like an absent configured file.
+            if !bytes.is_empty()
+                || file
+                    .metadata()
+                    .map_err(|error| ignore_error(label, &path, error))?
+                    .is_file()
+            {
+                inputs.push((label, bytes));
             }
         }
     }
-    for path in ignored {
-        hash_field(&mut digest, path.as_bytes());
-    }
-    let hex: String = digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    Ok(format!("sha256:{hex}"))
+    Ok(inputs)
 }
+
+fn ignore_error(label: &str, path: &Path, error: std::io::Error) -> SnapshotError {
+    SnapshotError::new(
+        "snapshot-io",
+        format!("{label} {}: {error}", path.display()),
+    )
+}
+
 fn hash_field(digest: &mut Sha256, bytes: &[u8]) {
     digest.update((bytes.len() as u64).to_be_bytes());
     digest.update(bytes);

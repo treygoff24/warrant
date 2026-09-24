@@ -518,6 +518,72 @@ fn ignore_configuration_digest_changes_even_when_tree_and_exclusions_do_not() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn null_excludes_file_matches_absent_configuration() {
+    let dir = repo();
+    let manifest = || {
+        capture(
+            dir.path(),
+            SnapshotKind::Worktree,
+            None,
+            &SnapshotConfig::default(),
+            |_| Ok(()),
+        )
+        .map(|(m, ())| {
+            (
+                m.schema_version,
+                m.repo,
+                m.kind,
+                m.tree,
+                m.object_format,
+                m.commit,
+                m.capture,
+                m.excluded,
+            )
+        })
+        .map_err(|error| error.to_string())
+    };
+    let absent = manifest().unwrap();
+    git(dir.path(), &["config", "core.excludesFile", "/dev/null"]);
+    assert_eq!(
+        manifest(),
+        Ok(absent),
+        "null excludes must match the absent manifest except taken_at"
+    );
+}
+
+#[test]
+fn directory_excludes_file_names_configuration_and_path() {
+    let dir = repo();
+    let excludes = tempfile::tempdir().unwrap();
+    git(
+        dir.path(),
+        &[
+            "config",
+            "core.excludesFile",
+            excludes.path().to_str().unwrap(),
+        ],
+    );
+    let error = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |_| Ok(()),
+    )
+    .unwrap_err();
+    assert!(
+        error.document.code == "snapshot-io"
+            && error.document.reason.contains("core.excludesFile")
+            && error
+                .document
+                .reason
+                .contains(excludes.path().to_str().unwrap()),
+        "unreadable excludes must name core.excludesFile and its path: {error}"
+    );
+}
+
 #[test]
 fn shallow_history_cannot_claim_a_repository_root_identity() {
     let dir = repo();

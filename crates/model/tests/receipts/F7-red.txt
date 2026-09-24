@@ -1,0 +1,83 @@
+W1.1-F7: pre-fix direct consumers only; cargo test --locked -p warrant-model
+exit: 101
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 13 tests
+test byte_cap_sets_truncated_and_continuation ... ok
+test consumers_follow_reexport_bindings_and_preserve_any_reexport_route ... FAILED
+test materialized_views_contain_edges_consumers_cycles_and_unowned_files ... ok
+test every_table_preserves_written_column_values ... ok
+test row_cap_sets_truncated_and_continuation ... ok
+test authorizer_rejects_every_named_write_statement_kind ... ok
+test first_row_exceeding_byte_cap_errors_without_a_continuation ... ok
+test schema_contains_every_table_and_view ... ok
+test conflicting_capabilities_are_rejected_in_both_orders ... ok
+test digest_preserves_scalar_meta_bytes ... ok
+test digest_includes_meta_keys_ending_in_at_without_an_underscore ... ok
+test repeated_capabilities_are_order_independent ... ok
+test digest_is_stable_across_insertion_order_and_timestamps ... ok
+
+failures:
+
+---- consumers_follow_reexport_bindings_and_preserve_any_reexport_route stdout ----
+
+thread 'consumers_follow_reexport_bindings_and_preserve_any_reexport_route' (856821) panicked at crates/model/tests/store.rs:631:9:
+assertion `left == right` failed
+  left: Array [Array [Number(20), Number(11), Number(1)], Array [Number(20), Number(12), Number(0)], Array [Number(21), Number(12), Number(0)], Array [Number(21), Number(13), Number(0)]]
+ right: Array [Array [Number(20), Number(11), Number(1)], Array [Number(20), Number(12), Number(1)], Array [Number(20), Number(13), Number(1)], Array [Number(21), Number(12), Number(0)], Array [Number(21), Number(13), Number(0)]]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    consumers_follow_reexport_bindings_and_preserve_any_reexport_route
+
+test result: FAILED. 12 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+error: test failed, to rerun pass `-p warrant-model --test store`
+
+W1.1-F7: MAX-to-MIN mutation after closure; cargo test --locked -p warrant-model
+exit: 101
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 13 tests
+test first_row_exceeding_byte_cap_errors_without_a_continuation ... ok
+test byte_cap_sets_truncated_and_continuation ... ok
+test row_cap_sets_truncated_and_continuation ... ok
+test consumers_follow_reexport_bindings_and_preserve_any_reexport_route ... FAILED
+test materialized_views_contain_edges_consumers_cycles_and_unowned_files ... ok
+test schema_contains_every_table_and_view ... ok
+test authorizer_rejects_every_named_write_statement_kind ... ok
+test every_table_preserves_written_column_values ... ok
+test conflicting_capabilities_are_rejected_in_both_orders ... ok
+test digest_includes_meta_keys_ending_in_at_without_an_underscore ... ok
+test repeated_capabilities_are_order_independent ... ok
+test digest_preserves_scalar_meta_bytes ... ok
+test digest_is_stable_across_insertion_order_and_timestamps ... ok
+
+failures:
+
+---- consumers_follow_reexport_bindings_and_preserve_any_reexport_route stdout ----
+
+thread 'consumers_follow_reexport_bindings_and_preserve_any_reexport_route' (889074) panicked at crates/model/tests/store.rs:684:9:
+assertion `left == right` failed
+  left: Array [Array [Number(20), Number(11), Number(1)], Array [Number(20), Number(12), Number(0)], Array [Number(20), Number(13), Number(1)], Array [Number(20), Number(14), Number(1)], Array [Number(21), Number(12), Number(0)], Array [Number(21), Number(13), Number(1)], Array [Number(21), Number(14), Number(1)], Array [Number(22), Number(14), Number(0)]]
+ right: Array [Array [Number(20), Number(11), Number(1)], Array [Number(20), Number(12), Number(1)], Array [Number(20), Number(13), Number(1)], Array [Number(20), Number(14), Number(1)], Array [Number(21), Number(12), Number(0)], Array [Number(21), Number(13), Number(1)], Array [Number(21), Number(14), Number(1)], Array [Number(22), Number(14), Number(0)]]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    consumers_follow_reexport_bindings_and_preserve_any_reexport_route
+
+test result: FAILED. 12 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `-p warrant-model --test store`

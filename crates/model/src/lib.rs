@@ -499,10 +499,17 @@ impl ModelBuilder {
                    AND source.module_id != target.module_id
              GROUP BY source.module_id, target.module_id;
              INSERT INTO symbol_consumers(symbol_id, consumer_file, via_reexport_chain)
-             SELECT to_symbol, from_file, MAX(kind = 'reexport')
-             FROM edges
-             WHERE to_symbol IS NOT NULL
-             GROUP BY to_symbol, from_file;",
+             WITH RECURSIVE bindings(origin, binding, via_reexport) AS (
+                 SELECT id, id, 0 FROM symbols
+                 UNION
+                 SELECT bindings.origin, edges.from_symbol, 1
+                 FROM bindings JOIN edges ON edges.to_symbol = bindings.binding
+                 WHERE edges.kind = 'reexport' AND edges.from_symbol IS NOT NULL
+             )
+             SELECT bindings.origin, edges.from_file,
+                    MAX(bindings.via_reexport OR edges.kind = 'reexport')
+             FROM bindings JOIN edges ON edges.to_symbol = bindings.binding
+             GROUP BY bindings.origin, edges.from_file;",
         )?;
 
         let mut graph = DiGraphMap::<i64, ()>::new();

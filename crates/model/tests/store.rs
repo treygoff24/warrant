@@ -596,3 +596,108 @@ fn every_table_preserves_written_column_values() {
         assert_eq!(json!(result.rows), expected, "{sql}");
     }
 }
+
+#[test]
+fn consumers_follow_reexport_bindings_and_preserve_any_reexport_route() {
+    let temp = TempDir::new().unwrap();
+    let mut digests = Vec::new();
+    for reverse in [false, true] {
+        let path = temp.path().join(format!("{reverse}.sqlite"));
+        let mut builder = ModelBuilder::create(&path).unwrap();
+        builder.write_unit(&unit()).unwrap();
+        for id in 10..=14 {
+            builder
+                .write_file(&FileRow {
+                    id,
+                    path: format!("{id}.ts"),
+                    module_id: None,
+                    ..files()[0].clone()
+                })
+                .unwrap();
+        }
+        for (id, file_id, name) in [(20, 10, "origin"), (21, 11, "barrel"), (22, 13, "outer")] {
+            builder
+                .write_symbol(&SymbolRow {
+                    id,
+                    file_id,
+                    name: name.into(),
+                    export_name: Some(name.into()),
+                    ..report(vec![]).symbols[0].clone()
+                })
+                .unwrap();
+        }
+        let mut edges = vec![
+            EdgeRow {
+                id: 30,
+                kind: "reexport".into(),
+                from_file: 11,
+                from_symbol: Some(21),
+                to_file: Some(10),
+                to_symbol: Some(20),
+                ..report(vec![]).edges[0].clone()
+            },
+            EdgeRow {
+                id: 31,
+                from_file: 12,
+                from_symbol: None,
+                to_file: Some(11),
+                to_symbol: Some(21),
+                ..report(vec![]).edges[0].clone()
+            },
+            EdgeRow {
+                id: 32,
+                kind: "reexport".into(),
+                from_file: 13,
+                from_symbol: Some(22),
+                to_file: Some(11),
+                to_symbol: Some(21),
+                ..report(vec![]).edges[0].clone()
+            },
+            // File 12 has both direct and re-export routes; either re-export route must set the flag.
+            EdgeRow {
+                id: 33,
+                from_file: 12,
+                from_symbol: None,
+                to_file: Some(10),
+                to_symbol: Some(20),
+                ..report(vec![]).edges[0].clone()
+            },
+        ];
+        edges.push(EdgeRow {
+            id: 34,
+            from_file: 14,
+            from_symbol: None,
+            to_file: Some(13),
+            to_symbol: Some(22),
+            ..report(vec![]).edges[0].clone()
+        });
+        if reverse {
+            edges.reverse();
+        }
+        for edge in edges {
+            builder.write_edge(&edge).unwrap();
+        }
+        digests.push(builder.finish().unwrap());
+        let store = QueryStore::open(path).unwrap();
+        let result = store
+            .sql(
+                "SELECT * FROM symbol_consumers ORDER BY symbol_id, consumer_file",
+                QueryLimits::default(),
+            )
+            .unwrap();
+        assert_eq!(
+            json!(result.rows),
+            json!([
+                [20, 11, 1],
+                [20, 12, 1],
+                [20, 13, 1],
+                [20, 14, 1],
+                [21, 12, 0],
+                [21, 13, 1],
+                [21, 14, 1],
+                [22, 14, 0]
+            ])
+        );
+    }
+    assert_eq!(digests[0], digests[1]);
+}

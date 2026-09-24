@@ -1,0 +1,1 @@
+A module wildcard and literal select the same dependency edge. Positive: core.* allow and core.actions deny react conflict. Negative: other.actions does not overlap. Break control: compare only literal module names and miss the conflict.

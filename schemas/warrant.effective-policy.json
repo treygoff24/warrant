@@ -15,6 +15,14 @@
     "policy_digest": {
       "type": "string"
     },
+    "reports": {
+      "description": "Non-fatal structural reports: `expired-contract` for each migration past its\nexpiry. The reported contracts are absent from `contracts`; not a digest input.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/LintIssue"
+      }
+    },
     "schema_version": {
       "type": "string"
     },
@@ -582,6 +590,29 @@
       "additionalProperties": false,
       "required": [
         "files"
+      ]
+    },
+    "LintIssue": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "contracts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "contracts",
+        "reason"
       ]
     },
     "LoaderDeclaration": {

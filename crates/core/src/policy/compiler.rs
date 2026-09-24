@@ -11,6 +11,8 @@ use super::types::{
     LintIssue, POLICY_SCHEMA, PolicyContract, PolicyDocument, PolicySourceRecord,
 };
 
+const EXPIRED_CONTRACT: &str = "expired-contract";
+
 #[derive(Clone, Copy, Debug)]
 pub struct PolicySource<'a> {
     pub path: &'a str,
@@ -42,7 +44,6 @@ impl PolicyError {
             Self::SchemaVersion { .. } => "unsupported-policy-version",
             Self::Lint { issues } => match issues.first() {
                 Some(issue) if issue.code == "enforcement-unsupported" => "enforcement-unsupported",
-                Some(issue) if issue.code == "expired-contract" => "expired-contract",
                 _ => "policy-lint",
             },
             Self::Canonical(_) => "policy-canonicalization",
@@ -66,9 +67,14 @@ pub fn compile_at(
     now: Timestamp,
 ) -> Result<EffectivePolicy, PolicyError> {
     let (contracts, declarations, mut source_records) = parse_sources(sources)?;
-    let (mut contracts, mut issues) = expand(contracts);
+    let (mut contracts, mut issues) = expand(contracts)?;
     issues.extend(lint_effective(&contracts, &declarations, now));
     sort_issues(&mut issues);
+    // Spec 7.6: an expired migration still present is reported and stops applying;
+    // it does not abort compilation. Every other structural issue stays fatal.
+    let (reports, issues): (Vec<_>, Vec<_>) = issues
+        .into_iter()
+        .partition(|issue| issue.code == EXPIRED_CONTRACT);
     if !issues.is_empty() {
         return Err(PolicyError::Lint { issues });
     }
@@ -77,12 +83,20 @@ pub fn compile_at(
     let mut declarations = declarations;
     declarations.sort();
     source_records.sort_by(|left, right| left.path.cmp(&right.path));
+    // The digest covers the declared contracts, expired ones included, so it does not
+    // change on a clock tick with no policy edit (rulings bind to it, spec section 11).
     let policy_digest = semantic_digest(&contracts, &declarations)?;
+    let expired: BTreeSet<&str> = reports
+        .iter()
+        .flat_map(|report| report.contracts.iter().map(String::as_str))
+        .collect();
+    contracts.retain(|contract| !expired.contains(contract.id.as_str()));
     Ok(EffectivePolicy {
         schema_version: EFFECTIVE_POLICY_SCHEMA.into(),
         policy_digest,
         contracts,
         declarations,
+        reports,
         sources: source_records,
     })
 }
@@ -92,7 +106,7 @@ pub fn lint_at(
     now: Timestamp,
 ) -> Result<Vec<LintIssue>, PolicyError> {
     let (contracts, declarations, _) = parse_sources(sources)?;
-    let (contracts, mut issues) = expand(contracts);
+    let (contracts, mut issues) = expand(contracts)?;
     issues.extend(lint_effective(&contracts, &declarations, now));
     sort_issues(&mut issues);
     Ok(issues)
@@ -126,10 +140,24 @@ fn parse_sources(
     Ok((contracts, declarations, records))
 }
 
-fn expand(contracts: Vec<PolicyContract>) -> (Vec<EffectiveContract>, Vec<LintIssue>) {
+fn expand(
+    contracts: Vec<PolicyContract>,
+) -> Result<(Vec<EffectiveContract>, Vec<LintIssue>), PolicyError> {
     let mut effective = Vec::with_capacity(contracts.len());
     let mut issues = Vec::new();
-    for contract in contracts {
+    for mut contract in contracts {
+        match &mut contract.body {
+            ContractBody::Dependency(dependency) => dependency.declares.sort_by(|left, right| {
+                (&left.target, &left.reason, &left.authority).cmp(&(
+                    &right.target,
+                    &right.reason,
+                    &right.authority,
+                ))
+            }),
+            ContractBody::Effect(effect) => sort_canonical(&mut effect.evidence)?,
+            ContractBody::Capability(capability) => sort_canonical(&mut capability.requires)?,
+            _ => {}
+        }
         let kind = contract.body.kind();
         let fixed_claim = default_claim(kind);
         let claim = contract.claim.unwrap_or(fixed_claim);
@@ -190,7 +218,17 @@ fn expand(contracts: Vec<PolicyContract>) -> (Vec<EffectiveContract>, Vec<LintIs
             body: contract.body,
         });
     }
-    (effective, issues)
+    Ok((effective, issues))
+}
+
+fn sort_canonical<T: Serialize>(values: &mut Vec<T>) -> Result<(), serde_json::Error> {
+    let mut keyed = values
+        .drain(..)
+        .map(|value| Ok((serde_json_canonicalizer::to_vec(&value)?, value)))
+        .collect::<Result<Vec<_>, serde_json::Error>>()?;
+    keyed.sort_by(|left, right| left.0.cmp(&right.0));
+    *values = keyed.into_iter().map(|(_, value)| value).collect();
+    Ok(())
 }
 
 fn lint_effective(
@@ -286,7 +324,7 @@ fn lint_migration(contract: &EffectiveContract, now: Timestamp, issues: &mut Vec
     };
     match expires.parse::<Timestamp>() {
         Ok(expiry) if expiry <= now => issues.push(issue(
-            "expired-contract",
+            EXPIRED_CONTRACT,
             [&contract.id],
             format!("migration expired at {expiry}"),
         )),
@@ -332,7 +370,7 @@ fn lint_module_conflicts(contracts: &[EffectiveContract], issues: &mut Vec<LintI
                 right_module
                     .files
                     .iter()
-                    .any(|right_pattern| patterns_overlap(left_pattern, right_pattern))
+                    .any(|right_pattern| file_selectors_overlap(left_pattern, right_pattern))
             }) {
                 issues.push(issue(
                     "module-files-conflict",
@@ -356,6 +394,7 @@ fn lint_dependency_conflicts(contracts: &[EffectiveContract], issues: &mut Vec<L
             if !selector_sets_overlap(
                 &left_dependency.from.modules,
                 &right_dependency.from.modules,
+                module_selectors_overlap,
             ) || overrides(left, right)
             {
                 continue;
@@ -508,7 +547,7 @@ pub fn claim_capabilities(kind: ContractKind, claim: Claim) -> Option<BTreeSet<C
     Some(capabilities.iter().copied().collect())
 }
 
-fn enforcement_capabilities(enforcement: Enforcement) -> BTreeSet<Capability> {
+pub(super) fn enforcement_capabilities(enforcement: Enforcement) -> BTreeSet<Capability> {
     use Capability::{
         AuthenticatedTestCaseResults, BindingReferences, ModuleResolution, RecognizedCallSites,
         StructuralMatch,
@@ -540,30 +579,61 @@ fn overrides(left: &EffectiveContract, right: &EffectiveContract) -> bool {
 }
 
 fn targets_overlap(left: &DependencyTargets, right: &DependencyTargets) -> bool {
-    selector_sets_overlap(&left.modules, &right.modules)
-        || selector_sets_overlap(&left.packages, &right.packages)
+    selector_sets_overlap(&left.modules, &right.modules, module_selectors_overlap)
+        || selector_sets_overlap(&left.packages, &right.packages, package_selectors_overlap)
 }
 
-fn selector_sets_overlap(left: &BTreeSet<String>, right: &BTreeSet<String>) -> bool {
+fn selector_sets_overlap(
+    left: &BTreeSet<String>,
+    right: &BTreeSet<String>,
+    overlaps: fn(&str, &str) -> bool,
+) -> bool {
     left.iter().any(|left_item| {
         right
             .iter()
-            .any(|right_item| patterns_overlap(left_item, right_item))
+            .any(|right_item| overlaps(left_item, right_item))
     })
 }
 
-fn patterns_overlap(left: &str, right: &str) -> bool {
+fn segment_prefix(value: &str, prefix: &str, separator: char) -> bool {
+    value == prefix
+        || value
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with(separator))
+}
+
+fn file_selectors_overlap(left: &str, right: &str) -> bool {
     if left == right {
         return true;
     }
     match (left.strip_suffix("/**"), right.strip_suffix("/**")) {
         (Some(left_prefix), Some(right_prefix)) => {
-            left_prefix.starts_with(right_prefix) || right_prefix.starts_with(left_prefix)
+            segment_prefix(left_prefix, right_prefix, '/')
+                || segment_prefix(right_prefix, left_prefix, '/')
         }
-        (Some(prefix), None) => right.starts_with(prefix),
-        (None, Some(prefix)) => left.starts_with(prefix),
+        (Some(prefix), None) => segment_prefix(right, prefix, '/'),
+        (None, Some(prefix)) => segment_prefix(left, prefix, '/'),
         (None, None) => false,
     }
+}
+
+fn module_selectors_overlap(left: &str, right: &str) -> bool {
+    let matches = |pattern: &str, value: &str| {
+        pattern.strip_suffix('*').is_some_and(|prefix| {
+            prefix.is_empty() || segment_prefix(value, prefix.trim_end_matches('.'), '.')
+        })
+    };
+    left == right || matches(left, right) || matches(right, left)
+}
+
+fn package_selectors_overlap(left: &str, right: &str) -> bool {
+    left == right
+        || left
+            .strip_suffix('*')
+            .is_some_and(|prefix| right.starts_with(prefix))
+        || right
+            .strip_suffix('*')
+            .is_some_and(|prefix| left.starts_with(prefix))
 }
 
 fn issue<I, S>(code: &str, contracts: I, reason: String) -> LintIssue

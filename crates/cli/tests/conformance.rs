@@ -137,6 +137,19 @@ struct PolicyExpectation {
     source_layout_differs: Option<bool>,
     #[serde(default)]
     error: Option<ErrorExpect>,
+    /// Non-fatal reports on the effective policy, compared order-insensitively.
+    #[serde(default)]
+    reports: Option<Vec<ReportExpect>>,
+    /// The exact set of contract ids in the effective policy.
+    #[serde(default)]
+    contract_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReportExpect {
+    code: String,
+    contracts: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -175,6 +188,9 @@ mod policy_conformance {
     }
 
     cases! {
+        module_sibling_prefixes => "module-sibling-prefixes",
+        module_nested_prefixes => "module-nested-prefixes",
+        dependency_wildcard_conflict => "dependency-wildcard-conflict",
         digest_stability => "digest-stability",
         enforcement_unsupported => "enforcement-unsupported",
         structural_conflict => "structural-conflict",
@@ -183,6 +199,7 @@ mod policy_conformance {
         interface_conflict => "interface-conflict",
         migration_missing_expiry => "migration-missing-expiry",
         migration_expired => "migration-expired",
+        migration_expired_with_live_contract => "migration-expired-with-live-contract",
         override_without_authority => "override-without-authority",
     }
 }
@@ -525,6 +542,59 @@ fn check_policy_observation(
             if !reason.contains(needle) {
                 return Err(format!("error reason {reason:?} lacks {needle:?}"));
             }
+        }
+    }
+    if let Some(expected) = &expectation.reports {
+        let document = observation
+            .document
+            .as_ref()
+            .ok_or("missing effective policy document")?;
+        let reports = document["reports"]
+            .as_array()
+            .ok_or("effective policy lacks a reports array")?;
+        let mut actual = reports
+            .iter()
+            .map(|report| {
+                let contracts = report["contracts"]
+                    .as_array()
+                    .map(|ids| {
+                        ids.iter()
+                            .map(|id| id.as_str().unwrap_or_default().to_owned())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                (
+                    report["code"].as_str().unwrap_or_default().to_owned(),
+                    contracts,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut wanted = expected
+            .iter()
+            .map(|report| (report.code.clone(), report.contracts.clone()))
+            .collect::<Vec<_>>();
+        actual.sort();
+        wanted.sort();
+        if actual != wanted {
+            return Err(format!("reports were {actual:?}, expected {wanted:?}"));
+        }
+    }
+    if let Some(expected) = &expectation.contract_ids {
+        let document = observation
+            .document
+            .as_ref()
+            .ok_or("missing effective policy document")?;
+        let mut actual = document["contracts"]
+            .as_array()
+            .ok_or("effective policy lacks a contracts array")?
+            .iter()
+            .map(|contract| contract["id"].as_str().unwrap_or_default().to_owned())
+            .collect::<Vec<_>>();
+        let mut wanted = expected.clone();
+        actual.sort();
+        wanted.sort();
+        if actual != wanted {
+            return Err(format!("contract ids were {actual:?}, expected {wanted:?}"));
         }
     }
     Ok(())

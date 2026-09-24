@@ -199,6 +199,78 @@ contracts:
 }
 
 #[test]
+fn expired_migration_is_reported_and_stops_applying_under_a_stable_digest() {
+    let yaml = r#"
+schema_version: warrant.policy/1
+contracts:
+  - id: core.actions
+    kind: module
+    intent: The dispatcher owns actions.
+    owner: trey
+    authority: draft
+    files: ["src/actions/**"]
+    interface: { entry: src/actions/index.ts, exports: [run] }
+    enforcement: static
+    limits: Ownership is declared.
+  - id: temporary.rule
+    kind: pattern
+    intent: A temporary structural rule.
+    owner: trey
+    authority: draft
+    class: migration
+    expires: 2026-09-24T00:00:00Z
+    scope: { modules: [core.actions] }
+    rule: { pattern: "x()" }
+    enforcement: pattern
+    limits: Syntactic.
+"#;
+    let sources = [PolicySource::new("policy.yaml", yaml)];
+    let before = compile_at(&sources, "2026-09-23T23:59:59Z".parse().expect("timestamp"))
+        .expect("an unexpired migration compiles");
+    let after = compile_at(&sources, fixed_now()).expect("an expired migration still compiles");
+
+    assert_eq!(
+        before.policy_digest, after.policy_digest,
+        "digest is clock-independent"
+    );
+    assert!(before.reports.is_empty(), "{:?}", before.reports);
+    assert_eq!(before.contracts.len(), 2);
+    assert_eq!(
+        after
+            .contracts
+            .iter()
+            .map(|contract| contract.id.as_str())
+            .collect::<Vec<_>>(),
+        ["core.actions"],
+        "the expired migration stops applying"
+    );
+    assert_eq!(after.reports.len(), 1, "{:?}", after.reports);
+    assert_eq!(after.reports[0].code, "expired-contract");
+    assert_eq!(after.reports[0].contracts, ["temporary.rule"]);
+}
+
+#[test]
+fn migration_without_expiry_still_fails_compilation() {
+    let yaml = r#"
+schema_version: warrant.policy/1
+contracts:
+  - id: temporary.rule
+    kind: pattern
+    intent: A temporary structural rule.
+    owner: trey
+    authority: draft
+    class: migration
+    scope: { modules: [core.actions] }
+    rule: { pattern: "x()" }
+    enforcement: pattern
+    limits: Syntactic.
+"#;
+    let error = compile_one(yaml).expect_err("a migration needs an expiry");
+    assert_issue(&error, "migration-missing-expiry");
+    assert_eq!(error.code(), "policy-lint");
+}
+
+#[test]
 fn structural_conflict_classes_compile_without_a_snapshot() {
     let error = compile_one(CONFLICTS).expect_err("structural conflicts must fail");
     let codes: Vec<_> = error
@@ -462,3 +534,272 @@ contracts:
     enforcement: static
     limits: Declared exports.
 "#;
+
+#[test]
+fn policy_file_overlap_respects_segment_boundaries() {
+    for (left, right, conflict) in [
+        ("src/auth/**", "src/authz/**", false),
+        ("src/auth/**", "src/authz/file.ts", false),
+        ("src/**", "src/actions/**", true),
+        ("src/auth/**", "src/auth/file.ts", true),
+        ("src/auth/**", "src/auth", true),
+    ] {
+        for (left, right) in [(left, right), (right, left)] {
+            let first = MODULE.replace("src/actions/**", left);
+            let second = MODULE
+                .replace("core.actions", "other")
+                .replace("src/actions/**", right);
+            let result = compile_at(
+                &[
+                    PolicySource::new("a.yaml", &first),
+                    PolicySource::new("b.yaml", &second),
+                ],
+                fixed_now(),
+            );
+            if conflict {
+                assert_issue(
+                    &result.expect_err("overlapping file selectors"),
+                    "module-files-conflict",
+                );
+            } else {
+                result.expect("disjoint file selectors compile");
+            }
+        }
+    }
+}
+
+#[test]
+fn policy_dependency_overlap_expands_typed_wildcards() {
+    let fixture =
+        fs::read_to_string(fixture_root().join("dependency-conflict/warrant/policy.yaml"))
+            .expect("fixture");
+    for (left, right, conflict) in [
+        ("core.*", "core.actions", true),
+        ("core.*", "core.actions.*", true),
+        ("*", "core.actions", true),
+        ("core.*", "corex.actions", false),
+    ] {
+        for (left, right) in [(left, right), (right, left)] {
+            let yaml = fixture
+                .replacen("[module.one]", &format!("[\"{left}\"]"), 1)
+                .replace("[module.one]", &format!("[\"{right}\"]"));
+            let result = compile_one(&yaml);
+            if conflict {
+                assert_issue(
+                    &result.expect_err("overlapping dependency selectors"),
+                    "dependency-conflict",
+                );
+            } else {
+                result.expect("disjoint module selectors compile");
+            }
+        }
+    }
+    for (left, right, conflict) in [
+        ("@dbos-inc/*", "@dbos-inc/sdk", true),
+        ("@dbos-inc/*", "@dbos-other/sdk", false),
+    ] {
+        for (left, right) in [(left, right), (right, left)] {
+            let yaml = fixture
+                .replacen("[react]", &format!("[\"{left}\"]"), 1)
+                .replace("[react]", &format!("[\"{right}\"]"));
+            let result = compile_one(&yaml);
+            if conflict {
+                assert_issue(
+                    &result.expect_err("overlapping package selectors"),
+                    "dependency-conflict",
+                );
+            } else {
+                result.expect("disjoint package selectors compile");
+            }
+        }
+    }
+}
+
+fn assert_sequence_order_is_irrelevant(id: &str, field: &str, entries: serde_json::Value) {
+    let mut document: serde_json::Value = serde_saphyr::from_str(ALL_KINDS).expect("fixture");
+    let contract = document["contracts"]
+        .as_array_mut()
+        .expect("contracts")
+        .iter_mut()
+        .find(|contract| contract["id"] == id)
+        .expect("contract");
+    contract[field] = entries;
+    let original = compile_one(&document.to_string()).expect("original policy");
+    let contract = document["contracts"]
+        .as_array_mut()
+        .expect("contracts")
+        .iter_mut()
+        .find(|contract| contract["id"] == id)
+        .expect("contract");
+    contract[field].as_array_mut().expect("sequence").reverse();
+    let reordered = compile_one(&document.to_string()).expect("reordered policy");
+    assert_eq!(original.policy_digest, reordered.policy_digest);
+    assert_eq!(original.contracts, reordered.contracts);
+}
+
+#[test]
+fn policy_digest_ignores_declares_order() {
+    assert_sequence_order_is_irrelevant(
+        "dep.core",
+        "declares",
+        serde_json::json!([
+            {"target": "worker", "reason": "Worker loader", "authority": "ruling:worker"},
+            {"target": "web", "reason": "Web loader", "authority": "ruling:web"},
+            {"target": "worker", "reason": "Other loader", "authority": "ruling:other"}
+        ]),
+    );
+}
+
+#[test]
+fn policy_digest_ignores_evidence_order() {
+    assert_sequence_order_is_irrelevant(
+        "effect.send",
+        "evidence",
+        serde_json::json!([
+            {"kind": "test-receipt", "tag": "send", "evidence_kind": "integration"},
+            {"kind": "test-receipt", "tag": "denied", "evidence_kind": "integration"}
+        ]),
+    );
+}
+
+#[test]
+fn policy_digest_ignores_capability_requires_order() {
+    assert_sequence_order_is_irrelevant(
+        "capability.undo",
+        "requires",
+        serde_json::json!([
+            {"link": "entrypoint", "basis": "registry"},
+            {"link": "compensation-owner", "one_of_module": "core.actions.undo"}
+        ]),
+    );
+}
+
+fn assert_semantic_digest_changes(edited: &str) {
+    let original = compile_one(ALL_KINDS).expect("original policy");
+    let changed = compile_one(edited).expect("edited policy");
+    assert_ne!(original.policy_digest, changed.policy_digest);
+}
+
+#[test]
+fn policy_digest_changes_with_denied_package() {
+    assert_semantic_digest_changes(&ALL_KINDS.replace("packages: [react]", "packages: [next]"));
+}
+
+#[test]
+fn policy_digest_changes_with_consequence() {
+    assert_semantic_digest_changes(&ALL_KINDS.replace(
+        "class: preference",
+        "class: preference\n    on_violation: review",
+    ));
+}
+
+#[test]
+fn policy_digest_changes_with_removed_store() {
+    assert_semantic_digest_changes(&ALL_KINDS.replace(
+        "  stores:\n    - { id: approvals, kind: table, defined_in: src/schema.ts }",
+        "  stores: []",
+    ));
+}
+
+#[test]
+fn policy_claim_capability_table_is_exact() {
+    use super::Capability::*;
+    use Claim::*;
+    use ContractKind::*;
+    let rows: &[(ContractKind, Claim, &[super::Capability])] = &[
+        (Module, DeclaredOwnership, &[]),
+        (Dependency, ResolvedDependencyBoundary, &[ModuleResolution]),
+        (Interface, ObservedConsumerBoundary, &[BindingReferences]),
+        (
+            Effect,
+            ObservedConsumerBoundary,
+            &[BindingReferences, RecognizedCallSites, StructuralMatch],
+        ),
+        (State, RecognizedWriteBoundary, &[StructuralMatch]),
+        (
+            Capability,
+            RequiredStructure,
+            &[BindingReferences, StructuralMatch],
+        ),
+        (Pattern, RequiredStructure, &[StructuralMatch]),
+        (Evidence, TestedBehavior, &[AuthenticatedTestCaseResults]),
+        (Data, ObservedConsumerBoundary, &[BindingReferences]),
+    ];
+    for &(kind, valid_claim, expected) in rows {
+        for claim in [
+            DeclaredOwnership,
+            ResolvedDependencyBoundary,
+            ObservedConsumerBoundary,
+            RecognizedWriteBoundary,
+            RequiredStructure,
+            TestedBehavior,
+        ] {
+            let expected = (claim == valid_claim).then(|| expected.iter().copied().collect());
+            assert_eq!(
+                claim_capabilities(kind, claim),
+                expected,
+                "{kind:?} / {claim:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn policy_rejects_capability_edits_for_every_kind() {
+    let document: serde_json::Value = serde_saphyr::from_str(ALL_KINDS).expect("fixture");
+    let contracts = document["contracts"].as_array().expect("contracts");
+    assert_eq!(contracts.len(), 9);
+    for index in 0..contracts.len() {
+        let mut changed = document.clone();
+        let contract = &mut changed["contracts"][index];
+        // Module ownership requires no capabilities, so only widening is possible.
+        contract["requires_capabilities"] = if contract["kind"] == "module" {
+            serde_json::json!(["module-resolution"])
+        } else {
+            serde_json::json!([])
+        };
+        let id = contract["id"].as_str().expect("contract id").to_owned();
+        let error = compile_one(&changed.to_string()).expect_err("edited capabilities must fail");
+        assert!(
+            error
+                .issues()
+                .iter()
+                .any(|issue| issue.code == "claim-capabilities" && issue.contracts == [id.clone()]),
+            "{id}: {error}"
+        );
+    }
+    let mut module_empty = document;
+    module_empty["contracts"][0]["requires_capabilities"] = serde_json::json!([]);
+    compile_one(&module_empty.to_string()).expect("module's empty mapping is valid");
+}
+
+#[test]
+fn policy_enforcement_capability_table_is_exact() {
+    use super::Capability::*;
+    use super::Enforcement;
+    let rows: &[(Enforcement, &[Capability])] = &[
+        (Enforcement::Static, &[ModuleResolution, BindingReferences]),
+        (
+            Enforcement::Pattern,
+            &[RecognizedCallSites, StructuralMatch],
+        ),
+        (Enforcement::Evidence, &[AuthenticatedTestCaseResults]),
+        (
+            Enforcement::Mixed,
+            &[
+                ModuleResolution,
+                BindingReferences,
+                RecognizedCallSites,
+                StructuralMatch,
+                AuthenticatedTestCaseResults,
+            ],
+        ),
+    ];
+    for &(mode, expected) in rows {
+        assert_eq!(
+            super::compiler::enforcement_capabilities(mode),
+            expected.iter().copied().collect(),
+            "{mode:?}"
+        );
+    }
+}

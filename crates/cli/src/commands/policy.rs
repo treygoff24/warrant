@@ -25,9 +25,9 @@ enum Command {
     Diff { policies: Vec<String> },
 }
 
-pub fn run(args: Args) -> crate::error::Result<()> {
+pub fn run(args: Args, format: Option<crate::cli::Format>) -> crate::error::Result<()> {
     match args.command {
-        Some(Command::Compile | Command::Lint) => compile(),
+        Some(Command::Compile | Command::Lint) => compile(format),
         Some(Command::Effective { subject }) => Err(not_implemented(format!(
             "`warrant policy effective {subject}` needs the snapshot-dependent policy lane"
         ))),
@@ -41,7 +41,7 @@ pub fn run(args: Args) -> crate::error::Result<()> {
     }
 }
 
-fn compile() -> crate::error::Result<()> {
+fn compile(format: Option<crate::cli::Format>) -> crate::error::Result<()> {
     let root = repository::root()?;
     let manifest = load_manifest(&root)?;
     let files = load_policy_files(&root, &manifest.policy.paths)?;
@@ -50,7 +50,7 @@ fn compile() -> crate::error::Result<()> {
         .map(|(path, yaml)| PolicySource::new(path, yaml))
         .collect();
     let effective = warrant_core::policy::compile(&sources).map_err(policy_error)?;
-    output::document(&effective, None)
+    output::document(&effective, format)
 }
 
 fn load_policy_files(

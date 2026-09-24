@@ -4,6 +4,10 @@ pub const IMPLEMENTED: bool = false;
 
 pub type Args = super::stub::Args;
 
-pub fn run(args: Args, command: &str) -> crate::error::Result<()> {
+pub fn run(
+    args: Args,
+    command: &str,
+    _format: Option<crate::cli::Format>,
+) -> crate::error::Result<()> {
     super::stub::run(command, args)
 }

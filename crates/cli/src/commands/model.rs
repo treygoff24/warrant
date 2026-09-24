@@ -15,9 +15,9 @@ pub struct Args {
     capabilities: bool,
 }
 
-pub fn run(args: Args) -> crate::error::Result<()> {
+pub fn run(args: Args, format: Option<crate::cli::Format>) -> crate::error::Result<()> {
     if args.capabilities {
-        return output::document(&warrant_lang_ts::capabilities(), None);
+        return output::document(&warrant_lang_ts::capabilities(), format);
     }
 
     let root = repository::root()?;
@@ -102,7 +102,7 @@ pub fn run(args: Args) -> crate::error::Result<()> {
         &root,
         &cache_root,
     )?;
-    output::document(&warrant_lang_ts::capabilities(), None)
+    output::document(&warrant_lang_ts::capabilities(), format)
 }
 
 fn publish_model(

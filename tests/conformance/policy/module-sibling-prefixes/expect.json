@@ -1,0 +1,7 @@
+{
+  "exit_code": 0,
+  "contract_ids": [
+    "module.one",
+    "module.two"
+  ]
+}

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env, fs,
     os::unix::fs::symlink,
     path::{Path, PathBuf},
@@ -176,7 +176,47 @@ fn run_area(area: &str) {
         .filter(|path| path.is_dir())
         .collect::<Vec<_>>();
     cases.sort();
-    assert!(!cases.is_empty(), "{area} conformance area has no cases");
+    let expected: &[&str] = match area {
+        "snapshot" => &[
+            "case-collision-break-control",
+            "case-collision-directory-break-control",
+            "case-collision-negative",
+            "case-collision-positive",
+            "exclusions-break-control",
+            "exclusions-negative",
+            "exclusions-positive",
+            "index-break-control",
+            "index-negative",
+            "index-positive",
+        ],
+        "inventory" => &[
+            "classification-overlap-break-control",
+            "classification-overlap-negative",
+            "classification-overlap-positive",
+            "colocated-test-break-control",
+            "colocated-test-negative",
+            "colocated-test-positive",
+            "generated-absent-break-control",
+            "generated-absent-negative",
+            "generated-absent-positive",
+            "generated-drift-break-control",
+            "generated-drift-negative",
+            "generated-drift-positive",
+            "unowned-source-break-control",
+            "unowned-source-negative",
+            "unowned-source-positive",
+        ],
+        _ => panic!("unknown conformance area {area}"),
+    };
+    let actual = cases
+        .iter()
+        .map(|case| case.file_name().unwrap().to_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        actual,
+        expected.iter().copied().collect::<BTreeSet<_>>(),
+        "{area} fixture census differs"
+    );
     for case in cases {
         run_case(&case);
     }

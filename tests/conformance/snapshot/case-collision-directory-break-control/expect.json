@@ -1,0 +1,4 @@
+{
+  "driver":"cli","args":["snapshot","--worktree"],"exit_code":2,
+  "error":{"code":"case-collision","reason_contains":"rc"}
+}

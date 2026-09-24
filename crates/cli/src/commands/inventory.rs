@@ -42,12 +42,21 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
                         reason: error.document.reason,
                     })
             };
+            let resolve = |path: &str| {
+                captured
+                    .resolve(path)
+                    .map_err(|error| warrant_inventory::ReadError {
+                        code: error.document.code,
+                        reason: error.document.reason,
+                    })
+            };
             let untracked = warrant_inventory::untracked_paths(&root, &captured.manifest().kind)
                 .map_err(inventory_error)?;
             let view = warrant_inventory::CapturedSnapshot {
                 manifest: captured.manifest(),
                 entries: captured.entries(),
                 read: &read,
+                resolve: &resolve,
                 untracked: &untracked,
             };
             let mut built = warrant_inventory::build(

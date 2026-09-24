@@ -163,6 +163,12 @@ fn try_capture(
                 reason: error.document.reason,
             })
         };
+        let resolve = |path: &str| {
+            snapshot.resolve(path).map_err(|error| ReadError {
+                code: error.document.code,
+                reason: error.document.reason,
+            })
+        };
         let untracked = warrant_inventory::untracked_paths(root, &snapshot.manifest().kind)
             .expect("untracked paths");
         let built = warrant_inventory::build(
@@ -171,6 +177,7 @@ fn try_capture(
                 manifest: snapshot.manifest(),
                 entries: snapshot.entries(),
                 read: &read,
+                resolve: &resolve,
                 untracked: &untracked,
             },
             manifest,
@@ -522,12 +529,14 @@ fn refused_snapshot_read_keeps_the_snapshot_code() {
                         reason: error.document.reason,
                     })
                 };
+                let resolve = |path: &str| Ok(path.to_owned());
                 let error = warrant_inventory::build(
                     root,
                     CapturedSnapshot {
                         manifest: snapshot.manifest(),
                         entries: snapshot.entries(),
                         read: &read,
+                        resolve: &resolve,
                         untracked: &std::collections::BTreeSet::new(),
                     },
                     &manifest,
@@ -789,4 +798,247 @@ fn summary_files_counts_present_non_ignored_entries() {
         );
         assert_eq!(document.summary.files, 3, "{listed:?}");
     });
+}
+
+/// Each discovered unit's root with its configuration and basis.
+fn units_of(captured: &Captured) -> BTreeMap<String, (String, String)> {
+    captured
+        .built
+        .units
+        .iter()
+        .map(|unit| {
+            (
+                unit.root.clone(),
+                (unit.configuration.clone(), unit.by.clone()),
+            )
+        })
+        .collect()
+}
+
+/// Each entry's entrypoint kinds, for entries that have any.
+fn entrypoints_of(captured: &Captured) -> BTreeMap<String, Vec<String>> {
+    captured
+        .built
+        .document
+        .entries
+        .iter()
+        .filter(|entry| !entry.entrypoints.is_empty())
+        .map(|entry| {
+            (
+                entry.path.clone(),
+                entry
+                    .entrypoints
+                    .iter()
+                    .map(|entrypoint| entrypoint.kind.clone())
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+/// Write each file, then make each `(link, target)` a symlink when `linked`, or a regular
+/// copy of the target's contents otherwise, and commit.
+fn configuration_repository(
+    files: &[(&str, &str)],
+    links: &[(&str, &str)],
+    linked: bool,
+) -> Repository {
+    let repository = Repository::new();
+    for (path, contents) in files {
+        repository.write(path, contents);
+    }
+    for (link, target) in links {
+        let path = repository.root().join(link);
+        if linked {
+            std::os::unix::fs::symlink(target, &path).expect("internal symlink");
+        } else {
+            let resolved = path.parent().expect("link parent").join(target);
+            fs::copy(resolved, &path).expect("copy link target");
+        }
+    }
+    repository.commit_all("configuration");
+    repository
+}
+
+/// B28: a `package.json` that is a symlink to a file inside the tree declares the same
+/// units, workspaces and entrypoints as the regular file, rooted at the link's own path.
+#[test]
+fn internal_symlink_package_json_supplies_the_same_units_as_a_regular_file() {
+    in_neutral_git_child(
+        "internal_symlink_package_json_supplies_the_same_units_as_a_regular_file",
+        || {
+            let files = [
+                (
+                    "config/root-package.json",
+                    r#"{"main":"./src/index.ts","workspaces":["packages/*"]}"#,
+                ),
+                ("src/index.ts", "export const index = 1;\n"),
+                ("packages/a/package.json", "{}"),
+                ("packages/a/src/a.ts", "export const a = 1;\n"),
+            ];
+            let links = [("package.json", "config/root-package.json")];
+            let regular = worktree(
+                &configuration_repository(&files, &links, false),
+                &manifest(""),
+            );
+            let linked = worktree(
+                &configuration_repository(&files, &links, true),
+                &manifest(""),
+            );
+            // Precondition: the regular file's declarations are observable.
+            let units = units_of(&regular);
+            assert_eq!(
+                units.get("."),
+                Some(&("package.json".into(), "package-json".into()))
+            );
+            assert_eq!(
+                units.get("packages/a"),
+                Some(&("packages/a/package.json".into(), "package-workspace".into()))
+            );
+            assert_eq!(
+                entrypoints_of(&regular).get("src/index.ts"),
+                Some(&vec!["package-main".to_owned()])
+            );
+            assert_eq!(units_of(&linked), units);
+            assert_eq!(entrypoints_of(&linked), entrypoints_of(&regular));
+        },
+    );
+}
+
+/// B28: a `tsconfig.json`, and a tsconfig it references, that are symlinks inside the tree
+/// supply the same units and alias tables as regular files.
+#[test]
+fn internal_symlink_tsconfig_supplies_the_same_units_as_a_regular_file() {
+    in_neutral_git_child(
+        "internal_symlink_tsconfig_supplies_the_same_units_as_a_regular_file",
+        || {
+            let files = [
+                (
+                    "tsconfig.base.json",
+                    r#"{"compilerOptions":{"paths":{"@/*":["./*"]}},"references":[{"path":"./packages/b"}]}"#,
+                ),
+                (
+                    "packages/b/tsconfig.lib.json",
+                    r#"{"compilerOptions":{"paths":{"@b/*":["./src/*"]}}}"#,
+                ),
+                ("src/index.ts", "export const index = 1;\n"),
+                ("packages/b/src/b.ts", "export const b = 1;\n"),
+            ];
+            let links = [
+                ("tsconfig.json", "tsconfig.base.json"),
+                ("packages/b/tsconfig.json", "tsconfig.lib.json"),
+            ];
+            let regular = worktree(
+                &configuration_repository(&files, &links, false),
+                &manifest(""),
+            );
+            let linked = worktree(
+                &configuration_repository(&files, &links, true),
+                &manifest(""),
+            );
+            let aliases = |captured: &Captured| -> Vec<(String, Option<String>)> {
+                captured
+                    .built
+                    .document
+                    .summary
+                    .unit_aliases
+                    .iter()
+                    .map(|row| (row.unit.clone(), row.alias_table.clone()))
+                    .collect()
+            };
+            // Precondition: the reference and both alias tables are observable.
+            assert_eq!(
+                aliases(&regular),
+                [
+                    (".".to_owned(), Some("tsconfig.json".to_owned())),
+                    (
+                        "packages/b".to_owned(),
+                        Some("packages/b/tsconfig.json".to_owned())
+                    ),
+                ]
+            );
+            assert_eq!(units_of(&linked), units_of(&regular));
+            assert_eq!(aliases(&linked), aliases(&regular));
+        },
+    );
+}
+
+/// B28: a Cargo manifest that is a symlink inside the tree is copied for `cargo metadata`
+/// as the bytes it points to.
+#[test]
+fn internal_symlink_cargo_manifest_supplies_the_same_units_as_a_regular_file() {
+    in_neutral_git_child(
+        "internal_symlink_cargo_manifest_supplies_the_same_units_as_a_regular_file",
+        || {
+            let files = [
+                ("Cargo.toml", CARGO_WORKSPACE),
+                ("Cargo.lock", CARGO_LOCK),
+                ("crates/a/member.toml", CARGO_MEMBER),
+                ("crates/a/src/lib.rs", "pub fn a() {}\n"),
+            ];
+            let links = [("crates/a/Cargo.toml", "member.toml")];
+            let regular = worktree(
+                &configuration_repository(&files, &links, false),
+                &manifest(""),
+            );
+            let linked = try_capture(
+                &configuration_repository(&files, &links, true),
+                SnapshotKind::Worktree,
+                None,
+                &manifest(""),
+                &BuildConfig::default(),
+            )
+            .unwrap_or_else(|error| panic!("worktree capture: {error}"))
+            .unwrap_or_else(|error| panic!("inventory failed: {error}"));
+            assert_eq!(
+                regular.entry("crates/a/src/lib.rs").unit.as_deref(),
+                Some("crates/a")
+            );
+            assert_eq!(units_of(&linked), units_of(&regular));
+        },
+    );
+}
+
+/// B28: a configuration symlink whose in-tree target the snapshot refuses is refused
+/// with the snapshot's code, never parsed as the link's own bytes.
+#[test]
+fn internal_symlink_to_an_unread_target_is_refused_with_the_snapshot_code() {
+    in_neutral_git_child(
+        "internal_symlink_to_an_unread_target_is_refused_with_the_snapshot_code",
+        || {
+            let target = r#"{"main":"./src/index.ts","name":"a-package-over-the-limit"}"#;
+            let repository = configuration_repository(
+                &[
+                    ("config/root-package.json", target),
+                    ("src/index.ts", "export {};\n"),
+                ],
+                &[("package.json", "config/root-package.json")],
+                true,
+            );
+            let limit = 40;
+            assert!(target.len() > limit, "the target must exceed the limit");
+            assert!(
+                "config/root-package.json".len() <= limit,
+                "the link itself must be readable"
+            );
+            let result = try_capture(
+                &repository,
+                SnapshotKind::Worktree,
+                None,
+                &manifest(&format!("snapshot:\n  max_file_bytes: {limit}\n")),
+                &BuildConfig::default(),
+            )
+            .unwrap_or_else(|error| panic!("worktree capture: {error}"));
+            match result {
+                Err(InventoryError::Read { path, code, .. }) => {
+                    assert_eq!((path.as_str(), code.as_str()), ("package.json", "oversize"));
+                }
+                Err(error) => panic!("unexpected inventory error: {error}"),
+                Ok(captured) => panic!(
+                    "the unread target was not refused; units {:?}",
+                    captured.built.units
+                ),
+            }
+        },
+    );
 }

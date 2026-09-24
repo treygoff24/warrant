@@ -617,6 +617,14 @@ fn run_inventory_api(repository: &Path, expectation: &Expectation) -> Observatio
                         reason: error.document.reason,
                     })
             };
+            let resolve = |path: &str| {
+                snapshot
+                    .resolve(path)
+                    .map_err(|error| warrant_inventory::ReadError {
+                        code: error.document.code,
+                        reason: error.document.reason,
+                    })
+            };
             let untracked =
                 warrant_inventory::untracked_paths(repository, &snapshot.manifest().kind)
                     .expect("untracked paths");
@@ -626,6 +634,7 @@ fn run_inventory_api(repository: &Path, expectation: &Expectation) -> Observatio
                     manifest: snapshot.manifest(),
                     entries: snapshot.entries(),
                     read: &read,
+                    resolve: &resolve,
                     untracked: &untracked,
                 },
                 &manifest,

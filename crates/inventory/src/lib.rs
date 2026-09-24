@@ -62,6 +62,11 @@ pub struct ReadError {
 /// Reads captured bytes for one snapshot path.
 pub type Reader<'a> = &'a dyn Fn(&str) -> Result<Vec<u8>, ReadError>;
 
+/// The captured path a snapshot path names once its symlinks are followed inside the
+/// snapshot: the path itself for a regular file, and the snapshot's refusal (for example
+/// `external-symlink`) when a link leaves the tree or its target is unread.
+pub type Resolver<'a> = &'a dyn Fn(&str) -> Result<String, ReadError>;
+
 /// The captured snapshot inventory classifies: its identity, path listing and bytes.
 /// Discovery reads configuration only through `read`, never from the live filesystem.
 #[derive(Clone, Copy)]
@@ -69,6 +74,9 @@ pub struct CapturedSnapshot<'a> {
     pub manifest: &'a SnapshotManifest,
     pub entries: &'a [InventoryEntry],
     pub read: Reader<'a>,
+    /// Follows a captured symlink to its captured target. Configuration is read through
+    /// it, so a linked `package.json` declares what its target declares.
+    pub resolve: Resolver<'a>,
     /// Captured paths Git does not track (untracked, non-ignored worktree files). Every
     /// entry of an index, commit or tree snapshot is tracked, so this is empty for them.
     pub untracked: &'a BTreeSet<String>,
@@ -293,7 +301,9 @@ pub fn build(
     config: &BuildConfig,
 ) -> Result<BuiltInventory, InventoryError> {
     let snapshot_entries = snapshot.entries;
-    let read = snapshot.read;
+    // Configuration is read at its resolved path; units and errors keep the listed path.
+    let resolved_read = |path: &str| (snapshot.read)(&(snapshot.resolve)(path)?);
+    let read: Reader<'_> = &resolved_read;
     // Spec 5.6: the worktree snapshot records an untracked nested repository as the
     // gitlink Git would stage, with this reason. It is not a declared submodule.
     if let Some(path) = snapshot_entries

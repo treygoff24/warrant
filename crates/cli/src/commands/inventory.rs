@@ -29,15 +29,24 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
             cancel::check().map_err(|error| warrant_snapshot::SnapshotError {
                 document: error.document.clone(),
             })?;
+            let read = |path: &str| {
+                captured
+                    .read(path)
+                    .map_err(|error| warrant_inventory::ReadError {
+                        code: error.document.code,
+                        reason: error.document.reason,
+                    })
+            };
             warrant_inventory::build(
                 &root,
-                captured.entries(),
+                warrant_inventory::CapturedSnapshot {
+                    entries: captured.entries(),
+                    read: &read,
+                },
                 &manifest,
                 &warrant_inventory::BuildConfig::default(),
             )
-            .map_err(|error| warrant_snapshot::SnapshotError {
-                document: error_document("inventory", error.to_string()),
-            })
+            .map_err(inventory_error)
         },
     )
     .map_err(snapshot_error)?;
@@ -66,6 +75,22 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
     document.total = page.total;
     document.next_cursor = page.next_cursor;
     output::document(&document, format)
+}
+
+/// A refused snapshot read keeps the snapshot's code, so `snapshot-changed` still makes
+/// capture retake the snapshot and a second change still ends in `snapshot-unstable`.
+fn inventory_error(error: warrant_inventory::InventoryError) -> warrant_snapshot::SnapshotError {
+    let document = match error {
+        // The snapshot's reasons already name the path; add it only when missing.
+        warrant_inventory::InventoryError::Read { path, code, reason } if reason == path => {
+            error_document(&code, reason)
+        }
+        warrant_inventory::InventoryError::Read { path, code, reason } => {
+            error_document(&code, format!("{path}: {reason}"))
+        }
+        error => error_document("inventory", error.to_string()),
+    };
+    warrant_snapshot::SnapshotError { document }
 }
 
 fn error_document(code: &str, reason: String) -> warrant_core::nouns::ErrorDocument {

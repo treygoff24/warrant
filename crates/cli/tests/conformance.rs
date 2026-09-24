@@ -527,17 +527,32 @@ fn run_inventory_api(repository: &Path, expectation: &Expectation) -> Observatio
         None,
         &manifest.snapshot,
         |snapshot| {
-            warrant_inventory::build(repository, snapshot.entries(), &manifest, &config).map_err(
-                |error| warrant_snapshot::SnapshotError {
-                    document: warrant_core::nouns::ErrorDocument {
-                        schema_version: "warrant.error/1".into(),
-                        code: "inventory".into(),
-                        reason: error.to_string(),
-                        locations: Vec::new(),
-                        next_diagnostic: None,
-                    },
+            let read = |path: &str| {
+                snapshot
+                    .read(path)
+                    .map_err(|error| warrant_inventory::ReadError {
+                        code: error.document.code,
+                        reason: error.document.reason,
+                    })
+            };
+            warrant_inventory::build(
+                repository,
+                warrant_inventory::CapturedSnapshot {
+                    entries: snapshot.entries(),
+                    read: &read,
                 },
+                &manifest,
+                &config,
             )
+            .map_err(|error| warrant_snapshot::SnapshotError {
+                document: warrant_core::nouns::ErrorDocument {
+                    schema_version: "warrant.error/1".into(),
+                    code: "inventory".into(),
+                    reason: error.to_string(),
+                    locations: Vec::new(),
+                    next_diagnostic: None,
+                },
+            })
         },
     ) {
         Ok((_, built)) => Observation {

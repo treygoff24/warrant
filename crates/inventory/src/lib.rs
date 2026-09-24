@@ -50,6 +50,25 @@ pub struct Unit {
     pub by: String,
 }
 
+/// Why a snapshot refused a read, in the snapshot's own terms (`snapshot-changed`, or
+/// the entry's `unread` reason), so a caller can retake the snapshot or report it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReadError {
+    pub code: String,
+    pub reason: String,
+}
+
+/// Reads captured bytes for one snapshot path.
+pub type Reader<'a> = &'a dyn Fn(&str) -> Result<Vec<u8>, ReadError>;
+
+/// The captured snapshot inventory classifies: its path listing and its bytes. Discovery
+/// reads configuration only through `read`, never from the live filesystem.
+#[derive(Clone, Copy)]
+pub struct CapturedSnapshot<'a> {
+    pub entries: &'a [InventoryEntry],
+    pub read: Reader<'a>,
+}
+
 /// Result of classifying a snapshot tree.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BuiltInventory {
@@ -78,6 +97,12 @@ pub struct GeneratedIssue {
 pub enum InventoryError {
     Io {
         path: String,
+        reason: String,
+    },
+    /// The snapshot refused to supply a path's captured bytes.
+    Read {
+        path: String,
+        code: String,
         reason: String,
     },
     InvalidGlob {
@@ -119,6 +144,10 @@ impl fmt::Display for InventoryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io { path, reason } => write!(formatter, "could not read `{path}`: {reason}"),
+            Self::Read { path, code, reason } => write!(
+                formatter,
+                "could not read `{path}` from the snapshot: {code}: {reason}"
+            ),
             Self::InvalidGlob { pattern, reason } => {
                 write!(formatter, "invalid glob `{pattern}`: {reason}")
             }
@@ -176,10 +205,12 @@ impl std::error::Error for InventoryError {}
 /// Enrich the snapshot's path listing with inventory classification and provenance.
 pub fn build(
     root: &Path,
-    snapshot_entries: &[InventoryEntry],
+    snapshot: CapturedSnapshot<'_>,
     manifest: &WarrantManifest,
     config: &BuildConfig,
 ) -> Result<BuiltInventory, InventoryError> {
+    let snapshot_entries = snapshot.entries;
+    let read = snapshot.read;
     let submodules: Vec<_> = snapshot_entries
         .iter()
         .filter(|entry| entry.class == InventoryClass::Submodule)
@@ -311,21 +342,25 @@ pub fn build(
         });
     }
 
+    // An unread entry stays in the inventory with its reason; nothing it would have
+    // declared (a unit, an alias table, an entrypoint) is inferred from bytes around it.
     let discovery_paths: Vec<String> = entries
         .iter()
         .filter(|entry| {
-            !matches!(
-                entry.class,
-                InventoryClass::Ignored
-                    | InventoryClass::Submodule
-                    | InventoryClass::BuildOutput
-                    | InventoryClass::Vendored
-            )
+            entry.unread.is_none()
+                && !matches!(
+                    entry.class,
+                    InventoryClass::Ignored
+                        | InventoryClass::Submodule
+                        | InventoryClass::BuildOutput
+                        | InventoryClass::Vendored
+                        | InventoryClass::Unread
+                )
         })
         .map(|entry| entry.path.clone())
         .collect();
-    let mut units = discover_units_from_paths(root, &discovery_paths)?;
-    let package_entrypoints = discover_package_entrypoints(root, &discovery_paths)?;
+    let mut units = discover_units_from_paths(root, read, &discovery_paths)?;
+    let package_entrypoints = discover_package_entrypoints(read, &discovery_paths)?;
     for entry in &mut entries {
         if matches!(
             entry.class,
@@ -356,7 +391,7 @@ pub fn build(
     }
     let generated_absent = add_absent_generated(&mut entries, &generated, &paths)?;
     entries.sort_by(|left, right| left.path.cmp(&right.path));
-    let unit_aliases = alias_tables(root, &discovery_paths, &units)?;
+    let unit_aliases = alias_tables(read, &discovery_paths, &units)?;
     let summary = summarize(&entries, unit_aliases, generated_absent);
     let document = InventoryDocument {
         schema_version: "warrant.inventory/1".into(),
@@ -393,7 +428,13 @@ pub fn lint_ownership(root: &Path, modules: &[ModuleSelector]) -> Result<(), Inv
 /// Discover JavaScript, TypeScript, and Cargo units without compiling source.
 pub fn discover_units(root: &Path) -> Result<Vec<Unit>, InventoryError> {
     let paths = repository_paths(root)?;
-    discover_units_from_paths(root, &paths)
+    let read = |path: &str| {
+        fs::read(root.join(path)).map_err(|error| ReadError {
+            code: "io".into(),
+            reason: error.to_string(),
+        })
+    };
+    discover_units_from_paths(root, &read, &paths)
 }
 
 /// Re-run each reproducible producer in an isolated copy and compare output blobs.
@@ -928,7 +969,11 @@ fn digest_bytes(bytes: &[u8]) -> String {
     encoded
 }
 
-fn discover_units_from_paths(root: &Path, paths: &[String]) -> Result<Vec<Unit>, InventoryError> {
+fn discover_units_from_paths(
+    root: &Path,
+    read: Reader<'_>,
+    paths: &[String],
+) -> Result<Vec<Unit>, InventoryError> {
     let mut units = BTreeMap::<String, Unit>::new();
     for path in paths {
         if path.ends_with("/tsconfig.json") || path == "tsconfig.json" {
@@ -942,14 +987,14 @@ fn discover_units_from_paths(root: &Path, paths: &[String]) -> Result<Vec<Unit>,
             );
         }
     }
-    discover_tsconfig_references(root, paths, &mut units)?;
-    discover_javascript_units(root, paths, &mut units)?;
+    discover_tsconfig_references(read, paths, &mut units)?;
+    discover_javascript_units(read, paths, &mut units)?;
     discover_cargo_units(root, paths, &mut units)?;
     Ok(units.into_values().collect())
 }
 
 fn discover_tsconfig_references(
-    root: &Path,
+    read: Reader<'_>,
     paths: &[String],
     units: &mut BTreeMap<String, Unit>,
 ) -> Result<(), InventoryError> {
@@ -963,7 +1008,7 @@ fn discover_tsconfig_references(
         if !seen.insert(configuration.clone()) {
             continue;
         }
-        let value = read_tsconfig(root, &configuration)?;
+        let value = read_tsconfig(read, &configuration)?;
         for reference in value
             .get("references")
             .and_then(Value::as_array)
@@ -996,9 +1041,17 @@ fn discover_tsconfig_references(
     Ok(())
 }
 
-fn read_tsconfig(root: &Path, configuration: &str) -> Result<Value, InventoryError> {
-    let mut bytes =
-        fs::read(root.join(configuration)).map_err(|error| io_error(configuration, error))?;
+/// Captured configuration bytes; the snapshot's refusal is kept as its own error.
+fn read_captured(read: Reader<'_>, path: &str) -> Result<Vec<u8>, InventoryError> {
+    read(path).map_err(|error| InventoryError::Read {
+        path: path.into(),
+        code: error.code,
+        reason: error.reason,
+    })
+}
+
+fn read_tsconfig(read: Reader<'_>, configuration: &str) -> Result<Value, InventoryError> {
+    let mut bytes = read_captured(read, configuration)?;
     json_strip_comments::strip_slice(&mut bytes).map_err(|error| {
         InventoryError::InvalidDeclaration {
             reason: format!("invalid `{configuration}`: {error}"),
@@ -1029,7 +1082,7 @@ fn normalize_relative(path: &Path) -> Option<String> {
 }
 
 fn discover_javascript_units(
-    root: &Path,
+    read: Reader<'_>,
     paths: &[String],
     units: &mut BTreeMap<String, Unit>,
 ) -> Result<(), InventoryError> {
@@ -1038,8 +1091,7 @@ fn discover_javascript_units(
         .filter(|path| path.ends_with("package.json"))
         .collect();
     for package_file in &package_files {
-        let bytes =
-            fs::read(root.join(package_file)).map_err(|error| io_error(package_file, error))?;
+        let bytes = read_captured(read, package_file)?;
         let value: Value =
             serde_json::from_slice(&bytes).map_err(|error| InventoryError::InvalidDeclaration {
                 reason: format!("invalid `{package_file}`: {error}"),
@@ -1065,8 +1117,11 @@ fn discover_javascript_units(
         .iter()
         .filter(|path| path.ends_with("pnpm-workspace.yaml"))
     {
-        let bytes = fs::read_to_string(root.join(workspace_file))
-            .map_err(|error| io_error(workspace_file, error))?;
+        let bytes = String::from_utf8(read_captured(read, workspace_file)?).map_err(|_| {
+            InventoryError::InvalidDeclaration {
+                reason: format!("invalid `{workspace_file}`: not UTF-8"),
+            }
+        })?;
         let value: serde_json::Value =
             serde_saphyr::from_str(&bytes).map_err(|error| InventoryError::InvalidDeclaration {
                 reason: format!("invalid `{workspace_file}`: {error}"),
@@ -1212,17 +1267,17 @@ fn is_tsconfig(path: &str) -> bool {
 }
 
 fn discover_package_entrypoints(
-    root: &Path,
+    read: Reader<'_>,
     paths: &[String],
 ) -> Result<BTreeMap<String, Vec<Entrypoint>>, InventoryError> {
     let mut found = BTreeMap::<String, Vec<Entrypoint>>::new();
     for package_file in paths.iter().filter(|path| path.ends_with("package.json")) {
-        let value: Value = serde_json::from_slice(
-            &fs::read(root.join(package_file)).map_err(|error| io_error(package_file, error))?,
-        )
-        .map_err(|error| InventoryError::InvalidDeclaration {
-            reason: format!("invalid `{package_file}`: {error}"),
-        })?;
+        let value: Value =
+            serde_json::from_slice(&read_captured(read, package_file)?).map_err(|error| {
+                InventoryError::InvalidDeclaration {
+                    reason: format!("invalid `{package_file}`: {error}"),
+                }
+            })?;
         let package_root = parent_string(package_file);
         collect_field_targets(
             &value,
@@ -1325,7 +1380,7 @@ fn entrypoints_for(
 }
 
 fn alias_tables(
-    root: &Path,
+    read: Reader<'_>,
     paths: &[String],
     units: &[Unit],
 ) -> Result<Vec<UnitAliasTable>, InventoryError> {
@@ -1334,7 +1389,7 @@ fn alias_tables(
     for unit in units {
         let mut alias_table = None;
         if is_tsconfig(&unit.configuration) && !unit.configuration.is_empty() {
-            let value = read_tsconfig(root, &unit.configuration)?;
+            let value = read_tsconfig(read, &unit.configuration)?;
             if value
                 .get("compilerOptions")
                 .and_then(|options| options.get("paths"))
@@ -1350,12 +1405,10 @@ fn alias_tables(
                 format!("{}/package.json", unit.root)
             };
             if available.contains(package.as_str()) {
-                let value: Value = serde_json::from_slice(
-                    &fs::read(root.join(&package)).map_err(|error| io_error(&package, error))?,
-                )
-                .map_err(|error| InventoryError::InvalidDeclaration {
-                    reason: format!("invalid `{package}`: {error}"),
-                })?;
+                let value: Value = serde_json::from_slice(&read_captured(read, &package)?)
+                    .map_err(|error| InventoryError::InvalidDeclaration {
+                        reason: format!("invalid `{package}`: {error}"),
+                    })?;
                 if value.get("exports").is_some() {
                     alias_table = Some(package);
                 }

@@ -927,3 +927,59 @@ fn unreadable_object_manifest_is_a_manifest_io_error() {
         serde_json::from_slice(&output.stderr).expect("error document");
     assert_eq!(error.code, "manifest-io", "{}", error.reason);
 }
+
+#[cfg(unix)]
+#[test]
+fn inventory_does_not_read_through_an_external_symlink() {
+    let outside = tempfile::tempdir().expect("outside directory");
+    fs::write(
+        outside.path().join("package.json"),
+        r#"{"main":"./main.rs","workspaces":["*"]}"#,
+    )
+    .expect("external package file");
+    let repository = repository();
+    let root = repository.path();
+    std::os::unix::fs::symlink(
+        outside.path().join("package.json"),
+        root.join("package.json"),
+    )
+    .expect("external symlink");
+    let cache = tempfile::tempdir().expect("temp cache");
+
+    let inventory: InventoryDocument =
+        serde_json::from_value(json(&warrant_in(root, cache.path(), &["inventory"])))
+            .expect("inventory document");
+    let entry = |path: &str| {
+        inventory
+            .entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .unwrap_or_else(|| panic!("missing {path}"))
+            .clone()
+    };
+    assert_eq!(
+        entry("package.json").unread.as_deref(),
+        Some("external-symlink")
+    );
+    assert!(
+        inventory
+            .summary
+            .unread
+            .iter()
+            .any(|item| item.path == "package.json" && item.reason == "external-symlink")
+    );
+    assert!(
+        entry("main.rs").entrypoints.is_empty(),
+        "{:?}",
+        entry("main.rs")
+    );
+    assert!(
+        !inventory
+            .summary
+            .unit_aliases
+            .iter()
+            .any(|row| row.alias_table.as_deref() == Some("package.json")),
+        "{:?}",
+        inventory.summary.unit_aliases
+    );
+}

@@ -8,8 +8,8 @@ use tempfile::tempdir;
 use warrant_core::manifest::WarrantManifest;
 use warrant_core::nouns::{InventoryClass, InventoryEntry};
 use warrant_inventory::{
-    BuildConfig, ClassRule, GeneratedIssueCode, InventoryError, ModuleSelector, build,
-    discover_units, verify_generated,
+    BuildConfig, BuiltInventory, CapturedSnapshot, ClassRule, GeneratedIssueCode, InventoryError,
+    ModuleSelector, ReadError, build, discover_units, verify_generated,
 };
 
 fn write(root: &Path, path: &str, contents: &str) {
@@ -82,6 +82,30 @@ fn snapshot(root: &Path) -> Vec<InventoryEntry> {
     entries
 }
 
+/// Build with a reader over the fixture directory, as a worktree snapshot reads it.
+fn build_on_disk(
+    root: &Path,
+    listing: &[InventoryEntry],
+    manifest: &WarrantManifest,
+    config: &BuildConfig,
+) -> Result<BuiltInventory, InventoryError> {
+    let read = |path: &str| {
+        fs::read(root.join(path)).map_err(|error| ReadError {
+            code: "io".into(),
+            reason: error.to_string(),
+        })
+    };
+    build(
+        root,
+        CapturedSnapshot {
+            entries: listing,
+            read: &read,
+        },
+        manifest,
+        config,
+    )
+}
+
 fn manifest(inventory: &str) -> WarrantManifest {
     WarrantManifest::parse(&format!(
         r#"
@@ -116,7 +140,7 @@ fn overlapping_module_selectors_are_an_error() {
         files: vec!["src/shared.ts".into()],
     };
     for modules in [vec![first.clone(), second.clone()], vec![second, first]] {
-        let error = build(
+        let error = build_on_disk(
             root.path(),
             &snapshot(root.path()),
             &empty_manifest(),
@@ -148,7 +172,7 @@ fn nested_repository_is_rejected() {
             );
         }
         write(root.path(), "vendor/nested/src/b.ts", "export {};\n");
-        let error = build(
+        let error = build_on_disk(
             root.path(),
             &snapshot(root.path()),
             &empty_manifest(),
@@ -183,7 +207,7 @@ fn declared_submodule_contents_are_not_first_party() {
         InventoryClass::Submodule,
         Some("sha1:abc"),
     ));
-    let built = build(
+    let built = build_on_disk(
         root.path(),
         &listing,
         &empty_manifest(),
@@ -253,7 +277,7 @@ fn classification_defaults_and_snapshot_exclusions_preserve_classes() {
         snapshot_entry("large/data.bin", InventoryClass::Unread, None),
     ]);
 
-    let built = build(root.path(), &listing, &manifest, &config).expect("inventory builds");
+    let built = build_on_disk(root.path(), &listing, &manifest, &config).expect("inventory builds");
     let classes: BTreeMap<_, _> = built
         .document
         .entries
@@ -326,7 +350,7 @@ fn ignored_tsconfig_and_its_reference_do_not_create_units() {
         .expect("dependency tsconfig")
         .class = InventoryClass::Ignored;
 
-    let built = build(
+    let built = build_on_disk(
         root.path(),
         &listing,
         &empty_manifest(),
@@ -347,7 +371,7 @@ fn first_party_tsconfig_accepts_comments_and_trailing_commas() {
         "tsconfig.json",
         "{\n  // compiler alias\n  \"compilerOptions\": {\"paths\": {\"@/*\": [\"src/*\",],},},\n}\n",
     );
-    let built = build(
+    let built = build_on_disk(
         root.path(),
         &snapshot(root.path()),
         &empty_manifest(),
@@ -368,7 +392,7 @@ fn first_party_tsconfig_accepts_comments_and_trailing_commas() {
 fn invalid_first_party_tsconfig_names_its_path() {
     let root = tempdir().expect("temporary repository");
     write(root.path(), "tsconfig.json", "{\"compilerOptions\": }\n");
-    let error = build(
+    let error = build_on_disk(
         root.path(),
         &snapshot(root.path()),
         &empty_manifest(),
@@ -402,7 +426,7 @@ fn excluded_declarations_do_not_supply_units_or_entrypoints() {
         "  vendored:\n    - files: ['vendor/**']\n      source: vendor\n      version: '1'\n",
     );
 
-    let built = build(root.path(), &listing, &manifest, &BuildConfig::default())
+    let built = build_on_disk(root.path(), &listing, &manifest, &BuildConfig::default())
         .expect("excluded declarations are not parsed");
     assert_eq!(built.units.len(), 1);
     assert_eq!(built.units[0].configuration, "package.json");
@@ -428,7 +452,7 @@ fn colocated_test_keeps_its_class_and_owner() {
         ..BuildConfig::default()
     };
 
-    let built = build(
+    let built = build_on_disk(
         root.path(),
         &snapshot(root.path()),
         &empty_manifest(),
@@ -445,7 +469,7 @@ fn first_party_source_outside_module_is_unowned() {
     let root = tempdir().expect("temporary repository");
     write(root.path(), "outside.ts", "export {};\n");
 
-    let built = build(
+    let built = build_on_disk(
         root.path(),
         &snapshot(root.path()),
         &empty_manifest(),
@@ -479,7 +503,7 @@ fn source_defaults_only_apply_for_enabled_integrations() {
     let manifest =
         WarrantManifest::parse("schema_version: warrant.manifest/1\n").expect("valid manifest");
 
-    let built = build(
+    let built = build_on_disk(
         root.path(),
         &snapshot(root.path()),
         &manifest,
@@ -508,7 +532,7 @@ fn unowned_bin_source_keeps_integration_defaults() {
         write(root.path(), path, "// source\n");
     }
     write(root.path(), "scripts/release.sh", "exit 0\n");
-    let built = build(
+    let built = build_on_disk(
         root.path(),
         &snapshot(root.path()),
         &empty_manifest(),
@@ -560,7 +584,7 @@ fn conflicting_class_rules_are_order_independent_errors() {
         vec![first.clone(), second.clone()],
         vec![second.clone(), first.clone()],
     ] {
-        let error = build(
+        let error = build_on_disk(
             root.path(),
             &snapshot(root.path()),
             &empty_manifest(),
@@ -585,7 +609,7 @@ fn overlapping_generated_declarations_are_order_independent_errors() {
     let first = "    - files: [\"generated/**\"]\n      producer: first\n";
     let second = "    - files: [\"generated/client.ts\"]\n      producer: second\n";
     for declarations in [format!("{first}{second}"), format!("{second}{first}")] {
-        let error = build(
+        let error = build_on_disk(
             root.path(),
             &snapshot(root.path()),
             &manifest(&format!("  generated:\n{declarations}")),
@@ -606,7 +630,7 @@ fn overlapping_vendored_declarations_are_order_independent_errors() {
     let first = "    - files: [\"vendor/**\"]\n      source: first\n      version: '1'\n";
     let second = "    - files: [\"vendor/client.ts\"]\n      source: second\n      version: '2'\n";
     for declarations in [format!("{first}{second}"), format!("{second}{first}")] {
-        let error = build(
+        let error = build_on_disk(
             root.path(),
             &snapshot(root.path()),
             &manifest(&format!("  vendored:\n{declarations}")),
@@ -630,7 +654,7 @@ fn duplicate_absent_generated_declarations_are_errors() {
                 format!("    - files: [\"generated/missing.ts\"]\n      producer: {producer}\n")
             })
             .collect();
-        let error = build(
+        let error = build_on_disk(
             root.path(),
             &[],
             &manifest(&format!("  generated:\n{declarations}")),
@@ -651,7 +675,7 @@ fn overlapping_patterns_within_one_generated_declaration_are_not_conflicts() {
     let manifest = manifest(
         "  generated:\n    - files: ['generated/**', 'generated/client.ts', 'absent.ts', 'absent.ts']\n      producer: generate\n",
     );
-    let built = build(
+    let built = build_on_disk(
         root.path(),
         &snapshot(root.path()),
         &manifest,
@@ -679,7 +703,7 @@ fn explicit_override_must_name_the_default_it_replaces() {
     };
 
     assert!(matches!(
-        build(
+        build_on_disk(
             root.path(),
             &snapshot(root.path()),
             &empty_manifest(),
@@ -691,7 +715,7 @@ fn explicit_override_must_name_the_default_it_replaces() {
         })
     ));
     assert!(matches!(
-        build(
+        build_on_disk(
             root.path(),
             &snapshot(root.path()),
             &empty_manifest(),
@@ -703,7 +727,7 @@ fn explicit_override_must_name_the_default_it_replaces() {
             ..
         })
     ));
-    let built = build(
+    let built = build_on_disk(
         root.path(),
         &snapshot(root.path()),
         &empty_manifest(),
@@ -725,7 +749,7 @@ fn manifest_class_override_names_the_replaced_default() {
 "#,
     );
 
-    let built = build(
+    let built = build_on_disk(
         root.path(),
         &snapshot(root.path()),
         &manifest,
@@ -759,7 +783,7 @@ fn manifest_class_override_errors_are_order_independent() {
     ] {
         let manifest = manifest(&format!("  classes:\n{declarations}\n"));
         assert!(matches!(
-            build(
+            build_on_disk(
                 root.path(),
                 &snapshot(root.path()),
                 &manifest,
@@ -789,7 +813,7 @@ fn manifest_class_override_errors_are_order_independent() {
     ] {
         let manifest = manifest(&format!("  classes:\n{declarations}\n"));
         assert!(matches!(
-            build(
+            build_on_disk(
                 root.path(),
                 &snapshot(root.path()),
                 &manifest,
@@ -821,7 +845,7 @@ fn generated_provenance_distinguishes_same_producer_inputs() {
 "#,
     );
 
-    let built = build(
+    let built = build_on_disk(
         root.path(),
         &snapshot(root.path()),
         &manifest,
@@ -864,14 +888,14 @@ fn snapshot_listing_controls_paths_blobs_and_ignored_count() {
         ),
     ];
 
-    let first = build(
+    let first = build_on_disk(
         clean.path(),
         &listing,
         &empty_manifest(),
         &BuildConfig::default(),
     )
     .expect("clean inventory");
-    let second = build(
+    let second = build_on_disk(
         dirty.path(),
         &listing,
         &empty_manifest(),
@@ -894,7 +918,7 @@ fn snapshot_listing_controls_paths_blobs_and_ignored_count() {
         listing[0].clone(),
         snapshot_entry("target/cache.bin", InventoryClass::Ignored, None),
     ];
-    let with_ignored = build(
+    let with_ignored = build_on_disk(
         dirty.path(),
         &listing_with_ignored,
         &empty_manifest(),
@@ -974,7 +998,7 @@ fn discovers_monorepo_units_from_all_declared_sources() {
     assert!(roots.contains(&"services/api"));
     assert!(roots.contains(&"crates/tool"));
 
-    let built = build(
+    let built = build_on_disk(
         root.path(),
         &snapshot(root.path()),
         &empty_manifest(),
@@ -1015,7 +1039,7 @@ fn project_references_define_units_and_tsconfig_precedes_deeper_package() {
     );
     write(root.path(), "packages/loose/src/index.ts", "export {};\n");
 
-    let built = build(
+    let built = build_on_disk(
         root.path(),
         &snapshot(root.path()),
         &empty_manifest(),
@@ -1072,7 +1096,7 @@ fn alias_summary_has_one_explicit_row_per_unit() {
     );
     write(root.path(), "packages/plain/src/index.js", "export {};\n");
 
-    let built = build(
+    let built = build_on_disk(
         root.path(),
         &snapshot(root.path()),
         &empty_manifest(),
@@ -1145,7 +1169,7 @@ entrypoints:
     )
     .expect("valid manifest");
 
-    let built = build(
+    let built = build_on_disk(
         root.path(),
         &snapshot(root.path()),
         &manifest,
@@ -1202,7 +1226,7 @@ fn generated_verification_reports_drift_and_absence() {
 "#,
     ));
 
-    let built = build(
+    let built = build_on_disk(
         root.path(),
         &snapshot(root.path()),
         &manifest,
@@ -1265,7 +1289,7 @@ fn glob_declared_absent_generated_scope_is_summarized_and_verified() {
 "#,
     );
 
-    let built = build(
+    let built = build_on_disk(
         root.path(),
         &snapshot(root.path()),
         &manifest,
@@ -1318,9 +1342,10 @@ fn completeness_counts_equal_entries_and_digest_is_stable() {
         None,
     ));
 
-    let first = build(root.path(), &listing, &empty_manifest(), &config).expect("first inventory");
+    let first =
+        build_on_disk(root.path(), &listing, &empty_manifest(), &config).expect("first inventory");
     let second =
-        build(root.path(), &listing, &empty_manifest(), &config).expect("second inventory");
+        build_on_disk(root.path(), &listing, &empty_manifest(), &config).expect("second inventory");
     let counted: u64 = first.document.summary.by_class.values().sum();
     assert_eq!(counted, first.document.entries.len() as u64);
     assert_eq!(first.document.summary.files, counted);
@@ -1346,7 +1371,7 @@ fn inventory_digest_changes_with_captured_file_content() {
         "export const value = 2;\n",
     );
     let capture = |root: &Path| {
-        build(
+        build_on_disk(
             root,
             &snapshot(root),
             &empty_manifest(),
@@ -1380,7 +1405,7 @@ fn unread_snapshot_entry_preserves_read_failure_in_completeness() {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).expect("make fixture unreadable");
     let read_result = fs::read(&path);
     let listing = snapshot(root.path());
-    let result = build(
+    let result = build_on_disk(
         root.path(),
         &listing,
         &empty_manifest(),
@@ -1400,4 +1425,238 @@ fn unread_snapshot_entry_preserves_read_failure_in_completeness() {
     assert_eq!(built.document.summary.unread.len(), 1);
     assert_eq!(built.document.summary.unread[0].path, "src/unread.ts");
     assert_eq!(built.document.summary.unread[0].reason, error.to_string());
+}
+
+type RequestLog = std::rc::Rc<std::cell::RefCell<Vec<String>>>;
+
+/// A reader over the fixture directory that follows symlinks and records every request,
+/// so a test can prove discovery never asked for bytes the snapshot marked unread.
+fn recording_reader(root: &Path) -> (RequestLog, impl Fn(&str) -> Result<Vec<u8>, ReadError> + '_) {
+    let requested = RequestLog::default();
+    let log = requested.clone();
+    let read = move |path: &str| {
+        log.borrow_mut().push(path.to_owned());
+        fs::read(root.join(path)).map_err(|error| ReadError {
+            code: "io".into(),
+            reason: error.to_string(),
+        })
+    };
+    (requested, read)
+}
+
+fn entry<'a>(built: &'a BuiltInventory, path: &str) -> &'a InventoryEntry {
+    built
+        .document
+        .entries
+        .iter()
+        .find(|entry| entry.path == path)
+        .unwrap_or_else(|| panic!("missing inventory entry {path}"))
+}
+
+#[test]
+fn external_symlink_package_json_does_not_supply_units_or_entrypoints() {
+    let outside = tempdir().expect("outside directory");
+    write(
+        outside.path(),
+        "package.json",
+        r#"{"main":"./src/index.ts","workspaces":["packages/*"]}"#,
+    );
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "src/index.ts", "export const index = 1;\n");
+    write(root.path(), "packages/a/package.json", "{}");
+    write(root.path(), "packages/a/src/a.ts", "export const a = 1;\n");
+    std::os::unix::fs::symlink(
+        outside.path().join("package.json"),
+        root.path().join("package.json"),
+    )
+    .expect("external symlink");
+    // What the snapshot records for a symlink whose target is outside the tree.
+    let mut listing = snapshot(root.path());
+    let link = listing
+        .iter_mut()
+        .find(|entry| entry.path == "package.json")
+        .expect("symlink entry");
+    link.class = InventoryClass::Unread;
+    link.unread = Some("external-symlink".into());
+
+    let (requested, read) = recording_reader(root.path());
+    let built = build(
+        root.path(),
+        CapturedSnapshot {
+            entries: &listing,
+            read: &read,
+        },
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect("inventory builds");
+
+    assert!(
+        !requested.borrow().iter().any(|path| path == "package.json"),
+        "discovery read the unread entry: {:?}",
+        requested.borrow()
+    );
+    assert_eq!(
+        entry(&built, "package.json").unread.as_deref(),
+        Some("external-symlink")
+    );
+    assert!(
+        built
+            .document
+            .summary
+            .unread
+            .iter()
+            .any(|item| item.path == "package.json" && item.reason == "external-symlink")
+    );
+    assert!(entry(&built, "src/index.ts").entrypoints.is_empty());
+    let units: BTreeMap<_, _> = built
+        .units
+        .iter()
+        .map(|unit| {
+            (
+                unit.root.as_str(),
+                (unit.configuration.as_str(), unit.by.as_str()),
+            )
+        })
+        .collect();
+    assert!(
+        !units
+            .values()
+            .any(|(configuration, _)| *configuration == "package.json")
+    );
+    // The workspace glob lived only in the external file; the package keeps its own unit.
+    assert_eq!(
+        units.get("packages/a"),
+        Some(&("packages/a/package.json", "package-json"))
+    );
+}
+
+#[test]
+fn oversize_tsconfig_is_unread_and_supplies_no_unit_or_alias_table() {
+    let root = tempdir().expect("temporary repository");
+    write(
+        root.path(),
+        "tsconfig.json",
+        r#"{"compilerOptions":{"paths":{"@app/*":["src/*"]}}}"#,
+    );
+    write(root.path(), "src/index.ts", "export const index = 1;\n");
+    let mut listing = snapshot(root.path());
+    let config = listing
+        .iter_mut()
+        .find(|entry| entry.path == "tsconfig.json")
+        .expect("tsconfig entry");
+    config.class = InventoryClass::Unread;
+    config.unread = Some("oversize".into());
+
+    let (requested, read) = recording_reader(root.path());
+    let built = build(
+        root.path(),
+        CapturedSnapshot {
+            entries: &listing,
+            read: &read,
+        },
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect("inventory builds");
+
+    assert!(requested.borrow().is_empty(), "{:?}", requested.borrow());
+    assert_eq!(entry(&built, "tsconfig.json").class, InventoryClass::Unread);
+    assert!(
+        built
+            .document
+            .summary
+            .unread
+            .iter()
+            .any(|item| item.path == "tsconfig.json" && item.reason == "oversize")
+    );
+    assert!(
+        !built
+            .units
+            .iter()
+            .any(|unit| unit.configuration == "tsconfig.json")
+    );
+    assert_eq!(entry(&built, "src/index.ts").unit.as_deref(), Some("."));
+    assert!(
+        built
+            .document
+            .summary
+            .unit_aliases
+            .iter()
+            .all(|row| row.alias_table.is_none()),
+        "{:?}",
+        built.document.summary.unit_aliases
+    );
+}
+
+#[test]
+fn discovery_follows_captured_bytes_not_the_live_file() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "package.json", r#"{"main":"./live.ts"}"#);
+    write(root.path(), "tsconfig.json", "{}");
+    write(root.path(), "live.ts", "export const live = 1;\n");
+    write(root.path(), "captured.ts", "export const captured = 1;\n");
+    let listing = snapshot(root.path());
+    // The captured bytes differ from the files now on disk.
+    let read = |path: &str| match path {
+        "package.json" => Ok(br#"{"main":"./captured.ts"}"#.to_vec()),
+        "tsconfig.json" => Ok(br#"{"compilerOptions":{"paths":{"@/*":["./*"]}}}"#.to_vec()),
+        other => Err(ReadError {
+            code: "missing-path".into(),
+            reason: other.into(),
+        }),
+    };
+    let built = build(
+        root.path(),
+        CapturedSnapshot {
+            entries: &listing,
+            read: &read,
+        },
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect("inventory builds");
+
+    assert_eq!(entry(&built, "captured.ts").entrypoints.len(), 1);
+    assert_eq!(
+        entry(&built, "captured.ts").entrypoints[0].kind,
+        "package-main"
+    );
+    assert!(entry(&built, "live.ts").entrypoints.is_empty());
+    let root_alias = built
+        .document
+        .summary
+        .unit_aliases
+        .iter()
+        .find(|row| row.unit == ".")
+        .expect("root unit alias row");
+    assert_eq!(root_alias.alias_table.as_deref(), Some("tsconfig.json"));
+}
+
+#[test]
+fn refused_snapshot_read_keeps_the_snapshot_code() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "package.json", "{}");
+    let listing = snapshot(root.path());
+    let read = |_: &str| {
+        Err(ReadError {
+            code: "snapshot-changed".into(),
+            reason: "package.json".into(),
+        })
+    };
+    let error = build(
+        root.path(),
+        CapturedSnapshot {
+            entries: &listing,
+            read: &read,
+        },
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect_err("a refused read is not silently skipped");
+    assert!(
+        matches!(&error, InventoryError::Read { path, code, .. }
+            if path == "package.json" && code == "snapshot-changed"),
+        "{error:?}"
+    );
 }

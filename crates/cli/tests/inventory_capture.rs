@@ -656,3 +656,42 @@ fn nested_repository_beside_tracked_files_is_rejected() {
         );
     });
 }
+
+/// `summary.files` counts what the snapshot holds: tracked and untracked files, not the
+/// ignored entries the worktree lists or a declared generated file that is absent.
+#[test]
+fn summary_files_counts_present_non_ignored_entries() {
+    in_neutral_git_child("summary_files_counts_present_non_ignored_entries", || {
+        let repository = Repository::new();
+        repository.write(".gitignore", "build/\n");
+        repository.write("src/index.ts", "export {};\n");
+        repository.commit_all("sources");
+        repository.write("src/new.ts", "export {};\n");
+        repository.write("build/out.js", "built\n");
+        let manifest = manifest(
+            "inventory:\n  generated:\n    - files: [\"gen/missing.ts\"]\n      producer: make\n",
+        );
+
+        let captured = worktree(&repository, &manifest);
+        let document = &captured.built.document;
+        let listed: Vec<_> = document
+            .entries
+            .iter()
+            .map(|entry| {
+                (
+                    entry.path.as_str(),
+                    entry.class.as_str(),
+                    entry.reason.as_str(),
+                )
+            })
+            .collect();
+        // Precondition: the ignored and the absent entries are listed, so the count
+        // below is a real exclusion and not an empty set.
+        assert!(
+            listed.iter().any(|(_, class, _)| *class == "ignored")
+                && listed.contains(&("gen/missing.ts", "generated", "generated-absent")),
+            "{listed:?}"
+        );
+        assert_eq!(document.summary.files, 3, "{listed:?}");
+    });
+}

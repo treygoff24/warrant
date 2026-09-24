@@ -1548,6 +1548,9 @@ fn alias_tables(
     Ok(rows)
 }
 
+/// The reason on a declared generated path the snapshot does not contain.
+const GENERATED_ABSENT: &str = "generated-absent";
+
 fn add_absent_generated(
     entries: &mut Vec<InventoryEntry>,
     patterns: &[GeneratedPattern],
@@ -1594,7 +1597,7 @@ fn add_absent_generated(
             unit: None,
             module: None,
             by: "manifest:inventory.generated".into(),
-            reason: "generated-absent".into(),
+            reason: GENERATED_ABSENT.into(),
             entrypoints: Vec::new(),
             unread: None,
             generated_by: Some(GeneratedBy {
@@ -1623,8 +1626,14 @@ fn summarize(
             .filter(|entry| entry.class == InventoryClass::Ignored)
             .count() as u64
     });
+    // `files` counts what the snapshot holds: an ignored path is outside it, and a
+    // declared generated file that is absent is listed for its producer, not present.
+    let files = entries
+        .iter()
+        .filter(|entry| entry.class != InventoryClass::Ignored && entry.reason != GENERATED_ABSENT)
+        .count() as u64;
     let mut summary = InventorySummary {
-        files: entries.len() as u64,
+        files,
         ignored_files,
         unit_aliases,
         generated_absent,

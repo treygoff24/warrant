@@ -704,7 +704,8 @@ fn overlapping_patterns_within_one_generated_declaration_are_not_conflicts() {
     )
     .expect("one declaration owns both paths");
     assert_eq!(built.document.entries.len(), 2);
-    assert_eq!(built.document.summary.files, 2);
+    // The absent literal is listed for its producer but is not a file the snapshot holds.
+    assert_eq!(built.document.summary.files, 1);
     assert_eq!(built.document.entries[0].path, "absent.ts");
     assert_eq!(built.document.entries[1].path, "generated/client.ts");
 }
@@ -1369,7 +1370,9 @@ fn completeness_counts_equal_entries_and_digest_is_stable() {
         build_on_disk(root.path(), &listing, &empty_manifest(), &config).expect("second inventory");
     let counted: u64 = first.document.summary.by_class.values().sum();
     assert_eq!(counted, first.document.entries.len() as u64);
-    assert_eq!(first.document.summary.files, counted);
+    // The ignored entry is listed and classed, but it is outside the snapshot.
+    assert_eq!(first.document.summary.by_class["ignored"], 1);
+    assert_eq!(first.document.summary.files, counted - 1);
     assert_eq!(first.document.summary.unowned_source, ["src/unowned.ts"]);
     assert_eq!(first.document.summary.unknown, ["mystery.xyz"]);
     assert_eq!(first.document.summary.submodules[0].path, "external");

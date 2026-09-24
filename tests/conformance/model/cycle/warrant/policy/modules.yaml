@@ -1,0 +1,20 @@
+schema_version: warrant.policy/1
+contracts:
+  - id: entry
+    kind: module
+    intent: Own index.ts.
+    owner: fixture
+    authority: draft
+    files: ["index.ts"]
+    interface: { entry: index.ts }
+    enforcement: static
+    limits: Declared ownership with observed binding consumers.
+  - id: leaf
+    kind: module
+    intent: Own leaf.ts.
+    owner: fixture
+    authority: draft
+    files: ["leaf.ts"]
+    interface: { entry: leaf.ts }
+    enforcement: static
+    limits: Declared ownership with observed binding consumers.

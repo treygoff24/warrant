@@ -11,9 +11,20 @@
         "index.ts",
         "import",
         false,
-        "resolution-pending"
+        null,
+        "dep.ts",
+        "foo",
+        null
       ]
     ],
-    "unsupported": []
+    "unsupported": [],
+    "tables": {
+      "analysis_inputs": [
+        [
+          1,
+          0
+        ]
+      ]
+    }
   }
 }

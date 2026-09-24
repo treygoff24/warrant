@@ -26,6 +26,8 @@ use warrant_model::{
 pub mod frameworks;
 pub mod parity;
 pub mod references;
+mod resolution;
+pub use resolution::resolve;
 
 const INTEGRATION: &str = "lang-ts";
 
@@ -112,7 +114,17 @@ pub fn discover(inventory: &InventoryDocument) -> Vec<Unit> {
                 .iter()
                 .map(|entry| entry.path.as_str())
                 .find(|path| *path == package_path);
-            let config_path = alias.or_else(|| package.map(str::to_owned));
+            let tsconfig = within(&root, "tsconfig.json");
+            let config_path = alias
+                .filter(|path| is_tsconfig(path))
+                .or_else(|| {
+                    inventory
+                        .entries
+                        .iter()
+                        .any(|entry| entry.path == tsconfig)
+                        .then_some(tsconfig)
+                })
+                .or_else(|| package.map(str::to_owned));
             let kind = match config_path.as_deref() {
                 Some(path) if is_tsconfig(path) => "tsconfig",
                 Some(_) => "package",
@@ -150,7 +162,7 @@ pub fn module_rows(inventory: &InventoryDocument) -> Vec<ModuleRow> {
         .collect()
 }
 
-/// Analyze one inventory unit. Resolution deliberately remains pending until W1.3.
+/// Analyze syntax in one inventory unit; pass all unit reports to [`resolve`].
 pub fn analyze(
     unit: &Unit,
     inventory: &InventoryDocument,
@@ -254,6 +266,7 @@ pub fn capabilities() -> CapabilityReport {
         instruments: BTreeMap::from([
             ("oxc_parser".into(), "0.150.0".into()),
             ("oxc_semantic".into(), "0.150.0".into()),
+            ("oxc_resolver".into(), "11.24.3".into()),
         ]),
         resolution_oracle: None,
         compiler_reference_instrument: None,
@@ -266,12 +279,16 @@ pub fn capabilities() -> CapabilityReport {
             "dynamic-import-literal",
             "esm-import",
             "esm-reexport",
+            "tsconfig-paths",
+            "package-exports",
+            "package-imports",
+            "project-references",
         ]
         .into_iter()
         .map(str::to_owned)
         .collect(),
         unsupported: [
-            ("module-resolution", "unresolved"),
+            ("star-reexport", "ambiguous-star-export"),
             ("dynamic-import-nonliteral", "dynamic-nonliteral"),
             ("require-nonliteral", "dynamic-nonliteral"),
             ("ts-import-equals", "not-observed"),
@@ -293,7 +310,7 @@ pub fn capabilities() -> CapabilityReport {
             treatment: treatment.into(),
         })
         .collect(),
-        limits: "Binding facts only. Module targets, type-derived references, reflection and execution order are not established.".into(),
+        limits: "Module resolution is unqualified pending S6. Binding consumers exclude type-derived references, reflection and execution order. Only captured dependency files participate in resolution; symlink identity is not established.".into(),
     }
 }
 

@@ -1,0 +1,79 @@
+{
+  "driver": "cli",
+  "args": [
+    "model",
+    "--rows"
+  ],
+  "exit_code": 0,
+  "model": {
+    "edges": [
+      [
+        "index.ts",
+        "import",
+        false,
+        null,
+        "leaf.ts",
+        "leaf",
+        null
+      ],
+      [
+        "leaf.ts",
+        "import",
+        false,
+        null,
+        "index.ts",
+        "value",
+        null
+      ]
+    ],
+    "unsupported": [],
+    "tables": {
+      "analysis_inputs": [
+        [
+          2,
+          0
+        ]
+      ],
+      "module_edges": [
+        [
+          "entry",
+          "leaf",
+          1,
+          0
+        ],
+        [
+          "leaf",
+          "entry",
+          1,
+          0
+        ]
+      ],
+      "module_cycles": [
+        [
+          1,
+          "entry",
+          0
+        ],
+        [
+          1,
+          "leaf",
+          1
+        ]
+      ],
+      "observed_interfaces": [
+        [
+          "entry",
+          "index.ts",
+          "value",
+          "observed"
+        ],
+        [
+          "leaf",
+          "leaf.ts",
+          "leaf",
+          "observed"
+        ]
+      ]
+    }
+  }
+}

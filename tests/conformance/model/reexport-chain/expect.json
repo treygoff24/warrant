@@ -11,15 +11,49 @@
         "index.ts",
         "reexport",
         false,
-        "resolution-pending"
+        null,
+        "middle.ts",
+        "renamed",
+        null
       ],
       [
         "middle.ts",
         "reexport",
         false,
-        "resolution-pending"
+        null,
+        "dep.ts",
+        "foo",
+        null
       ]
     ],
-    "unsupported": []
+    "unsupported": [],
+    "tables": {
+      "analysis_inputs": [
+        [
+          2,
+          0
+        ]
+      ],
+      "symbol_consumers": [
+        [
+          "dep.ts",
+          "foo",
+          "index.ts",
+          1
+        ],
+        [
+          "dep.ts",
+          "foo",
+          "middle.ts",
+          1
+        ],
+        [
+          "middle.ts",
+          "renamed",
+          "index.ts",
+          1
+        ]
+      ]
+    }
   }
 }

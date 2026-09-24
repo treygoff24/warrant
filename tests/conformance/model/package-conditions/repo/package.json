@@ -1,0 +1,1 @@
+{"name":"self","type":"module","exports":{"import":"./esm.ts","require":"./cjs.ts"}}

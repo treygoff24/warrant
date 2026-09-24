@@ -9,26 +9,20 @@
     "edges": [
       [
         "index.ts",
-        "dynamic_import",
+        "import",
         false,
-        "dynamic-nonliteral",
         null,
-        null,
+        "leaf.ts",
+        "value",
         null
       ]
     ],
-    "unsupported": [
-      [
-        "index.ts",
-        "dynamic-import-nonliteral",
-        "dynamic-nonliteral"
-      ]
-    ],
+    "unsupported": [],
     "tables": {
       "analysis_inputs": [
         [
           1,
-          1
+          0
         ]
       ]
     }

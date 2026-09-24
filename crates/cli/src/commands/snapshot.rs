@@ -25,6 +25,7 @@ pub struct Args {
 
 pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
     let root = repository::root()?;
+    let cache_root = cache::root()?;
     let (kind, revision) = args.source();
     let governing = load_snapshot_manifest(&root, &kind, revision.as_deref())?;
     let (manifest, ()) = warrant_snapshot::capture(
@@ -44,6 +45,7 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
     let bytes = serde_json::to_vec(&manifest)
         .map_err(|error| CommandError::internal(format!("could not encode snapshot: {error}")))?;
     let path = cache::artifact_path(
+        &cache_root,
         &manifest.repo,
         &manifest.tree,
         &analysis_key(&manifest.capture, &governing.snapshot),
@@ -94,6 +96,8 @@ fn snapshot_error(error: warrant_snapshot::SnapshotError) -> Box<CommandError> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     #[test]
@@ -105,6 +109,7 @@ mod tests {
         let paths: Vec<_> = [40, 4096]
             .map(|max_file_bytes| {
                 cache::artifact_path(
+                    Path::new("/cache"),
                     "sha1:0000000000000000000000000000000000000000",
                     "sha1:1111111111111111111111111111111111111111",
                     &analysis_key(&capture, &SnapshotConfig { max_file_bytes }),

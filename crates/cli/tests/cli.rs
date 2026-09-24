@@ -1220,6 +1220,44 @@ exec "{git}" "$@"
     assert_inventory_error(&error, "inventory-io", "listing refused");
 }
 
+/// With neither `XDG_CACHE_HOME` nor `HOME` usable there is no cache location; the run
+/// refuses instead of writing a relative `.cache` into the directory it started in.
+#[test]
+fn missing_cache_location_is_an_evaluation_error() {
+    for xdg in [None, Some(""), Some("relative/cache")] {
+        for args in [&["snapshot"][..], &["inventory"]] {
+            let repository = repository();
+            let mut command = Command::new(env!("CARGO_BIN_EXE_warrant"));
+            neutralize_git_environment(&mut command);
+            command
+                .args(args)
+                .current_dir(repository.path())
+                .env_remove("HOME")
+                .env_remove("XDG_CACHE_HOME");
+            if let Some(xdg) = xdg {
+                command.env("XDG_CACHE_HOME", xdg);
+            }
+            let output = command.output().expect("run warrant");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(output.status.code(), Some(2), "{args:?} {xdg:?}: {stderr}");
+            let error: serde_json::Value =
+                serde_json::from_str(stderr.trim()).expect("error document");
+            assert_eq!(error["code"], "cache-location", "{args:?} {xdg:?}");
+            let reason = error["reason"].as_str().expect("reason");
+            assert!(
+                reason.contains("XDG_CACHE_HOME") && reason.contains("HOME"),
+                "{reason}"
+            );
+            for relative in [".cache", "relative"] {
+                assert!(
+                    !repository.path().join(relative).exists(),
+                    "{args:?} {xdg:?} wrote {relative}"
+                );
+            }
+        }
+    }
+}
+
 /// Spec 4.5: every downstream artifact carries the snapshot manifest.
 #[test]
 fn inventory_carries_its_snapshot_manifest() {

@@ -19,6 +19,7 @@ pub struct Args {
 
 pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
     let root = repository::root()?;
+    let cache_root = cache::root()?;
     let manifest = load_manifest(&root)?;
     let (snapshot, built) = warrant_snapshot::capture(
         &root,
@@ -62,6 +63,7 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
         .strip_prefix("sha256:")
         .unwrap_or(&built.digest);
     let path = cache::artifact_path(
+        &cache_root,
         &snapshot.repo,
         &snapshot.tree,
         analysis_key,

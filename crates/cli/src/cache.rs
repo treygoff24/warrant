@@ -9,11 +9,34 @@ use crate::{cancel, error::CommandError};
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
-pub fn artifact_path(repo: &str, tree: &str, analysis_key: &str, name: &str) -> PathBuf {
-    let cache = env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
-        .unwrap_or_else(|| PathBuf::from(".cache"));
+/// The cache root: `$XDG_CACHE_HOME`, else `$HOME/.cache`. An empty or relative value
+/// counts as unset (the XDG base-directory rule), and with neither there is no cache
+/// location: a relative `.cache` would land in whatever directory the run started in.
+/// Commands resolve it before capture, so a missing location fails before any work.
+pub fn root() -> crate::error::Result<PathBuf> {
+    let absolute = |name: &str| {
+        env::var_os(name)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+    };
+    absolute("XDG_CACHE_HOME")
+        .or_else(|| absolute("HOME").map(|home| home.join(".cache")))
+        .ok_or_else(|| {
+            CommandError::evaluation(
+                "cache-location",
+                "no cache location: neither XDG_CACHE_HOME nor HOME is set to an absolute path",
+                Some("set XDG_CACHE_HOME or HOME to an absolute directory".into()),
+            )
+        })
+}
+
+pub fn artifact_path(
+    cache: &Path,
+    repo: &str,
+    tree: &str,
+    analysis_key: &str,
+    name: &str,
+) -> PathBuf {
     cache
         .join("warrant")
         .join(repo.replace(':', "-"))

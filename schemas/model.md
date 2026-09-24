@@ -41,6 +41,9 @@ allows only select, read, function, and recursive-select actions. Statements suc
 as `INSERT`, `UPDATE`, `DELETE`, `ATTACH`, and write pragmas are rejected. Results
 are bounded by row and encoded-row byte limits. A bounded result sets
 `truncated: true` and includes an `OFFSET` continuation hint.
+If the first row alone exceeds the byte cap, the query returns a `row-too-large`
+error identifying row 1, its encoded size, and the cap instead of a continuation
+that cannot advance. Increase the cap or select fewer or narrower columns.
 
 The model digest is SHA-256 over a canonical, fixed-table-order dump. Rows are
 sorted by stable keys, `model_digest` is excluded from its own input, and

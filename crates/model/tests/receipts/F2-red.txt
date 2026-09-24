@@ -1,0 +1,37 @@
+W1.1-F2: pre-fix LIKE wildcard; cargo test --locked -p warrant-model
+exit: 101
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 9 tests
+test authorizer_rejects_every_named_write_statement_kind ... ok
+test row_cap_sets_truncated_and_continuation ... ok
+test byte_cap_sets_truncated_and_continuation ... ok
+test materialized_views_contain_edges_consumers_cycles_and_unowned_files ... ok
+test schema_contains_every_table_and_view ... ok
+test conflicting_capabilities_are_rejected_in_both_orders ... ok
+test digest_includes_meta_keys_ending_in_at_without_an_underscore ... FAILED
+test repeated_capabilities_are_order_independent ... ok
+test digest_is_stable_across_insertion_order_and_timestamps ... ok
+
+failures:
+
+---- digest_includes_meta_keys_ending_in_at_without_an_underscore stdout ----
+
+thread 'digest_includes_meta_keys_ending_in_at_without_an_underscore' (778951) panicked at crates/model/tests/store.rs:481:5:
+assertion `left != right` failed
+  left: "sha256:506f0682818e6390ee57dc5cfeb78320bd9b25d74fa93d60c6d8b22499a39049"
+ right: "sha256:506f0682818e6390ee57dc5cfeb78320bd9b25d74fa93d60c6d8b22499a39049"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    digest_includes_meta_keys_ending_in_at_without_an_underscore
+
+test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `-p warrant-model --test store`

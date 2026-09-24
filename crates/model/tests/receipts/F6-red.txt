@@ -1,0 +1,40 @@
+W1.1-F6: entrypoint kind/basis swapped; cargo test --locked -p warrant-model
+exit: 101
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.54s
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 12 tests
+test row_cap_sets_truncated_and_continuation ... ok
+test materialized_views_contain_edges_consumers_cycles_and_unowned_files ... ok
+test first_row_exceeding_byte_cap_errors_without_a_continuation ... ok
+test byte_cap_sets_truncated_and_continuation ... ok
+test authorizer_rejects_every_named_write_statement_kind ... ok
+test every_table_preserves_written_column_values ... FAILED
+test schema_contains_every_table_and_view ... ok
+test conflicting_capabilities_are_rejected_in_both_orders ... ok
+test digest_includes_meta_keys_ending_in_at_without_an_underscore ... ok
+test digest_preserves_scalar_meta_bytes ... ok
+test digest_is_stable_across_insertion_order_and_timestamps ... ok
+test repeated_capabilities_are_order_independent ... ok
+
+failures:
+
+---- every_table_preserves_written_column_values stdout ----
+
+thread 'every_table_preserves_written_column_values' (851543) panicked at crates/model/tests/store.rs:535:9:
+assertion `left == right` failed: SELECT * FROM entrypoints
+  left: Array [Array [Number(50), Number(10), Number(20), String("observed-static"), String("package-export"), Null]]
+ right: Array [Array [Number(50), Number(10), Number(20), String("package-export"), String("observed-static"), Null]]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    every_table_preserves_written_column_values
+
+test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `-p warrant-model --test store`

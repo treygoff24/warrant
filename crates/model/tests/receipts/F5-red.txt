@@ -1,0 +1,52 @@
+W1.1-F5: connection.authorizer removed; cargo test --locked -p warrant-model
+exit: 101
+warning: function `authorize_select` is never used
+   --> crates/model/src/query/mod.rs:112:4
+    |
+112 | fn authorize_select(context: AuthContext<'_>) -> Authorization {
+    |    ^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `warrant-model` (lib) generated 1 warning
+warning: `warrant-model` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 11 tests
+test row_cap_sets_truncated_and_continuation ... ok
+test authorizer_rejects_every_named_write_statement_kind ... FAILED
+test materialized_views_contain_edges_consumers_cycles_and_unowned_files ... ok
+test first_row_exceeding_byte_cap_errors_without_a_continuation ... ok
+test byte_cap_sets_truncated_and_continuation ... ok
+test schema_contains_every_table_and_view ... ok
+test conflicting_capabilities_are_rejected_in_both_orders ... ok
+test digest_includes_meta_keys_ending_in_at_without_an_underscore ... ok
+test digest_preserves_scalar_meta_bytes ... ok
+test repeated_capabilities_are_order_independent ... ok
+test digest_is_stable_across_insertion_order_and_timestamps ... ok
+
+failures:
+
+---- authorizer_rejects_every_named_write_statement_kind stdout ----
+
+thread 'authorizer_rejects_every_named_write_statement_kind' (831180) panicked at crates/model/tests/store.rs:359:5:
+INSERT INTO meta VALUES ('x', 'y'): expected authorizer denial, got Err(Invalid("query must be a SELECT statement"))
+UPDATE meta SET value = 'y' WHERE key = 'taken_at': expected authorizer denial, got Err(Invalid("query must be a SELECT statement"))
+DELETE FROM meta: expected authorizer denial, got Err(Invalid("query must be a SELECT statement"))
+ATTACH DATABASE ':memory:' AS other: expected authorizer denial, got Err(Invalid("query must be a SELECT statement"))
+PRAGMA user_version: expected authorizer denial, got Ok(QueryResult { columns: ["user_version"], rows: [[Number(0)]], truncated: false, continuation: None })
+PRAGMA user_version = 1: expected authorizer denial, got Err(Invalid("query must be a SELECT statement"))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    authorizer_rejects_every_named_write_statement_kind
+
+test result: FAILED. 10 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+error: test failed, to rerun pass `-p warrant-model --test store`

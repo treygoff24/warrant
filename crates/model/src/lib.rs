@@ -8,7 +8,7 @@ use std::{
 };
 
 use petgraph::{algo::kosaraju_scc, graphmap::DiGraphMap};
-use rusqlite::{Connection, OpenFlags, params, types::ValueRef};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params, types::ValueRef};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -423,8 +423,26 @@ impl ModelBuilder {
 
     pub fn write_capability_report(&mut self, row: &CapabilityReportRow) -> Result<()> {
         let json = serde_json_canonicalizer::to_string(&row.json)?;
+        let stored: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT json FROM capability_reports WHERE integration = ?1",
+                [&row.integration],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(stored) = stored {
+            return if stored == json {
+                Ok(())
+            } else {
+                Err(ModelError::Invalid(format!(
+                    "conflicting capability report for integration {}",
+                    row.integration
+                )))
+            };
+        }
         self.connection.execute(
-            "INSERT OR REPLACE INTO capability_reports(integration, json) VALUES (?1, ?2)",
+            "INSERT INTO capability_reports(integration, json) VALUES (?1, ?2)",
             params![row.integration, json],
         )?;
         Ok(())
@@ -481,10 +499,17 @@ impl ModelBuilder {
                    AND source.module_id != target.module_id
              GROUP BY source.module_id, target.module_id;
              INSERT INTO symbol_consumers(symbol_id, consumer_file, via_reexport_chain)
-             SELECT to_symbol, from_file, MAX(kind = 'reexport')
-             FROM edges
-             WHERE to_symbol IS NOT NULL
-             GROUP BY to_symbol, from_file;",
+             WITH RECURSIVE bindings(origin, binding, via_reexport) AS (
+                 SELECT id, id, 0 FROM symbols
+                 UNION
+                 SELECT bindings.origin, edges.from_symbol, 1
+                 FROM bindings JOIN edges ON edges.to_symbol = bindings.binding
+                 WHERE edges.kind = 'reexport' AND edges.from_symbol IS NOT NULL
+             )
+             SELECT bindings.origin, edges.from_file,
+                    MAX(bindings.via_reexport OR edges.kind = 'reexport')
+             FROM bindings JOIN edges ON edges.to_symbol = bindings.binding
+             GROUP BY bindings.origin, edges.from_file;",
         )?;
 
         let mut graph = DiGraphMap::<i64, ()>::new();
@@ -578,7 +603,7 @@ fn canonical_digest(connection: &Connection) -> Result<String> {
     let mut dump = Vec::with_capacity(TABLES.len());
     for (table, order) in TABLES {
         let sql = if *table == "meta" {
-            "SELECT * FROM meta WHERE key != 'model_digest' AND key NOT LIKE '%_at' ORDER BY key"
+            "SELECT * FROM meta WHERE key != 'model_digest' AND substr(key, -3) != '_at' ORDER BY key"
                 .to_owned()
         } else {
             format!("SELECT * FROM {table} ORDER BY {order}")
@@ -623,6 +648,9 @@ fn normalize_meta_row(row: &mut [Value]) {
     let Ok(mut json) = serde_json::from_str::<Value>(value) else {
         return;
     };
+    if !json.is_object() && !json.is_array() {
+        return;
+    }
     remove_incidental_timestamps(&mut json);
     if let Ok(canonical) = serde_json_canonicalizer::to_string(&json) {
         *value = canonical;

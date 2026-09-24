@@ -1124,3 +1124,56 @@ fn untracked_nested_repository_matches_git_and_has_an_exclusion_reason() {
         "nested repositories must match Git's gitlink and explicitly explain their exclusion"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn symlinked_ancestor_is_unsupported_without_retaking_capture() {
+    assert_symlinked_ancestor(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn read_rejects_a_new_symlinked_ancestor_without_retaking_capture() {
+    assert_symlinked_ancestor(true);
+}
+
+#[cfg(unix)]
+fn assert_symlinked_ancestor(during_read: bool) {
+    let dir = repo();
+    for name in ["tracked", "sibling"] {
+        fs::create_dir(dir.path().join(name)).unwrap();
+        fs::write(dir.path().join(name).join("file"), "same bytes\n").unwrap();
+    }
+    git(dir.path(), &["add", "-A"]);
+    let replace = || {
+        fs::remove_dir_all(dir.path().join("tracked")).unwrap();
+        std::os::unix::fs::symlink("sibling", dir.path().join("tracked")).unwrap();
+    };
+    if !during_read {
+        replace();
+    }
+    git::CALLS.with_borrow_mut(|calls| *calls = Some(Vec::new()));
+    let error = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |s| {
+            if during_read {
+                replace();
+            }
+            s.read("tracked/file")
+        },
+    )
+    .unwrap_err();
+    let calls = git::CALLS.take().unwrap();
+    let attempts = calls
+        .iter()
+        .filter(|args| args.as_slice() == ["rev-parse", "--show-toplevel"])
+        .count();
+    assert_eq!(
+        (error.document.code.as_str(), attempts),
+        ("unsupported-path", 1),
+        "a symlinked ancestor must be unsupported-path on the first attempt"
+    );
+}

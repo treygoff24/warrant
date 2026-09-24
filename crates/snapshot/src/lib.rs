@@ -101,7 +101,13 @@ impl Snapshot {
                     self.mode(path)
                 },
             )
-            .map_err(|_| SnapshotError::new("snapshot-changed", path))?;
+            .map_err(|error| {
+                if error.document.code == "unsupported-path" {
+                    error
+                } else {
+                    SnapshotError::new("snapshot-changed", path)
+                }
+            })?;
             let actual = worktree::hash(&self.repo, path, &mode, &bytes)?;
             if actual != oid || self.mode(path) != Some(mode.as_str()) {
                 return Err(SnapshotError::new("snapshot-changed", path));

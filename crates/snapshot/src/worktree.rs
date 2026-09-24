@@ -308,7 +308,11 @@ fn read<T>(
     if let Some(ancestors) = relative.parent() {
         for part in ancestors.components() {
             parent.push(part);
-            if !fs::symlink_metadata(&parent)?.is_dir() {
+            let metadata = fs::symlink_metadata(&parent)?;
+            if metadata.file_type().is_symlink() {
+                return Err(SnapshotError::new("unsupported-path", path));
+            }
+            if !metadata.is_dir() {
                 return Err(SnapshotError::new("snapshot-changed", path));
             }
         }

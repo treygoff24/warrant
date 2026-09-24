@@ -1437,24 +1437,27 @@ fn discover_cargo_units(
         if matches!(
             path.as_str(),
             "Cargo.toml" | "Cargo.lock" | ".cargo/config.toml"
-        ) || path.ends_with("/Cargo.toml")
+        ) || TOOLCHAIN_FILES.contains(&path.as_str())
+            || path.ends_with("/Cargo.toml")
         {
             write_captured(&copy, path, &read_captured(read, path)?, None)?;
         } else if path.ends_with(".rs") {
             write_captured(&copy, path, &[], None)?;
         }
     }
+    let prefix = format!("{}/", copy.display());
+    check_toolchain(&copy, &prefix, captured)?;
     let mut command = MetadataCommand::new();
     command
         .manifest_path(copy.join("Cargo.toml"))
         .current_dir(&copy)
+        .env(NO_AUTO_INSTALL.0, NO_AUTO_INSTALL.1)
         .no_deps()
         .other_options(["--locked".into()]);
     let has_lock = captured.iter().any(|path| path == "Cargo.lock");
     let metadata = match command.exec() {
         Ok(metadata) => metadata,
         Err(error) if has_lock => {
-            let prefix = format!("{}/", copy.display());
             return Err(InventoryError::InvalidDeclaration {
                 reason: format!(
                     "cargo metadata failed for `Cargo.toml`: {}",
@@ -1480,6 +1483,51 @@ fn discover_cargo_units(
         });
     }
     Ok(())
+}
+
+/// The captured files that select a rustup toolchain for Cargo run at the root.
+const TOOLCHAIN_FILES: [&str; 2] = ["rust-toolchain", "rust-toolchain.toml"];
+
+/// A pinned toolchain that is not installed fails instead of downloading during a read.
+const NO_AUTO_INSTALL: (&str, &str) = ("RUSTUP_AUTO_INSTALL", "0");
+
+/// A captured toolchain file selects the Cargo that reads the copy, as it does in the
+/// repository. Cargo is run once in the copy to see that the selection can run, so a
+/// failure names the toolchain file rather than surfacing as a manifest error or being
+/// skipped with the lockless fallback. The cargo is the one `cargo metadata` runs.
+fn check_toolchain(copy: &Path, prefix: &str, captured: &[String]) -> Result<(), InventoryError> {
+    let files: Vec<&str> = TOOLCHAIN_FILES
+        .into_iter()
+        .filter(|file| captured.iter().any(|path| path == file))
+        .collect();
+    if files.is_empty() {
+        return Ok(());
+    }
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
+        .arg("--version")
+        .current_dir(copy)
+        .env(NO_AUTO_INSTALL.0, NO_AUTO_INSTALL.1)
+        .stdin(Stdio::null())
+        .output();
+    let failure = match output {
+        Ok(output) if output.status.success() => return Ok(()),
+        Ok(output) => String::from_utf8_lossy(&output.stderr).into_owned(),
+        Err(error) => error.to_string(),
+    };
+    let first = failure
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("cargo exited unsuccessfully")
+        .replace(prefix, "")
+        .replace(prefix.trim_end_matches('/'), "<copy>");
+    Err(InventoryError::InvalidDeclaration {
+        reason: format!(
+            "the toolchain `{}` selects cannot run: {first}",
+            files.join("` and `")
+        ),
+    })
 }
 
 fn parent_string(path: &str) -> String {

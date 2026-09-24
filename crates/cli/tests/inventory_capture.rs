@@ -38,6 +38,11 @@ fn neutralize(command: &mut Command) {
 /// In-process capture shells out to Git with this process's environment, so each test
 /// body runs in a child copy of this binary whose environment is neutral.
 fn in_neutral_git_child(test: &str, body: impl FnOnce()) {
+    in_neutral_child_without(test, &[], body);
+}
+
+/// As `in_neutral_git_child`, with `removed` also absent from the child's environment.
+fn in_neutral_child_without(test: &str, removed: &[&str], body: impl FnOnce()) {
     if std::env::var_os(CHILD).is_some() {
         body();
         return;
@@ -47,6 +52,9 @@ fn in_neutral_git_child(test: &str, body: impl FnOnce()) {
         .args(["--exact", test, "--nocapture", "--test-threads=1"])
         .env(CHILD, "1");
     neutralize(&mut command);
+    for name in removed {
+        command.env_remove(name);
+    }
     let output = command.output().expect("run neutral Git child");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -1037,6 +1045,99 @@ fn internal_symlink_to_an_unread_target_is_refused_with_the_snapshot_code() {
                     captured.built.units
                 ),
             }
+        },
+    );
+}
+
+/// `cargo test` gives the test process `CARGO` (one toolchain's cargo, bypassing rustup)
+/// and rustup's `RUSTUP_TOOLCHAIN` override; either one outranks a toolchain file. The
+/// B36 tests run as a user's shell does, with neither set, so rustup's own precedence
+/// decides.
+const TOOLCHAIN_OVERRIDES: &[&str] = &["CARGO", "RUSTUP_TOOLCHAIN"];
+
+fn cargo_workspace_with_toolchain(toolchain: &str) -> Repository {
+    let repository = Repository::new();
+    repository.write("Cargo.toml", CARGO_WORKSPACE);
+    repository.write("Cargo.lock", CARGO_LOCK);
+    repository.write("crates/a/Cargo.toml", CARGO_MEMBER);
+    repository.write("crates/a/src/lib.rs", "pub fn a() {}\n");
+    repository.write(
+        "rust-toolchain.toml",
+        &format!("[toolchain]\nchannel = \"{toolchain}\"\n"),
+    );
+    repository.commit_all("pinned toolchain");
+    repository
+}
+
+/// B36: a captured `rust-toolchain.toml` selects the Cargo that discovers units, and a
+/// pinned toolchain that is not installed fails the inventory instead of downloading.
+#[test]
+fn captured_toolchain_that_is_not_installed_is_an_invalid_declaration() {
+    in_neutral_child_without(
+        "captured_toolchain_that_is_not_installed_is_an_invalid_declaration",
+        TOOLCHAIN_OVERRIDES,
+        || {
+            let repository = cargo_workspace_with_toolchain("nightly-1900-01-01");
+            let result = try_capture(
+                &repository,
+                SnapshotKind::Worktree,
+                None,
+                &manifest(""),
+                &BuildConfig::default(),
+            )
+            .unwrap_or_else(|error| panic!("worktree capture: {error}"));
+            let reason = match result {
+                Err(InventoryError::InvalidDeclaration { reason }) => reason,
+                Err(error) => panic!("unexpected inventory error: {error}"),
+                Ok(captured) => panic!(
+                    "the pinned toolchain was not honoured; units {:?}",
+                    captured.built.units
+                ),
+            };
+            assert!(reason.contains("`rust-toolchain.toml`"), "{reason}");
+            assert!(reason.contains("nightly-1900-01-01"), "{reason}");
+            assert!(!reason.contains('\n'), "{reason}");
+            let temporary = std::env::temp_dir();
+            for form in [
+                temporary.clone(),
+                temporary.canonicalize().expect("temp path"),
+            ] {
+                assert!(
+                    !reason.contains(form.to_string_lossy().as_ref()),
+                    "{reason} names {}",
+                    form.display()
+                );
+            }
+        },
+    );
+}
+
+/// B36 control: a captured toolchain file pinning the toolchain rustup reports as
+/// current still discovers the Cargo units.
+#[test]
+fn captured_toolchain_that_is_installed_discovers_units() {
+    in_neutral_child_without(
+        "captured_toolchain_that_is_installed_discovers_units",
+        TOOLCHAIN_OVERRIDES,
+        || {
+            let output = Command::new("rustup")
+                .args(["show", "active-toolchain"])
+                .output()
+                .expect("rustup is required to exercise toolchain files");
+            assert!(output.status.success(), "rustup show active-toolchain");
+            let active = String::from_utf8(output.stdout).expect("UTF-8 rustup output");
+            let toolchain = active
+                .split_whitespace()
+                .next()
+                .expect("active toolchain name")
+                .to_owned();
+            let repository = cargo_workspace_with_toolchain(&toolchain);
+            let captured = worktree(&repository, &manifest(""));
+            assert_eq!(
+                captured.entry("crates/a/src/lib.rs").unit.as_deref(),
+                Some("crates/a"),
+                "{toolchain}"
+            );
         },
     );
 }

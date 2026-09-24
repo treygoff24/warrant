@@ -33,34 +33,82 @@ fn warrant(args: &[&str]) -> std::process::Output {
 }
 
 fn warrant_in(root: &Path, cache: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_warrant"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_warrant"));
+    command
         .args(args)
         .current_dir(root)
-        .env("XDG_CACHE_HOME", cache)
-        .output()
-        .expect("run warrant")
+        .env("XDG_CACHE_HOME", cache);
+    neutralize_git_environment(&mut command);
+    command.output().expect("run warrant")
+}
+
+/// Git and Warrant run without the developer's system or global Git configuration.
+fn neutralize_git_environment(command: &mut Command) {
+    static EMPTY_CONFIG: std::sync::OnceLock<tempfile::NamedTempFile> = std::sync::OnceLock::new();
+    let empty = EMPTY_CONFIG
+        .get_or_init(|| tempfile::NamedTempFile::new().expect("create empty Git config file"));
+    command
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", empty.path());
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ] {
+        command.env_remove(name);
+    }
+}
+
+fn git(root: &Path, args: &[&str]) -> String {
+    let mut command = Command::new("git");
+    command.args(args).current_dir(root);
+    neutralize_git_environment(&mut command);
+    let output = command.output().expect("run git");
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("UTF-8 Git output")
+        .trim()
+        .to_owned()
+}
+
+fn commit(root: &Path, message: &str) {
+    git(
+        root,
+        &[
+            "-c",
+            "user.name=Warrant Test",
+            "-c",
+            "user.email=warrant@example.invalid",
+            "commit",
+            "-qm",
+            message,
+        ],
+    );
 }
 
 fn repository() -> tempfile::TempDir {
     let directory = tempfile::tempdir().expect("temp repository");
     fs::write(directory.path().join("main.rs"), "fn main() {}\n").expect("fixture source");
-    for args in [
-        &["init", "-q"][..],
-        &["config", "user.email", "warrant@example.invalid"][..],
-        &["config", "user.name", "Warrant Test"][..],
-        &["add", "main.rs"][..],
-        &["commit", "-qm", "fixture"][..],
-    ] {
-        assert!(
-            Command::new("git")
-                .args(args)
-                .current_dir(directory.path())
-                .status()
-                .expect("run git")
-                .success()
-        );
-    }
+    git(directory.path(), &["init", "-q"]);
+    git(directory.path(), &["add", "main.rs"]);
+    commit(directory.path(), "fixture");
     directory
+}
+
+fn json(output: &std::process::Output) -> serde_json::Value {
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("JSON document")
 }
 
 #[test]
@@ -194,14 +242,7 @@ fn snapshot_honors_warrant_yaml_limits() {
     )
     .expect("snapshot limits");
     fs::write(repository.path().join("large.txt"), vec![b'x'; 4096]).expect("oversize file");
-    assert!(
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(repository.path())
-            .status()
-            .expect("track fixture")
-            .success()
-    );
+    git(repository.path(), &["add", "."]);
 
     let snapshot = warrant_in(repository.path(), cache.path(), &["snapshot", "--worktree"]);
     assert!(snapshot.status.success(), "{snapshot:?}");
@@ -492,7 +533,9 @@ exit "$result"
         paths.extend(std::env::split_paths(
             &std::env::var_os("PATH").expect("PATH"),
         ));
-        let child = Command::new(env!("CARGO_BIN_EXE_warrant"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_warrant"));
+        neutralize_git_environment(&mut command);
+        let child = command
             .args(args)
             .current_dir(repository.path())
             .env("XDG_CACHE_HOME", cache.path())
@@ -570,4 +613,41 @@ fn walk_files(root: &Path) -> Vec<String> {
         }
     }
     files
+}
+
+/// Spec 4.1: `warrant snapshot --worktree` is the default when no kind is given.
+#[test]
+fn bare_snapshot_defaults_to_the_worktree() {
+    let repository = repository();
+    let cache = tempfile::tempdir().expect("temp cache");
+    // An untracked file makes the worktree tree differ from the index and HEAD trees.
+    fs::write(repository.path().join("untracked.rs"), "pub fn u() {}\n").expect("untracked");
+    let index_tree = git(repository.path(), &["write-tree"]);
+
+    let mut bare = json(&warrant_in(repository.path(), cache.path(), &["snapshot"]));
+    let mut explicit = json(&warrant_in(
+        repository.path(),
+        cache.path(),
+        &["snapshot", "--worktree"],
+    ));
+    for document in [&mut bare, &mut explicit] {
+        document
+            .as_object_mut()
+            .expect("snapshot object")
+            .remove("taken_at")
+            .expect("capture timestamp");
+    }
+    assert_eq!(bare["kind"], "worktree");
+    assert_ne!(bare["tree"], format!("sha1:{index_tree}"));
+    assert_eq!(bare, explicit);
+
+    let both = warrant_in(
+        repository.path(),
+        cache.path(),
+        &["snapshot", "--worktree", "--index"],
+    );
+    assert_eq!(both.status.code(), Some(2));
+    let error: warrant_core::nouns::ErrorDocument =
+        serde_json::from_slice(&both.stderr).expect("usage error document");
+    assert_eq!(error.code, "invalid-invocation");
 }

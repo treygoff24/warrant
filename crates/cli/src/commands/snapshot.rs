@@ -5,8 +5,9 @@ use warrant_core::nouns::SnapshotKind;
 
 use crate::{cache, cancel, cli::Format, error::CommandError, manifest::load_manifest, output};
 
+// Spec 4.1: the worktree is the default when no kind is given; kinds stay exclusive.
 #[derive(Debug, ClapArgs)]
-#[command(group(ArgGroup::new("source").required(true).multiple(false)))]
+#[command(group(ArgGroup::new("source").required(false).multiple(false)))]
 pub struct Args {
     #[arg(long, group = "source")]
     worktree: bool,
@@ -52,14 +53,14 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
 
 impl Args {
     fn source(&self) -> (SnapshotKind, Option<String>) {
-        if self.worktree {
-            (SnapshotKind::Worktree, None)
-        } else if self.index {
+        if self.index {
             (SnapshotKind::Index, None)
         } else if let Some(revision) = &self.commit {
             (SnapshotKind::Commit, Some(revision.clone()))
+        } else if let Some(tree) = &self.tree {
+            (SnapshotKind::Tree, Some(tree.clone()))
         } else {
-            (SnapshotKind::Tree, self.tree.clone())
+            (SnapshotKind::Worktree, None)
         }
     }
 }

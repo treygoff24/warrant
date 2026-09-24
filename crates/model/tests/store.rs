@@ -512,3 +512,87 @@ fn first_row_exceeding_byte_cap_errors_without_a_continuation() {
         "{result:?}"
     );
 }
+
+#[test]
+fn every_table_preserves_written_column_values() {
+    let temp = TempDir::new().unwrap();
+    let (path, _) = build(&temp, "model.sqlite", false, "2026-09-24T00:00:00Z");
+    let store = QueryStore::open(path).unwrap();
+    for (sql, expected) in [
+        (
+            "SELECT * FROM meta WHERE key = 'taken_at'",
+            json!([["taken_at", "2026-09-24T00:00:00Z"]]),
+        ),
+        (
+            "SELECT * FROM units",
+            json!([[
+                1,
+                "typescript",
+                "apps/web",
+                "apps/web/tsconfig.json",
+                "package"
+            ]]),
+        ),
+        (
+            "SELECT * FROM files WHERE id = 10",
+            json!([[
+                10,
+                "apps/web/src/a.ts",
+                "sha1:a",
+                "source",
+                "typescript",
+                1,
+                100
+            ]]),
+        ),
+        (
+            "SELECT * FROM modules WHERE id = 100",
+            json!([[100, "web/a", "contract:a", "starts work", "team-a"]]),
+        ),
+        (
+            "SELECT * FROM symbols WHERE id = 20",
+            json!([[20, 10, "run", "function", 1, "run", "public", 0, 3]]),
+        ),
+        (
+            "SELECT * FROM edges WHERE id = 30",
+            json!([[
+                30,
+                "import",
+                10,
+                20,
+                11,
+                21,
+                null,
+                1,
+                null,
+                0,
+                4,
+                10,
+                "observed-static"
+            ]]),
+        ),
+        (
+            "SELECT * FROM \"references\"",
+            json!([[40, 10, 20, 11, 14]]),
+        ),
+        (
+            "SELECT * FROM entrypoints",
+            json!([[50, 10, 20, "package-export", "observed-static", null]]),
+        ),
+        (
+            "SELECT * FROM effects",
+            json!([[60, "network", 20, "contract:web"]]),
+        ),
+        (
+            "SELECT * FROM unsupported",
+            json!([[70, 10, "computed-import", 15, 20, "non-literal specifier"]]),
+        ),
+        (
+            "SELECT * FROM capability_reports",
+            json!([["typescript", "{\"symbol_level\":\"binding\"}"]]),
+        ),
+    ] {
+        let result = store.sql(sql, QueryLimits::default()).unwrap();
+        assert_eq!(json!(result.rows), expected, "{sql}");
+    }
+}

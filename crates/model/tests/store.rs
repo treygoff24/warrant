@@ -480,3 +480,11 @@ fn meta_digest(key: &str, value: &str) -> String {
 fn digest_includes_meta_keys_ending_in_at_without_an_underscore() {
     assert_ne!(meta_digest("format", "one"), meta_digest("format", "two"));
 }
+
+#[test]
+fn digest_preserves_scalar_meta_bytes() {
+    assert_ne!(
+        meta_digest("integration_version", "1"),
+        meta_digest("integration_version", "1.0")
+    );
+}

@@ -641,6 +641,9 @@ fn normalize_meta_row(row: &mut [Value]) {
     let Ok(mut json) = serde_json::from_str::<Value>(value) else {
         return;
     };
+    if !json.is_object() && !json.is_array() {
+        return;
+    }
     remove_incidental_timestamps(&mut json);
     if let Ok(canonical) = serde_json_canonicalizer::to_string(&json) {
         *value = canonical;

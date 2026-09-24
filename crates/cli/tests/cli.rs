@@ -1545,6 +1545,100 @@ fn manifest_errors_carry_repository_relative_paths() {
     assert_eq!(error["next_diagnostic"], "warrant/warrant.yaml", "{error}");
 }
 
+/// B31: Git's stderr enters a reason relativised and on one line. In a linked worktree
+/// the object store is the main checkout's absolute `.git`, outside the root, and Git
+/// names it when the manifest blob is corrupt: it is reported as `<git-dir>`.
+#[cfg(unix)]
+#[test]
+fn object_manifest_git_errors_carry_no_absolute_paths() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repository = repository();
+    let main = repository.path();
+    fs::create_dir_all(main.join("warrant")).expect("manifest directory");
+    fs::write(
+        main.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\n",
+    )
+    .expect("manifest");
+    git(main, &["add", "warrant/warrant.yaml"]);
+    commit(main, "manifest");
+    let holder = tempfile::tempdir().expect("temp directory");
+    let linked = holder.path().join("linked");
+    let linked_text = linked.to_str().expect("UTF-8 temp path");
+    git(
+        main,
+        &["worktree", "add", "-q", "--detach", linked_text, "HEAD"],
+    );
+    let oid = git(main, &["rev-parse", "HEAD:warrant/warrant.yaml"]);
+    let object = main.join(".git/objects").join(&oid[..2]).join(&oid[2..]);
+    fs::set_permissions(&object, fs::Permissions::from_mode(0o644)).expect("writable object");
+    fs::write(&object, b"corrupt").expect("corrupt manifest blob");
+
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(&linked, cache.path(), &["snapshot", "--commit", "HEAD"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("error document");
+    assert_eq!(error["code"], "manifest-io", "{error}");
+    let reason = error["reason"].as_str().expect("reason");
+    assert!(
+        reason.starts_with("HEAD:warrant/warrant.yaml: "),
+        "{reason}"
+    );
+    assert!(reason.contains("<git-dir>/objects/"), "{reason}");
+    assert!(!reason.contains('\n'), "{reason}");
+    for path in [main, holder.path()] {
+        for form in [path.to_path_buf(), path.canonicalize().expect("temp path")] {
+            let form = form.to_string_lossy();
+            assert!(!reason.contains(form.as_ref()), "{reason} names {form}");
+        }
+    }
+}
+
+/// B31: a separate Git directory inside the root (`git init --separate-git-dir`) makes Git
+/// name its objects by absolute path; the reason names them relative to the root.
+#[cfg(unix)]
+#[test]
+fn object_manifest_git_errors_name_an_inner_git_dir_relatively() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let holder = tempfile::tempdir().expect("temp repository");
+    let root = holder.path().canonicalize().expect("temp path");
+    let meta = root.join("meta");
+    git(
+        &root,
+        &[
+            "init",
+            "-q",
+            "--separate-git-dir",
+            meta.to_str().expect("UTF-8"),
+            ".",
+        ],
+    );
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\n",
+    )
+    .expect("manifest");
+    git(&root, &["add", "warrant/warrant.yaml"]);
+    commit(&root, "manifest");
+    let oid = git(&root, &["rev-parse", "HEAD:warrant/warrant.yaml"]);
+    let object = meta.join("objects").join(&oid[..2]).join(&oid[2..]);
+    fs::set_permissions(&object, fs::Permissions::from_mode(0o644)).expect("writable object");
+    fs::write(&object, b"corrupt").expect("corrupt manifest blob");
+
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(&root, cache.path(), &["snapshot", "--commit", "HEAD"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("error document");
+    let reason = error["reason"].as_str().expect("reason");
+    assert!(reason.contains("(stored in meta/objects/"), "{reason}");
+    assert!(!reason.contains(root.to_str().expect("UTF-8")), "{reason}");
+}
+
 /// Cache failures name the artifact relative to the cache root.
 #[test]
 fn cache_errors_carry_cache_relative_paths() {

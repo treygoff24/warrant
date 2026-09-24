@@ -1,0 +1,4 @@
+schema_version: warrant.manifest/1
+integrations:
+  typescript:
+    enabled: true

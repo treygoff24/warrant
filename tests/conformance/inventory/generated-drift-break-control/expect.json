@@ -1,0 +1,7 @@
+{
+  "driver": "verify-generated",
+  "exit_code": 0,
+  "generated_issues": [
+    {"code":"generated-drift","path":"gen/client.ts","producer":"mkdir -p gen && printf 'stable\\n' > gen/client.ts"}
+  ]
+}

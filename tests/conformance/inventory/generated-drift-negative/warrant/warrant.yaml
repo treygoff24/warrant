@@ -1,0 +1,6 @@
+schema_version: warrant.manifest/1
+inventory:
+  generated:
+    - files: ["gen/client.ts"]
+      producer: "mkdir -p gen && printf 'stable\\n' > gen/client.ts"
+      reproducible: false

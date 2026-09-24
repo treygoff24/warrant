@@ -1,0 +1,11 @@
+{
+  "driver": "inventory-api",
+  "exit_code": 0,
+  "modules": [{"id": "app", "files": ["src/**"]}],
+  "document": {"schema_version": "warrant.inventory/1"},
+  "inventory": {
+    "classes": {"src/app.ts": "source"},
+    "modules": {"src/app.ts": "app"},
+    "unowned_source": []
+  }
+}

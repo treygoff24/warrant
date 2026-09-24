@@ -1,0 +1,10 @@
+{
+  "driver": "cli",
+  "args": ["inventory"],
+  "exit_code": 0,
+  "inventory": {
+    "classes": {"tools/legacy.pl": "unknown"},
+    "unowned_source": [],
+    "unknown": ["tools/legacy.pl"]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "driver": "cli",
+  "args": ["inventory"],
+  "exit_code": 0,
+  "document": {"schema_version": "warrant.inventory/1"},
+  "inventory": {
+    "classes": {"src/orphan.ts": "source"},
+    "unowned_source": ["src/orphan.ts"]
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "driver": "cli",
+  "args": ["inventory"],
+  "exit_code": 0,
+  "inventory": {
+    "classes": {"src/generated.ts": "generated", "notes/readme.txt": "doc"}
+  }
+}

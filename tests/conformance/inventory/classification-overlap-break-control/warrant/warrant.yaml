@@ -1,0 +1,7 @@
+schema_version: warrant.manifest/1
+inventory:
+  classes:
+    - class: generated
+      files: ["src/shared/**"]
+    - class: vendored
+      files: ["src/**/utils.ts"]

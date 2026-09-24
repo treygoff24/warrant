@@ -1,0 +1,11 @@
+schema_version: warrant.manifest/1
+integrations:
+  typescript:
+    enabled: true
+inventory:
+  classes:
+    - class: generated
+      replaces: source
+      files: ["src/generated.ts"]
+    - class: doc
+      files: ["notes/**"]

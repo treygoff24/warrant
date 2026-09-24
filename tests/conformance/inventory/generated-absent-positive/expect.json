@@ -1,0 +1,4 @@
+{
+  "driver":"cli","args":["inventory"],"exit_code":0,
+  "inventory":{"classes":{"gen/client.ts":"generated"},"reasons":{"gen/client.ts":"generated-absent"},"generated_absent":[]}
+}

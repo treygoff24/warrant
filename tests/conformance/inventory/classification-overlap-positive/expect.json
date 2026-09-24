@@ -1,0 +1,6 @@
+{
+  "driver": "cli",
+  "args": ["inventory"],
+  "exit_code": 0,
+  "inventory": {"classes": {"notes/readme.txt": "doc"}}
+}

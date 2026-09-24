@@ -1,0 +1,6 @@
+{
+  "driver":"cli","args":["snapshot","--index"],"exit_code":0,
+  "setup":{"stage_files":{"main.txt":"staged\n"},"worktree_files":{"main.txt":"unstaged\n"}},
+  "document":{"schema_version":"warrant.snapshot/1","kind":"index"},
+  "tree_matches_index":true
+}

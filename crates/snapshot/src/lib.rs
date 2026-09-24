@@ -106,10 +106,9 @@ impl Snapshot {
             if actual != oid || self.mode(path) != Some(mode.as_str()) {
                 return Err(SnapshotError::new("snapshot-changed", path));
             }
-            Ok(bytes)
-        } else {
-            git::run(&self.repo, &["cat-file", "blob", oid], None, None)
         }
+        // The identity names clean-filtered blob bytes, not raw worktree bytes.
+        git::run(&self.repo, &["cat-file", "blob", oid], None, None)
     }
 }
 

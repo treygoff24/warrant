@@ -674,21 +674,57 @@ fn clean_filter_files_hash_like_git_add() {
     let dir = repo();
     fs::write(dir.path().join(".gitattributes"), "* text=auto\n").unwrap();
     fs::write(dir.path().join("crlf"), b"first\r\nsecond\r\n").unwrap();
-    git(dir.path(), &["add", "-A"]);
-    let tree = git(dir.path(), &["write-tree"]);
-    let (manifest, ()) = capture(
+    assert_canonical_reads(dir.path(), "crlf");
+}
+
+#[cfg(unix)]
+#[test]
+fn clean_driver_reads_return_filtered_blob_bytes() {
+    let dir = repo();
+    git(
         dir.path(),
-        SnapshotKind::Worktree,
-        None,
-        &SnapshotConfig::default(),
-        |s| {
-            assert_eq!(s.manifest().tree, format!("sha1:{tree}"));
-            assert_eq!(s.read("crlf")?, b"first\r\nsecond\r\n");
-            Ok(())
-        },
+        &["config", "filter.canonical.clean", "tr a-z A-Z"],
+    );
+    fs::write(
+        dir.path().join(".gitattributes"),
+        "filtered filter=canonical\n",
     )
     .unwrap();
-    assert_eq!(manifest.tree, format!("sha1:{tree}"));
+    fs::write(dir.path().join("filtered"), b"raw lowercase\n").unwrap();
+    assert_canonical_reads(dir.path(), "filtered");
+}
+
+fn assert_canonical_reads(repo: &Path, path: &str) {
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-qm", "canonical bytes"]);
+    let tree = format!("sha1:{}", git(repo, &["write-tree"]));
+    let blob = git::run(
+        repo,
+        &["cat-file", "blob", &format!("HEAD:{path}")],
+        None,
+        None,
+    )
+    .unwrap();
+    let raw = fs::read(repo.join(path)).unwrap();
+    let reads: Vec<_> = [
+        SnapshotKind::Worktree,
+        SnapshotKind::Index,
+        SnapshotKind::Commit,
+    ]
+    .into_iter()
+    .map(|kind| {
+        let (manifest, bytes) = capture(repo, kind, None, &SnapshotConfig::default(), |s| {
+            s.read(path)
+        })
+        .unwrap();
+        (manifest.tree, bytes)
+    })
+    .collect();
+    assert_eq!(
+        (raw != blob, reads),
+        (true, vec![(tree, blob); 3]),
+        "all snapshot kinds must read Git's canonical blob while the raw file differs"
+    );
 }
 
 #[cfg(unix)]

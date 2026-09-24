@@ -1,9 +1,9 @@
-use std::env;
-
 use clap::Args as ClapArgs;
-use warrant_core::nouns::SnapshotKind;
+use warrant_core::nouns::{GeneratedDrift, SnapshotKind};
 
-use crate::{cache, cancel, cli::Format, error::CommandError, manifest::load_manifest, output};
+use crate::{
+    cache, cancel, cli::Format, error::CommandError, manifest::load_manifest, output, repository,
+};
 
 use super::page;
 
@@ -15,11 +15,15 @@ pub struct Args {
     /// Zero-based cursor returned by a previous invocation.
     #[arg(long, default_value_t = 0)]
     cursor: usize,
+    /// Re-run reproducible generated producers over the snapshot and report drift
+    /// (spec 5.3). Drift exits 1, the blocked verdict (spec 10.2).
+    #[arg(long)]
+    verify_generated: bool,
 }
 
 pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
-    let root = env::current_dir()
-        .map_err(|error| CommandError::evaluation("repository-io", error.to_string(), None))?;
+    let root = repository::root()?;
+    let cache_root = cache::root()?;
     let manifest = load_manifest(&root)?;
     let (snapshot, built) = warrant_snapshot::capture(
         &root,
@@ -30,15 +34,51 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
             cancel::check().map_err(|error| warrant_snapshot::SnapshotError {
                 document: error.document.clone(),
             })?;
-            warrant_inventory::build(
+            let read = |path: &str| {
+                captured
+                    .read(path)
+                    .map_err(|error| warrant_inventory::ReadError {
+                        code: error.document.code,
+                        reason: error.document.reason,
+                    })
+            };
+            let untracked = warrant_inventory::untracked_paths(&root, &captured.manifest().kind)
+                .map_err(inventory_error)?;
+            let view = warrant_inventory::CapturedSnapshot {
+                manifest: captured.manifest(),
+                entries: captured.entries(),
+                read: &read,
+                untracked: &untracked,
+            };
+            let mut built = warrant_inventory::build(
                 &root,
-                captured.entries(),
+                view,
                 &manifest,
                 &warrant_inventory::BuildConfig::default(),
             )
-            .map_err(|error| warrant_snapshot::SnapshotError {
-                document: error_document("inventory", error.to_string()),
-            })
+            .map_err(inventory_error)?;
+            if args.verify_generated {
+                let mode = |path: &str| captured.mode(path).map(str::to_owned);
+                let issues = warrant_inventory::verify_generated(view, &mode, &manifest)
+                    .map_err(inventory_error)?;
+                // Absent declarations are already in `generated_absent`; drift is new.
+                built.document.summary.generated_drift = Some(
+                    issues
+                        .into_iter()
+                        .filter(|issue| {
+                            issue.code == warrant_inventory::GeneratedIssueCode::GeneratedDrift
+                        })
+                        .map(|issue| GeneratedDrift {
+                            path: issue.path,
+                            producer: issue.producer,
+                        })
+                        .collect(),
+                );
+                // The digest keys the cache, so it covers the verified document.
+                built.digest = warrant_inventory::inventory_digest(&built.document)
+                    .map_err(inventory_error)?;
+            }
+            Ok(built)
         },
     )
     .map_err(snapshot_error)?;
@@ -50,12 +90,19 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
         .strip_prefix("sha256:")
         .unwrap_or(&built.digest);
     let path = cache::artifact_path(
+        &cache_root,
         &snapshot.repo,
         &snapshot.tree,
         analysis_key,
         "inventory.json",
     );
-    cache::write_atomic(&path, &bytes)?;
+    cache::write_atomic(&cache_root, &path, &bytes)?;
+    let blocked = built
+        .document
+        .summary
+        .generated_drift
+        .as_ref()
+        .is_some_and(|drift| !drift.is_empty());
     let mut document = built.document;
     let page = page::bounds(
         document.entries.len(),
@@ -66,7 +113,27 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
     document.truncated = page.truncated;
     document.total = page.total;
     document.next_cursor = page.next_cursor;
-    output::document(&document, format)
+    output::document(&document, format)?;
+    if blocked {
+        output::exit_blocked();
+    }
+    Ok(())
+}
+
+/// A refused snapshot read keeps the snapshot's code, so `snapshot-changed` still makes
+/// capture retake the snapshot and a second change still ends in `snapshot-unstable`.
+fn inventory_error(error: warrant_inventory::InventoryError) -> warrant_snapshot::SnapshotError {
+    let document = match error {
+        // The snapshot's reasons already name the path; add it only when missing.
+        warrant_inventory::InventoryError::Read { path, code, reason } if reason == path => {
+            error_document(&code, reason)
+        }
+        warrant_inventory::InventoryError::Read { path, code, reason } => {
+            error_document(&code, format!("{path}: {reason}"))
+        }
+        error => error_document(error.code(), error.to_string()),
+    };
+    warrant_snapshot::SnapshotError { document }
 }
 
 fn error_document(code: &str, reason: String) -> warrant_core::nouns::ErrorDocument {
@@ -79,12 +146,8 @@ fn error_document(code: &str, reason: String) -> warrant_core::nouns::ErrorDocum
     }
 }
 
+/// A recorded signal outranks this error: `main` reports cancellation first.
 fn snapshot_error(error: warrant_snapshot::SnapshotError) -> Box<CommandError> {
-    if error.document.code == "cancelled"
-        && let Err(cancelled) = cancel::check()
-    {
-        return cancelled;
-    }
     Box::new(CommandError {
         document: error.document,
         exit: 2,

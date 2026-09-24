@@ -15,7 +15,8 @@ use sha2::{Digest, Sha256};
 use warrant_core::manifest::{ClassDeclaration, WarrantManifest};
 use warrant_core::nouns::{
     Entrypoint, GeneratedAbsent, GeneratedBy, InventoryClass, InventoryDocument, InventoryEntry,
-    InventorySummary, Submodule, UnitAliasTable, UnreadPath, VendoredFrom,
+    InventorySummary, SnapshotKind, SnapshotManifest, Submodule, UnitAliasTable, UnreadPath,
+    VendoredFrom,
 };
 
 /// A module selector assigns ownership without changing a path's class.
@@ -50,6 +51,77 @@ pub struct Unit {
     pub by: String,
 }
 
+/// Why a snapshot refused a read, in the snapshot's own terms (`snapshot-changed`, or
+/// the entry's `unread` reason), so a caller can retake the snapshot or report it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReadError {
+    pub code: String,
+    pub reason: String,
+}
+
+/// Reads captured bytes for one snapshot path.
+pub type Reader<'a> = &'a dyn Fn(&str) -> Result<Vec<u8>, ReadError>;
+
+/// The captured snapshot inventory classifies: its identity, path listing and bytes.
+/// Discovery reads configuration only through `read`, never from the live filesystem.
+#[derive(Clone, Copy)]
+pub struct CapturedSnapshot<'a> {
+    pub manifest: &'a SnapshotManifest,
+    pub entries: &'a [InventoryEntry],
+    pub read: Reader<'a>,
+    /// Captured paths Git does not track (untracked, non-ignored worktree files). Every
+    /// entry of an index, commit or tree snapshot is tracked, so this is empty for them.
+    pub untracked: &'a BTreeSet<String>,
+}
+
+/// The untracked, non-ignored paths a capture of `kind` includes: the worktree's
+/// `git ls-files --others --exclude-standard`, the same listing the capture adds to the
+/// index; nothing for an object snapshot, whose entries all come from Git objects.
+pub fn untracked_paths(
+    root: &Path,
+    kind: &SnapshotKind,
+) -> Result<BTreeSet<String>, InventoryError> {
+    if *kind != SnapshotKind::Worktree {
+        return Ok(BTreeSet::new());
+    }
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "--others", "--exclude-standard", "-z"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_NO_REPLACE_OBJECTS", "1");
+    for variable in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ] {
+        command.env_remove(variable);
+    }
+    let output = command
+        .output()
+        .map_err(|error| io_error("git ls-files --others", error))?;
+    if !output.status.success() {
+        return Err(io_error(
+            "git ls-files --others",
+            String::from_utf8_lossy(&output.stderr).trim(),
+        ));
+    }
+    output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+        .map(|record| {
+            std::str::from_utf8(record)
+                .map(str::to_owned)
+                .map_err(|_| io_error("git ls-files --others", "non-UTF-8 path"))
+        })
+        .collect()
+}
+
 /// Result of classifying a snapshot tree.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BuiltInventory {
@@ -78,6 +150,12 @@ pub struct GeneratedIssue {
 pub enum InventoryError {
     Io {
         path: String,
+        reason: String,
+    },
+    /// The snapshot refused to supply a path's captured bytes.
+    Read {
+        path: String,
+        code: String,
         reason: String,
     },
     InvalidGlob {
@@ -115,10 +193,34 @@ pub enum InventoryError {
     },
 }
 
+impl InventoryError {
+    /// Spec 12.1: errors are distinguishable by code, so each variant has its own stable
+    /// code; spec names are used where they exist (`nested-repository`, 5.6). A refused
+    /// snapshot read keeps the snapshot's code, which capture's retry depends on.
+    pub fn code(&self) -> &str {
+        match self {
+            Self::Io { .. } => "inventory-io",
+            Self::Read { code, .. } => code,
+            Self::InvalidGlob { .. } => "invalid-glob",
+            Self::ClassificationConflict { .. } => "classification-conflict",
+            Self::MissingDefaultReplacement { .. } => "missing-default-replacement",
+            Self::WrongDefaultReplacement { .. } => "wrong-default-replacement",
+            Self::OwnershipOverlap { .. } => "ownership-overlap",
+            Self::NestedRepository { .. } => "nested-repository",
+            Self::InvalidDeclaration { .. } => "invalid-declaration",
+            Self::ProducerFailed { .. } => "producer-failed",
+        }
+    }
+}
+
 impl fmt::Display for InventoryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io { path, reason } => write!(formatter, "could not read `{path}`: {reason}"),
+            Self::Read { path, code, reason } => write!(
+                formatter,
+                "could not read `{path}` from the snapshot: {code}: {reason}"
+            ),
             Self::InvalidGlob { pattern, reason } => {
                 write!(formatter, "invalid glob `{pattern}`: {reason}")
             }
@@ -158,7 +260,7 @@ impl fmt::Display for InventoryError {
             }
             Self::NestedRepository { path } => write!(
                 formatter,
-                "nested-repository: `{path}` is not a declared submodule"
+                "`{path}` is a nested repository and not a declared submodule"
             ),
             Self::InvalidDeclaration { reason } => formatter.write_str(reason),
             Self::ProducerFailed { producer, status } => {
@@ -176,16 +278,17 @@ impl std::error::Error for InventoryError {}
 /// Enrich the snapshot's path listing with inventory classification and provenance.
 pub fn build(
     root: &Path,
-    snapshot_entries: &[InventoryEntry],
+    snapshot: CapturedSnapshot<'_>,
     manifest: &WarrantManifest,
     config: &BuildConfig,
 ) -> Result<BuiltInventory, InventoryError> {
+    let snapshot_entries = snapshot.entries;
+    let read = snapshot.read;
     let submodules: Vec<_> = snapshot_entries
         .iter()
         .filter(|entry| entry.class == InventoryClass::Submodule)
         .map(|entry| entry.path.clone())
         .collect();
-    check_nested_repositories(root, &submodules)?;
     let mut paths: Vec<String> = snapshot_entries
         .iter()
         .filter(|entry| {
@@ -202,6 +305,14 @@ pub fn build(
             reason: "duplicate path in snapshot listing".into(),
         });
     }
+    let looked_at: Vec<&str> = snapshot_entries
+        .iter()
+        .filter(|entry| {
+            entry.class != InventoryClass::Ignored && paths.binary_search(&entry.path).is_ok()
+        })
+        .map(|entry| entry.path.as_str())
+        .collect();
+    check_nested_repositories(root, &looked_at, snapshot.untracked, &submodules)?;
     let modules = compile_modules(&config.modules)?;
     let mut rules = manifest_rules(&manifest.inventory.classes);
     rules.extend(config.class_rules.clone());
@@ -225,7 +336,11 @@ pub fn build(
             entries.push(entry);
             continue;
         }
-        let default = default_class(relative, enabled);
+        let default = default_class(
+            relative,
+            enabled,
+            snapshot.untracked.contains(relative.as_str()),
+        );
         let explicit = matching_rules(relative, &class_rules);
         let generated_match = matching_generated(relative, &generated);
         let vendored_match = matching_vendored(relative, &vendored);
@@ -311,21 +426,25 @@ pub fn build(
         });
     }
 
+    // An unread entry stays in the inventory with its reason; nothing it would have
+    // declared (a unit, an alias table, an entrypoint) is inferred from bytes around it.
     let discovery_paths: Vec<String> = entries
         .iter()
         .filter(|entry| {
-            !matches!(
-                entry.class,
-                InventoryClass::Ignored
-                    | InventoryClass::Submodule
-                    | InventoryClass::BuildOutput
-                    | InventoryClass::Vendored
-            )
+            entry.unread.is_none()
+                && !matches!(
+                    entry.class,
+                    InventoryClass::Ignored
+                        | InventoryClass::Submodule
+                        | InventoryClass::BuildOutput
+                        | InventoryClass::Vendored
+                        | InventoryClass::Unread
+                )
         })
         .map(|entry| entry.path.clone())
         .collect();
-    let mut units = discover_units_from_paths(root, &discovery_paths)?;
-    let package_entrypoints = discover_package_entrypoints(root, &discovery_paths)?;
+    let mut units = discover_units_from_paths(root, read, &discovery_paths)?;
+    let package_entrypoints = discover_package_entrypoints(read, &discovery_paths)?;
     for entry in &mut entries {
         if matches!(
             entry.class,
@@ -335,9 +454,9 @@ pub fn build(
         }
         entry.unit = unit_for(&entry.path, &units, source_language(&entry.path, enabled))
             .map(|unit| unit.root.clone());
+        // `by` stays the classifying rule; the fallback unit records its own basis.
         if entry.class == InventoryClass::Source && entry.unit.is_none() {
             entry.unit = Some(".".into());
-            entry.by = "implicit-root-unit".into();
         }
         entry.entrypoints = entrypoints_for(&entry.path, manifest, &package_entrypoints);
     }
@@ -354,12 +473,27 @@ pub fn build(
         });
         units.sort_by(|left, right| left.root.cmp(&right.root));
     }
-    let generated_absent = add_absent_generated(&mut entries, &generated, &paths)?;
+    // Spec 5.3: an ignored file is absent from the snapshot even when a copy is on disk,
+    // so generated presence is decided against captured paths, not the exclusion listing.
+    let captured: Vec<&str> = snapshot_entries
+        .iter()
+        .filter(|entry| {
+            entry.class != InventoryClass::Ignored && paths.binary_search(&entry.path).is_ok()
+        })
+        .map(|entry| entry.path.as_str())
+        .collect();
+    let generated_absent = add_absent_generated(&mut entries, &generated, &captured)?;
     entries.sort_by(|left, right| left.path.cmp(&right.path));
-    let unit_aliases = alias_tables(root, &discovery_paths, &units)?;
-    let summary = summarize(&entries, unit_aliases, generated_absent);
+    let unit_aliases = alias_tables(read, &discovery_paths, &units)?;
+    let summary = summarize(
+        &entries,
+        &snapshot.manifest.kind,
+        unit_aliases,
+        generated_absent,
+    );
     let document = InventoryDocument {
         schema_version: "warrant.inventory/1".into(),
+        snapshot: Some(snapshot.manifest.clone()),
         total: entries.len() as u64,
         entries,
         summary,
@@ -393,12 +527,26 @@ pub fn lint_ownership(root: &Path, modules: &[ModuleSelector]) -> Result<(), Inv
 /// Discover JavaScript, TypeScript, and Cargo units without compiling source.
 pub fn discover_units(root: &Path) -> Result<Vec<Unit>, InventoryError> {
     let paths = repository_paths(root)?;
-    discover_units_from_paths(root, &paths)
+    let read = |path: &str| {
+        fs::read(root.join(path)).map_err(|error| ReadError {
+            code: "io".into(),
+            reason: error.to_string(),
+        })
+    };
+    discover_units_from_paths(root, &read, &paths)
 }
 
-/// Re-run each reproducible producer in an isolated copy and compare output blobs.
+/// A captured path's Git mode (`100644`, `100755`, `120000`), as the snapshot recorded it.
+pub type ModeOf<'a> = &'a dyn Fn(&str) -> Option<String>;
+
+/// Spec 5.3: re-run each reproducible producer over a copy of the captured snapshot and
+/// compare what it writes with the captured bytes. The copy is the snapshot's readable,
+/// non-ignored entries in their captured bytes and modes, never the disk tree: ignored
+/// files and edits made after capture are not the source being verified. Paths a
+/// reproducible declaration matches are left out of the copy for the producer to write.
 pub fn verify_generated(
-    root: &Path,
+    snapshot: CapturedSnapshot<'_>,
+    mode: ModeOf<'_>,
     manifest: &WarrantManifest,
 ) -> Result<Vec<GeneratedIssue>, InventoryError> {
     let declarations = compile_generated(manifest)?;
@@ -409,26 +557,34 @@ pub fn verify_generated(
     if reproducible.is_empty() {
         return Ok(Vec::new());
     }
+    let present: BTreeSet<&str> = snapshot
+        .entries
+        .iter()
+        .filter(|entry| {
+            !matches!(
+                entry.class,
+                InventoryClass::Ignored | InventoryClass::Submodule
+            )
+        })
+        .map(|entry| entry.path.as_str())
+        .collect();
     let temporary = tempfile::tempdir().map_err(|error| io_error("temporary directory", error))?;
-    copy_repository(root, temporary.path())?;
-    let original_paths = repository_paths(root)?;
-    for item in &reproducible {
-        for path in &original_paths {
-            if item.matcher.is_match(path) {
-                let target = temporary.path().join(path);
-                if target.is_dir() {
-                    fs::remove_dir_all(&target).map_err(|error| io_error(path, error))?;
-                } else if target.exists() {
-                    fs::remove_file(&target).map_err(|error| io_error(path, error))?;
-                }
-            }
+    for entry in snapshot.entries {
+        if !present.contains(entry.path.as_str())
+            || entry.unread.is_some()
+            || reproducible
+                .iter()
+                .any(|item| item.matcher.is_match(&entry.path))
+        {
+            continue;
         }
-        if is_literal(&item.pattern) {
-            let target = temporary.path().join(&item.pattern);
-            if target.exists() {
-                fs::remove_file(&target).map_err(|error| io_error(&item.pattern, error))?;
-            }
-        }
+        let bytes = read_captured(snapshot.read, &entry.path)?;
+        write_captured(
+            temporary.path(),
+            &entry.path,
+            &bytes,
+            mode(&entry.path).as_deref(),
+        )?;
     }
 
     let producers: BTreeSet<&str> = reproducible
@@ -453,21 +609,24 @@ pub fn verify_generated(
     let generated_paths = repository_paths(temporary.path())?;
     let mut issues = Vec::new();
     for item in reproducible {
-        let mut candidates: BTreeSet<String> = original_paths
+        let mut candidates: BTreeSet<String> = present
             .iter()
-            .chain(generated_paths.iter())
+            .map(|path| (*path).to_owned())
+            .chain(generated_paths.iter().cloned())
             .filter(|path| item.matcher.is_match(path.as_str()))
-            .cloned()
             .collect();
         if is_literal(&item.pattern) || candidates.is_empty() {
             candidates.insert(item.pattern.clone());
         }
         for path in candidates {
-            let original = root.join(&path);
             let reproduced = temporary.path().join(&path);
-            let code = if !original.is_file() {
+            let code = if !present.contains(path.as_str()) {
                 Some(GeneratedIssueCode::GeneratedAbsent)
-            } else if !reproduced.is_file() || blob_id(&original)? != blob_id(&reproduced)? {
+            } else if !(reproduced.is_file() || reproduced.is_symlink())
+                // A refused read (an oversize or external-symlink output) is an error,
+                // never a silent pass.
+                || digest_bytes(&read_captured(snapshot.read, &path)?) != blob_id(&reproduced)?
+            {
                 Some(GeneratedIssueCode::GeneratedDrift)
             } else {
                 None
@@ -490,10 +649,15 @@ pub fn verify_generated(
     Ok(issues)
 }
 
-/// Hash the deterministic inventory document, including completeness accounting.
+/// Hash the deterministic inventory document, including completeness accounting and the
+/// snapshot identity. The capture time is excluded: it names when, not what, was read.
 pub fn inventory_digest(document: &InventoryDocument) -> Result<String, InventoryError> {
+    let mut document = document.clone();
+    if let Some(snapshot) = &mut document.snapshot {
+        snapshot.taken_at.clear();
+    }
     let bytes =
-        serde_json::to_vec(document).map_err(|error| InventoryError::InvalidDeclaration {
+        serde_json::to_vec(&document).map_err(|error| InventoryError::InvalidDeclaration {
             reason: format!("inventory serialization failed: {error}"),
         })?;
     Ok(digest_bytes(&bytes))
@@ -534,7 +698,7 @@ struct GeneratedPattern {
     matcher: GlobSet,
     pattern: String,
     producer: String,
-    inputs: Vec<String>,
+    inputs: Option<Vec<String>>,
     reproducible: bool,
 }
 struct VendoredPattern {
@@ -546,28 +710,39 @@ struct VendoredPattern {
     treatment: String,
 }
 
-fn check_nested_repositories(root: &Path, submodules: &[String]) -> Result<(), InventoryError> {
-    let git = root.join(".git");
-    let excluded: Vec<_> = submodules.iter().map(|path| root.join(path)).collect();
-    let mut walker = WalkBuilder::new(root);
-    walker
-        .hidden(false)
-        .ignore(false)
-        .git_ignore(false)
-        .git_exclude(false)
-        .parents(false)
-        .filter_entry(move |entry| {
-            entry.path() != git && !excluded.iter().any(|path| entry.path().starts_with(path))
-        });
-    for result in walker.build() {
-        let entry = result.map_err(|error| io_error(root, error))?;
-        if entry.path() != root && entry.file_name() == ".git" {
-            return Err(InventoryError::NestedRepository {
-                path: relative_path(
-                    root,
-                    entry.path().parent().expect("nested .git has a parent"),
-                )?,
-            });
+/// Spec 5.6: a nested repository that is not a declared submodule gives its files two
+/// identities. Only directories the snapshot looks into are checked: every ancestor of
+/// a captured non-ignored entry, and every directory Git's untracked, non-ignored
+/// listing reports instead of descending (that is how Git lists a nested repository).
+/// A repository under an ignored directory with no captured entries is not looked at.
+fn check_nested_repositories(
+    root: &Path,
+    captured: &[&str],
+    untracked: &BTreeSet<String>,
+    submodules: &[String],
+) -> Result<(), InventoryError> {
+    let mut directories = BTreeSet::new();
+    for path in captured {
+        let mut ancestor = Path::new(path).parent();
+        while let Some(directory) = ancestor.filter(|directory| *directory != Path::new("")) {
+            if !directories.insert(directory.to_string_lossy().into_owned()) {
+                break;
+            }
+            ancestor = directory.parent();
+        }
+    }
+    directories.extend(
+        untracked
+            .iter()
+            .filter_map(|path| path.strip_suffix('/'))
+            .map(str::to_owned),
+    );
+    for directory in directories {
+        let within_submodule = submodules
+            .iter()
+            .any(|submodule| Path::new(&directory).starts_with(submodule));
+        if !within_submodule && fs::symlink_metadata(root.join(&directory).join(".git")).is_ok() {
+            return Err(InventoryError::NestedRepository { path: directory });
         }
     }
     Ok(())
@@ -804,15 +979,24 @@ fn matching_modules(path: &str, modules: &[CompiledModule]) -> Vec<String> {
     owners
 }
 
-fn default_class(path: &str, enabled: EnabledIntegrations) -> (InventoryClass, String, String) {
+/// Integration defaults (spec 5.2). The build-output directory names are a built-in
+/// only for files Git does not track: a tracked file under `build/` or `dist/` is
+/// classified by its extension like any other, and a repository that commits build
+/// output declares it in its manifest.
+fn default_class(
+    path: &str,
+    enabled: EnabledIntegrations,
+    untracked: bool,
+) -> (InventoryClass, String, String) {
     let lower = path.to_ascii_lowercase();
     let name = lower.rsplit('/').next().unwrap_or(&lower);
     let segments: Vec<&str> = lower.split('/').collect();
     let in_dir =
         |candidate: &str| segments[..segments.len().saturating_sub(1)].contains(&candidate);
-    let known_output = ["target", "dist", "build", "node_modules", ".next"]
-        .iter()
-        .any(|part| in_dir(part));
+    let known_output = untracked
+        && ["target", "dist", "build", "node_modules", ".next"]
+            .iter()
+            .any(|part| in_dir(part));
     let class = if known_output {
         InventoryClass::BuildOutput
     } else if enabled.typescript && lower.ends_with(".d.ts") {
@@ -928,7 +1112,11 @@ fn digest_bytes(bytes: &[u8]) -> String {
     encoded
 }
 
-fn discover_units_from_paths(root: &Path, paths: &[String]) -> Result<Vec<Unit>, InventoryError> {
+fn discover_units_from_paths(
+    root: &Path,
+    read: Reader<'_>,
+    paths: &[String],
+) -> Result<Vec<Unit>, InventoryError> {
     let mut units = BTreeMap::<String, Unit>::new();
     for path in paths {
         if path.ends_with("/tsconfig.json") || path == "tsconfig.json" {
@@ -942,14 +1130,14 @@ fn discover_units_from_paths(root: &Path, paths: &[String]) -> Result<Vec<Unit>,
             );
         }
     }
-    discover_tsconfig_references(root, paths, &mut units)?;
-    discover_javascript_units(root, paths, &mut units)?;
+    discover_tsconfig_references(read, paths, &mut units)?;
+    discover_javascript_units(read, paths, &mut units)?;
     discover_cargo_units(root, paths, &mut units)?;
     Ok(units.into_values().collect())
 }
 
 fn discover_tsconfig_references(
-    root: &Path,
+    read: Reader<'_>,
     paths: &[String],
     units: &mut BTreeMap<String, Unit>,
 ) -> Result<(), InventoryError> {
@@ -963,7 +1151,7 @@ fn discover_tsconfig_references(
         if !seen.insert(configuration.clone()) {
             continue;
         }
-        let value = read_tsconfig(root, &configuration)?;
+        let value = read_tsconfig(read, &configuration)?;
         for reference in value
             .get("references")
             .and_then(Value::as_array)
@@ -996,9 +1184,17 @@ fn discover_tsconfig_references(
     Ok(())
 }
 
-fn read_tsconfig(root: &Path, configuration: &str) -> Result<Value, InventoryError> {
-    let mut bytes =
-        fs::read(root.join(configuration)).map_err(|error| io_error(configuration, error))?;
+/// Captured configuration bytes; the snapshot's refusal is kept as its own error.
+fn read_captured(read: Reader<'_>, path: &str) -> Result<Vec<u8>, InventoryError> {
+    read(path).map_err(|error| InventoryError::Read {
+        path: path.into(),
+        code: error.code,
+        reason: error.reason,
+    })
+}
+
+fn read_tsconfig(read: Reader<'_>, configuration: &str) -> Result<Value, InventoryError> {
+    let mut bytes = read_captured(read, configuration)?;
     json_strip_comments::strip_slice(&mut bytes).map_err(|error| {
         InventoryError::InvalidDeclaration {
             reason: format!("invalid `{configuration}`: {error}"),
@@ -1029,7 +1225,7 @@ fn normalize_relative(path: &Path) -> Option<String> {
 }
 
 fn discover_javascript_units(
-    root: &Path,
+    read: Reader<'_>,
     paths: &[String],
     units: &mut BTreeMap<String, Unit>,
 ) -> Result<(), InventoryError> {
@@ -1038,8 +1234,7 @@ fn discover_javascript_units(
         .filter(|path| path.ends_with("package.json"))
         .collect();
     for package_file in &package_files {
-        let bytes =
-            fs::read(root.join(package_file)).map_err(|error| io_error(package_file, error))?;
+        let bytes = read_captured(read, package_file)?;
         let value: Value =
             serde_json::from_slice(&bytes).map_err(|error| InventoryError::InvalidDeclaration {
                 reason: format!("invalid `{package_file}`: {error}"),
@@ -1065,8 +1260,11 @@ fn discover_javascript_units(
         .iter()
         .filter(|path| path.ends_with("pnpm-workspace.yaml"))
     {
-        let bytes = fs::read_to_string(root.join(workspace_file))
-            .map_err(|error| io_error(workspace_file, error))?;
+        let bytes = String::from_utf8(read_captured(read, workspace_file)?).map_err(|_| {
+            InventoryError::InvalidDeclaration {
+                reason: format!("invalid `{workspace_file}`: not UTF-8"),
+            }
+        })?;
         let value: serde_json::Value =
             serde_saphyr::from_str(&bytes).map_err(|error| InventoryError::InvalidDeclaration {
                 reason: format!("invalid `{workspace_file}`: {error}"),
@@ -1212,17 +1410,17 @@ fn is_tsconfig(path: &str) -> bool {
 }
 
 fn discover_package_entrypoints(
-    root: &Path,
+    read: Reader<'_>,
     paths: &[String],
 ) -> Result<BTreeMap<String, Vec<Entrypoint>>, InventoryError> {
     let mut found = BTreeMap::<String, Vec<Entrypoint>>::new();
     for package_file in paths.iter().filter(|path| path.ends_with("package.json")) {
-        let value: Value = serde_json::from_slice(
-            &fs::read(root.join(package_file)).map_err(|error| io_error(package_file, error))?,
-        )
-        .map_err(|error| InventoryError::InvalidDeclaration {
-            reason: format!("invalid `{package_file}`: {error}"),
-        })?;
+        let value: Value =
+            serde_json::from_slice(&read_captured(read, package_file)?).map_err(|error| {
+                InventoryError::InvalidDeclaration {
+                    reason: format!("invalid `{package_file}`: {error}"),
+                }
+            })?;
         let package_root = parent_string(package_file);
         collect_field_targets(
             &value,
@@ -1325,7 +1523,7 @@ fn entrypoints_for(
 }
 
 fn alias_tables(
-    root: &Path,
+    read: Reader<'_>,
     paths: &[String],
     units: &[Unit],
 ) -> Result<Vec<UnitAliasTable>, InventoryError> {
@@ -1334,7 +1532,7 @@ fn alias_tables(
     for unit in units {
         let mut alias_table = None;
         if is_tsconfig(&unit.configuration) && !unit.configuration.is_empty() {
-            let value = read_tsconfig(root, &unit.configuration)?;
+            let value = read_tsconfig(read, &unit.configuration)?;
             if value
                 .get("compilerOptions")
                 .and_then(|options| options.get("paths"))
@@ -1350,12 +1548,10 @@ fn alias_tables(
                 format!("{}/package.json", unit.root)
             };
             if available.contains(package.as_str()) {
-                let value: Value = serde_json::from_slice(
-                    &fs::read(root.join(&package)).map_err(|error| io_error(&package, error))?,
-                )
-                .map_err(|error| InventoryError::InvalidDeclaration {
-                    reason: format!("invalid `{package}`: {error}"),
-                })?;
+                let value: Value = serde_json::from_slice(&read_captured(read, &package)?)
+                    .map_err(|error| InventoryError::InvalidDeclaration {
+                        reason: format!("invalid `{package}`: {error}"),
+                    })?;
                 if value.get("exports").is_some() {
                     alias_table = Some(package);
                 }
@@ -1371,14 +1567,17 @@ fn alias_tables(
     Ok(rows)
 }
 
+/// The reason on a declared generated path the snapshot does not contain.
+const GENERATED_ABSENT: &str = "generated-absent";
+
 fn add_absent_generated(
     entries: &mut Vec<InventoryEntry>,
     patterns: &[GeneratedPattern],
-    paths: &[String],
+    captured: &[&str],
 ) -> Result<Vec<GeneratedAbsent>, InventoryError> {
     let mut absent = Vec::new();
     for item in patterns {
-        if paths.iter().any(|path| item.matcher.is_match(path)) {
+        if captured.iter().any(|path| item.matcher.is_match(path)) {
             continue;
         }
         if !is_literal(&item.pattern) {
@@ -1400,7 +1599,13 @@ fn add_absent_generated(
                 rules,
             });
         }
+        // The path is listed as an ignored entry; keep that entry and record the
+        // absence with its producer in the summary rather than duplicating the path.
         if entries.iter().any(|entry| entry.path == item.pattern) {
+            absent.push(GeneratedAbsent {
+                declaration: item.pattern.clone(),
+                producer: item.producer.clone(),
+            });
             continue;
         }
         entries.push(InventoryEntry {
@@ -1411,7 +1616,7 @@ fn add_absent_generated(
             unit: None,
             module: None,
             by: "manifest:inventory.generated".into(),
-            reason: "generated-absent".into(),
+            reason: GENERATED_ABSENT.into(),
             entrypoints: Vec::new(),
             unread: None,
             generated_by: Some(GeneratedBy {
@@ -1428,17 +1633,27 @@ fn add_absent_generated(
 
 fn summarize(
     entries: &[InventoryEntry],
+    kind: &SnapshotKind,
     unit_aliases: Vec<UnitAliasTable>,
     generated_absent: Vec<GeneratedAbsent>,
 ) -> InventorySummary {
+    // Spec 4.3: only a worktree capture sees ignored files; for an index, commit or tree
+    // the count is unknown (null), which is not the same claim as zero.
+    let ignored_files = (*kind == SnapshotKind::Worktree).then(|| {
+        entries
+            .iter()
+            .filter(|entry| entry.class == InventoryClass::Ignored)
+            .count() as u64
+    });
+    // `files` counts what the snapshot holds: an ignored path is outside it, and a
+    // declared generated file that is absent is listed for its producer, not present.
+    let files = entries
+        .iter()
+        .filter(|entry| entry.class != InventoryClass::Ignored && entry.reason != GENERATED_ABSENT)
+        .count() as u64;
     let mut summary = InventorySummary {
-        files: entries.len() as u64,
-        ignored_files: Some(
-            entries
-                .iter()
-                .filter(|entry| entry.class == InventoryClass::Ignored)
-                .count() as u64,
-        ),
+        files,
+        ignored_files,
         unit_aliases,
         generated_absent,
         ..InventorySummary::default()
@@ -1467,16 +1682,32 @@ fn summarize(
     summary
 }
 
-fn copy_repository(source: &Path, destination: &Path) -> Result<(), InventoryError> {
-    let paths = repository_paths(source)?;
-    for relative in paths {
-        let from = source.join(&relative);
-        let to = destination.join(&relative);
-        if let Some(parent) = to.parent() {
-            fs::create_dir_all(parent).map_err(|error| io_error(parent, error))?;
-        }
-        fs::copy(&from, &to).map_err(|error| io_error(&relative, error))?;
+/// Write one captured path into the verification copy with its recorded mode.
+fn write_captured(
+    root: &Path,
+    path: &str,
+    bytes: &[u8],
+    mode: Option<&str>,
+) -> Result<(), InventoryError> {
+    let target = root.join(path);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| io_error(parent, error))?;
     }
+    #[cfg(unix)]
+    if mode == Some("120000") {
+        use std::os::unix::ffi::OsStrExt;
+        return std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(bytes), &target)
+            .map_err(|error| io_error(path, error));
+    }
+    fs::write(&target, bytes).map_err(|error| io_error(path, error))?;
+    #[cfg(unix)]
+    if mode == Some("100755") {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755))
+            .map_err(|error| io_error(path, error))?;
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
     Ok(())
 }
 

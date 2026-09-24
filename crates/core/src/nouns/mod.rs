@@ -127,8 +127,9 @@ pub struct Entrypoint {
 pub struct GeneratedBy {
     pub producer: String,
     pub reproducible: bool,
+    /// As declared: null when the manifest names no inputs, `[]` when it declares none.
     #[serde(default)]
-    pub inputs: Vec<String>,
+    pub inputs: Option<Vec<String>>,
 }
 
 /// Source provenance for vendored content.
@@ -187,7 +188,8 @@ pub struct UnitAliasTable {
     pub by: String,
 }
 
-/// A generated glob declaration that matched no snapshot path.
+/// A generated declaration with no captured match: a glob that matched no snapshot
+/// path, or a declared path present only as an ignored file.
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GeneratedAbsent {
@@ -212,6 +214,19 @@ pub struct InventorySummary {
     pub unit_aliases: Vec<UnitAliasTable>,
     #[serde(default)]
     pub generated_absent: Vec<GeneratedAbsent>,
+    /// Drift found by `inventory --verify-generated`; null when producers were not
+    /// re-run, which is not the same claim as an empty list (spec 12.2).
+    #[serde(default)]
+    pub generated_drift: Option<Vec<GeneratedDrift>>,
+}
+
+/// A reproducible generated file whose producer, re-run over the snapshot, wrote
+/// different bytes (spec 5.3, `generated-drift`).
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeneratedDrift {
+    pub path: String,
+    pub producer: String,
 }
 
 /// The complete classified inventory document.
@@ -219,6 +234,10 @@ pub struct InventorySummary {
 #[serde(deny_unknown_fields)]
 pub struct InventoryDocument {
     pub schema_version: String,
+    /// The snapshot this inventory classifies (spec 4.5). Always emitted; optional only
+    /// so documents written before it existed still deserialize.
+    #[serde(default)]
+    pub snapshot: Option<SnapshotManifest>,
     pub entries: Vec<InventoryEntry>,
     pub summary: InventorySummary,
     #[serde(default)]

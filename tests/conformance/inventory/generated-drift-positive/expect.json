@@ -1,1 +1,1 @@
-{"driver":"verify-generated","exit_code":0,"generated_issues":[]}
+{"driver":"cli","args":["inventory","--verify-generated"],"exit_code":0,"inventory":{"generated_drift":[]}}

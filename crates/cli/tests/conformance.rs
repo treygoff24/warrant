@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use warrant_core::{
     manifest::WarrantManifest,
-    nouns::{InventoryClass, InventoryDocument, SnapshotKind},
+    nouns::{GeneratedDrift, InventoryClass, InventoryDocument, SnapshotKind},
 };
 use warrant_inventory::{BuildConfig, ClassRule, ModuleSelector};
 
@@ -20,7 +20,6 @@ use warrant_inventory::{BuildConfig, ClassRule, ModuleSelector};
 enum Driver {
     Cli,
     InventoryApi,
-    VerifyGenerated,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -32,6 +31,12 @@ struct Setup {
     stage_files: BTreeMap<String, String>,
     #[serde(default)]
     worktree_files: BTreeMap<String, String>,
+    /// Paths that differ only by case from a checked-in fixture path. The runner writes
+    /// each one and stages its blob with `update-index --cacheinfo`, so the pair is never
+    /// checked in: a clone on a case-insensitive filesystem would drop one of them, and
+    /// Warrant's own snapshot would report the collision.
+    #[serde(default)]
+    case_variant_files: BTreeMap<String, String>,
     #[serde(default)]
     symlinks: BTreeMap<String, String>,
     #[serde(default)]
@@ -74,10 +79,17 @@ struct InventoryExpect {
     unread: Option<BTreeMap<String, String>>,
     #[serde(default)]
     generated_absent: Option<Vec<String>>,
+    /// Declaration to producer for each `generated_absent` row named here.
+    #[serde(default)]
+    generated_absent_producers: BTreeMap<String, String>,
     #[serde(default)]
     ignored_files: Option<u64>,
     #[serde(default)]
     submodules: Option<Vec<String>>,
+    /// The `--verify-generated` drift rows, compared whole; a document whose producers
+    /// were not re-run (null) never matches.
+    #[serde(default)]
+    generated_drift: Option<Vec<GeneratedDrift>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,9 +120,10 @@ struct Expectation {
     #[serde(default)]
     error: Option<ErrorExpect>,
     #[serde(default)]
-    generated_issues: Option<Vec<Value>>,
-    #[serde(default)]
     tree_matches_index: Option<bool>,
+    /// What `git ls-files --others --ignored --exclude-standard` prints for the case.
+    #[serde(default)]
+    git_ignored: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -119,6 +132,7 @@ struct Observation {
     document: Option<Value>,
     stderr: String,
     index_tree: Option<String>,
+    git_ignored: Option<Vec<String>>,
 }
 
 #[test]
@@ -231,6 +245,52 @@ fn inventory_expectation_rejects_missing_unknown_files() {
     assert!(error.contains("unknown"), "{error}");
 }
 
+/// W0.6: the runner compares expect.json semantically and never byte-for-byte.
+#[test]
+fn semantic_comparison_ignores_key_order_at_every_depth() {
+    let case = fixture_root().join("inventory/unowned-source-break-control");
+    let original: Value =
+        serde_json::from_slice(&fs::read(case.join("expect.json")).expect("read expect.json"))
+            .expect("parse expect.json");
+    let reordered = reverse_keys(&original);
+    let reordered_bytes = serde_json::to_vec(&reordered).expect("encode reordered expectation");
+    assert_ne!(
+        serde_json::to_vec(&original).expect("encode expectation"),
+        reordered_bytes,
+        "reordering must change the serialized bytes, or this test proves nothing"
+    );
+    semantic_subset(&reordered, &original, "$").expect("reordered expectation still matches");
+
+    // The same reordered file, parsed and compared through the runner's entry point.
+    let (_, observation) = execute_case(&case);
+    let expectation: Expectation =
+        serde_json::from_slice(&reordered_bytes).expect("parse reordered expectation");
+    check_expectation(&expectation, &observation).expect("reordered expectation passes");
+
+    // A nested product document, reordered at every depth, is still the same document.
+    let document = observation.document.expect("inventory document");
+    let reordered_document = reverse_keys(&document);
+    assert_ne!(
+        serde_json::to_vec(&document).expect("encode document"),
+        serde_json::to_vec(&reordered_document).expect("encode reordered document"),
+        "reordering must change the serialized document bytes"
+    );
+    semantic_subset(&reordered_document, &document, "$").expect("reordered document still matches");
+}
+
+fn reverse_keys(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .rev()
+                .map(|(key, value)| (key.clone(), reverse_keys(value)))
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(values.iter().map(reverse_keys).collect()),
+        other => other.clone(),
+    }
+}
+
 fn run_area(area: &str) {
     let root = fixture_root().join(area);
     let mut cases = fs::read_dir(&root)
@@ -265,6 +325,9 @@ fn run_area(area: &str) {
             "generated-drift-break-control",
             "generated-drift-negative",
             "generated-drift-positive",
+            "generated-ignored-break-control",
+            "generated-ignored-negative",
+            "generated-ignored-positive",
             "unowned-source-break-control",
             "unowned-source-negative",
             "unowned-source-positive",
@@ -311,7 +374,6 @@ fn execute_case(case: &Path) -> (Expectation, Observation) {
     let observation = match expectation.driver {
         Driver::Cli => run_cli(&repository, temporary.path(), &expectation.args),
         Driver::InventoryApi => run_inventory_api(&repository, &expectation),
-        Driver::VerifyGenerated => run_verify_generated(&repository),
     };
     (expectation, observation)
 }
@@ -369,6 +431,19 @@ fn apply_setup(repository: &Path, temporary: &Path, setup: &Setup) {
     for (path, contents) in &setup.worktree_files {
         write_file(repository, path, contents.as_bytes());
     }
+    for (path, contents) in &setup.case_variant_files {
+        write_file(repository, path, contents.as_bytes());
+        let blob = hash_object(repository, contents.as_bytes());
+        git(
+            repository,
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("100644,{blob},{path}"),
+            ],
+        );
+    }
     for (path, target) in &setup.symlinks {
         let link = repository.join(path);
         if let Some(parent) = link.parent() {
@@ -410,6 +485,36 @@ fn apply_setup(repository: &Path, temporary: &Path, setup: &Setup) {
     }
 }
 
+/// Write `contents` as a blob without reading any worktree path.
+fn hash_object(repository: &Path, contents: &[u8]) -> String {
+    use std::io::Write as _;
+    let mut command = Command::new("git");
+    command
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(repository)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    neutralize_git_environment(&mut command);
+    let mut child = command.spawn().expect("run git hash-object");
+    child
+        .stdin
+        .take()
+        .expect("hash-object stdin")
+        .write_all(contents)
+        .expect("write blob contents");
+    let output = child.wait_with_output().expect("wait for git hash-object");
+    assert!(
+        output.status.success(),
+        "git hash-object: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("git UTF-8")
+        .trim()
+        .to_owned()
+}
+
 fn write_file(root: &Path, path: &str, contents: &[u8]) {
     let target = root.join(path);
     if let Some(parent) = target.parent() {
@@ -425,17 +530,38 @@ fn run_cli(repository: &Path, cache: &Path, args: &[String]) -> Observation {
         .current_dir(repository)
         .env("XDG_CACHE_HOME", cache.join("cache"));
     neutralize_git_environment(&mut command);
-    let output = command.output().expect("run warrant");
-    let mut observation = output_observation(output);
+    // The oracles are Git's answers before Warrant runs, so a run that rewrote the index
+    // could not move the oracle along with its own answer. `write-tree` may store a
+    // cache tree in the index, so the bytes are read after the oracles are taken.
     let format = git(repository, &["rev-parse", "--show-object-format"]);
-    observation.index_tree = Some(format!("{format}:{}", git(repository, &["write-tree"])));
+    let index_tree = format!("{format}:{}", git(repository, &["write-tree"]));
+    let git_ignored = git(
+        repository,
+        &["ls-files", "--others", "--ignored", "--exclude-standard"],
+    )
+    .lines()
+    .map(str::to_owned)
+    .collect();
+    let index_path = repository.join(git(repository, &["rev-parse", "--git-path", "index"]));
+    let index_before = fs::read(&index_path).expect("read index before warrant");
+    let output = command.output().expect("run warrant");
+    assert!(
+        fs::read(&index_path).expect("read index after warrant") == index_before,
+        "warrant {args:?} changed the index file in {}",
+        repository.display()
+    );
+    let mut observation = output_observation(output);
+    observation.index_tree = Some(index_tree);
+    observation.git_ignored = Some(git_ignored);
     observation
 }
 
 fn output_observation(output: Output) -> Observation {
     let exit_code = output.status.code().expect("warrant did not exit normally");
     let stderr = String::from_utf8(output.stderr).expect("UTF-8 stderr");
-    let bytes = if output.status.success() {
+    // A finding-bearing document exits 1 with the document on stdout (spec 10.2); an
+    // error writes nothing there and its document goes to stderr.
+    let bytes = if output.status.success() || !output.stdout.is_empty() {
         &output.stdout
     } else {
         stderr.as_bytes()
@@ -450,6 +576,7 @@ fn output_observation(output: Output) -> Observation {
         document,
         stderr,
         index_tree: None,
+        git_ignored: None,
     }
 }
 
@@ -481,17 +608,37 @@ fn run_inventory_api(repository: &Path, expectation: &Expectation) -> Observatio
         None,
         &manifest.snapshot,
         |snapshot| {
-            warrant_inventory::build(repository, snapshot.entries(), &manifest, &config).map_err(
-                |error| warrant_snapshot::SnapshotError {
-                    document: warrant_core::nouns::ErrorDocument {
-                        schema_version: "warrant.error/1".into(),
-                        code: "inventory".into(),
-                        reason: error.to_string(),
-                        locations: Vec::new(),
-                        next_diagnostic: None,
-                    },
+            let read = |path: &str| {
+                snapshot
+                    .read(path)
+                    .map_err(|error| warrant_inventory::ReadError {
+                        code: error.document.code,
+                        reason: error.document.reason,
+                    })
+            };
+            let untracked =
+                warrant_inventory::untracked_paths(repository, &snapshot.manifest().kind)
+                    .expect("untracked paths");
+            warrant_inventory::build(
+                repository,
+                warrant_inventory::CapturedSnapshot {
+                    manifest: snapshot.manifest(),
+                    entries: snapshot.entries(),
+                    read: &read,
+                    untracked: &untracked,
                 },
+                &manifest,
+                &config,
             )
+            .map_err(|error| warrant_snapshot::SnapshotError {
+                document: warrant_core::nouns::ErrorDocument {
+                    schema_version: "warrant.error/1".into(),
+                    code: error.code().into(),
+                    reason: error.to_string(),
+                    locations: Vec::new(),
+                    next_diagnostic: None,
+                },
+            })
         },
     ) {
         Ok((_, built)) => Observation {
@@ -499,6 +646,7 @@ fn run_inventory_api(repository: &Path, expectation: &Expectation) -> Observatio
             document: Some(serde_json::to_value(built.document).expect("inventory JSON")),
             stderr: String::new(),
             index_tree: None,
+            git_ignored: None,
         },
         Err(error) => {
             let stderr = error.to_string();
@@ -507,26 +655,9 @@ fn run_inventory_api(repository: &Path, expectation: &Expectation) -> Observatio
                 document: Some(serde_json::to_value(error.document).expect("error JSON")),
                 stderr,
                 index_tree: None,
+                git_ignored: None,
             }
         }
-    }
-}
-
-fn run_verify_generated(repository: &Path) -> Observation {
-    let manifest = load_manifest(repository);
-    match warrant_inventory::verify_generated(repository, &manifest) {
-        Ok(issues) => Observation {
-            exit_code: 0,
-            document: Some(serde_json::to_value(issues).expect("generated issue JSON")),
-            stderr: String::new(),
-            index_tree: None,
-        },
-        Err(error) => Observation {
-            exit_code: 2,
-            document: None,
-            stderr: error.to_string(),
-            index_tree: None,
-        },
     }
 }
 
@@ -584,21 +715,12 @@ fn check_expectation(expectation: &Expectation, observation: &Observation) -> Re
             observation.document.as_ref().ok_or("missing inventory")?,
         )?;
     }
-    if let Some(expected) = &expectation.generated_issues {
+    if let Some(expected) = &expectation.git_ignored {
         let actual = observation
-            .document
+            .git_ignored
             .as_ref()
-            .and_then(Value::as_array)
-            .ok_or("generated issues are not an array")?;
-        let mut expected = expected.clone();
-        let mut actual = actual.clone();
-        sort_json(&mut expected);
-        sort_json(&mut actual);
-        if actual != expected {
-            return Err(format!(
-                "generated issues {actual:?}, expected {expected:?}"
-            ));
-        }
+            .ok_or("git ignored listing was not observed")?;
+        compare_sorted("git_ignored", actual, expected)?;
     }
     if let Some(should_match) = expectation.tree_matches_index {
         let document = observation.document.as_ref().ok_or("missing snapshot")?;
@@ -676,6 +798,37 @@ fn check_inventory(expected: &InventoryExpect, actual: &Value) -> Result<(), Str
             .collect::<Vec<_>>();
         compare_sorted("generated_absent", &actual, expected)?;
     }
+    for (declaration, producer) in &expected.generated_absent_producers {
+        let row = document
+            .summary
+            .generated_absent
+            .iter()
+            .find(|row| &row.declaration == declaration)
+            .ok_or_else(|| format!("generated_absent lacks {declaration}"))?;
+        if &row.producer != producer {
+            return Err(format!(
+                "generated_absent {declaration} producer {:?}, expected {producer:?}",
+                row.producer
+            ));
+        }
+    }
+    if let Some(expected) = &expected.generated_drift {
+        let mut actual = document
+            .summary
+            .generated_drift
+            .clone()
+            .ok_or("generated producers were not re-run (generated_drift is null)")?;
+        let mut expected = expected.clone();
+        actual.sort_by(|left, right| {
+            (&left.path, &left.producer).cmp(&(&right.path, &right.producer))
+        });
+        expected.sort_by(|left, right| {
+            (&left.path, &left.producer).cmp(&(&right.path, &right.producer))
+        });
+        if actual != expected {
+            return Err(format!("generated_drift {actual:?}, expected {expected:?}"));
+        }
+    }
     if let Some(expected) = &expected.unread {
         let actual = document
             .summary
@@ -748,8 +901,14 @@ fn semantic_subset(expected: &Value, actual: &Value, path: &str) -> Result<(), S
     }
 }
 
+/// Sort array elements by a key-order-independent rendering: `Value::to_string` keeps
+/// object insertion order, so the same objects with reordered keys would sort apart.
 fn sort_json(values: &mut [Value]) {
-    values.sort_by_key(Value::to_string);
+    values.sort_by_cached_key(|value| {
+        let mut canonical = value.clone();
+        canonical.sort_all_objects();
+        canonical.to_string()
+    });
 }
 
 fn git(repository: &Path, args: &[&str]) -> String {

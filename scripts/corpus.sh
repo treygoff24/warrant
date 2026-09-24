@@ -217,6 +217,7 @@ fetch_one() (
   esac
   trap 'rm -rf -- "$tmp"' EXIT
 
+  printf 'fetch: %s clone\n' "$name" >&2
   git init -q "$tmp/repository"
   git -C "$tmp/repository" remote add origin "$source"
   git -C "$tmp/repository" fetch -q --depth 1 origin "$commit"
@@ -224,15 +225,18 @@ fetch_one() (
   [ "$fetched" = "$commit" ] || fail "$name fetched $fetched, expected $commit"
   git -C "$tmp/repository" checkout -q --detach "$commit"
 
-  make_source_archive "$name" "$tmp/repository" "$commit" "$tmp/$source_artifact"
+  printf 'fetch: %s install\n' "$name" >&2
   (
     cd "$tmp/repository"
     install_dependencies "$tmp/repository" "$package_manager"
   )
   [ -d "$tmp/repository/node_modules" ] || fail "$name install produced no node_modules"
+  printf 'fetch: %s archive\n' "$name" >&2
+  make_source_archive "$name" "$tmp/repository" "$commit" "$tmp/$source_artifact"
   make_dependency_archive "$tmp/repository" "$tmp/$dependency_artifact"
 
   # Both archives and the lockfile must match before replacing either artifact.
+  printf 'fetch: %s verify\n' "$name" >&2
   CORPUS_DIR=$tmp verify_member "$name"
   mv "$tmp/$source_artifact" "$CORPUS_DIR/$source_artifact"
   mv "$tmp/$dependency_artifact" "$CORPUS_DIR/$dependency_artifact"

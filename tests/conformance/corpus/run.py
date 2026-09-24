@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tarfile
@@ -12,7 +13,15 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def run(args, cwd=ROOT, env=None):
+def redact_paths(message, corpus_dir):
+    roots = [(Path(corpus_dir).resolve(), "<corpus>"), (Path(tempfile.gettempdir()).resolve(), "<tmp>")]
+    for root, replacement in sorted(roots, key=lambda entry: len(str(entry[0])), reverse=True):
+        pattern = re.escape(str(root)) + r"(?=/|$|[\s'\"<>:,;()\[\]])(?:/[^\s'\"<>:,;()\[\]]+)*"
+        message = re.sub(pattern, replacement, message)
+    return message
+
+
+def run(args, cwd=ROOT, env=None, *, public=False, corpus_dir=None):
     environment = dict(
         os.environ if env is None else env,
         GIT_CONFIG_NOSYSTEM="1",
@@ -36,13 +45,18 @@ def run(args, cwd=ROOT, env=None):
         check=False,
     )
     if result.returncode:
-        # Corpus members may be private: never echo their source paths or text.
-        raise RuntimeError(f"{Path(args[0]).name} {args[1]} exited {result.returncode}")
+        message = f"{Path(args[0]).name} {args[1]} exited {result.returncode}"
+        # Private members never expose child output; public errors keep bounded diagnostics.
+        if public and result.stderr:
+            lines = result.stderr.splitlines()[-20:]
+            message += "\n" + redact_paths("\n".join(lines), corpus_dir)
+        raise RuntimeError(message)
     return result.stdout.strip()
 
 
 def observe(binary, member, corpus_dir, destination):
     environment = dict(os.environ, WARRANT_CORPUS_DIR=str(corpus_dir))
+    public = member["public_fetch"]
     run(
         [
             str(ROOT / "scripts/corpus.sh"),
@@ -51,6 +65,8 @@ def observe(binary, member, corpus_dir, destination):
             str(destination),
         ],
         env=environment,
+        public=public,
+        corpus_dir=corpus_dir,
     )
     # Track exactly the archived source, including tracked ignored files. The
     # unpacked dependency bundle remains an analysis input, never source.
@@ -61,9 +77,9 @@ def observe(binary, member, corpus_dir, destination):
             if entry.isfile() or entry.issym()
         ]
     assert paths, "empty corpus source"
-    run(["git", "init", "-q", "--object-format=sha1"], destination)
+    run(["git", "init", "-q", "--object-format=sha1"], destination, public=public, corpus_dir=corpus_dir)
     for offset in range(0, len(paths), 200):
-        run(["git", "add", "-f", "--", *paths[offset : offset + 200]], destination)
+        run(["git", "add", "-f", "--", *paths[offset : offset + 200]], destination, public=public, corpus_dir=corpus_dir)
     run(
         [
             "git",
@@ -76,15 +92,17 @@ def observe(binary, member, corpus_dir, destination):
             "pinned corpus",
         ],
         destination,
+        public=public,
+        corpus_dir=corpus_dir,
     )
     with tempfile.TemporaryDirectory(prefix="warrant-corpus-cache-") as cache:
         environment["XDG_CACHE_HOME"] = cache
         snapshots = {}
-        tree = "sha1:" + run(["git", "write-tree"], destination)
+        tree = "sha1:" + run(["git", "write-tree"], destination, public=public, corpus_dir=corpus_dir)
         for kind in ("index", "commit"):
             args = ["--index"] if kind == "index" else ["--commit", "HEAD"]
             document = json.loads(
-                run([binary, "snapshot", *args], destination, environment)
+                run([binary, "snapshot", *args], destination, environment, public=public, corpus_dir=corpus_dir)
             )
             assert document["tree"] == tree, "snapshot differs from pinned source tree"
             snapshots[kind] = {
@@ -97,7 +115,7 @@ def observe(binary, member, corpus_dir, destination):
             (Path(__file__).parent / "warrant.yaml").read_text(encoding="utf-8"),
             encoding="utf-8",
         )
-        inventory = json.loads(run([binary, "inventory"], destination, environment))
+        inventory = json.loads(run([binary, "inventory"], destination, environment, public=public, corpus_dir=corpus_dir))
         assert inventory["total"] > 0 and not inventory["truncated"], (
             "empty or truncated inventory"
         )
@@ -146,6 +164,8 @@ def main():
                 run(
                     [str(ROOT / "scripts/corpus.sh"), "fetch", name],
                     env=dict(os.environ, WARRANT_CORPUS_DIR=str(corpus_dir)),
+                    public=True,
+                    corpus_dir=corpus_dir,
                 )
             with tempfile.TemporaryDirectory(prefix="warrant-corpus-") as temporary:
                 actual = observe(binary, member, corpus_dir, Path(temporary))

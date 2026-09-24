@@ -396,3 +396,75 @@ fn byte_cap_sets_truncated_and_continuation() {
     assert!(result.truncated);
     assert_eq!(result.continuation.as_deref(), Some("rerun with OFFSET 1"));
 }
+
+fn unit_reports(conflicting: bool) -> Vec<IntegrationReport> {
+    (1..=2)
+        .map(|id| IntegrationReport {
+            unit: UnitRow { id, root: format!("package-{id}"), ..unit() },
+            files: vec![], symbols: vec![], edges: vec![], references: vec![],
+            entrypoints: vec![], effects: vec![], unsupported: vec![],
+            capability_report: CapabilityReportRow {
+                integration: "typescript".into(),
+                json: json!({"symbol_level": if conflicting && id == 2 { "none" } else { "binding" }}),
+            },
+        })
+        .collect()
+}
+
+#[test]
+fn repeated_capabilities_are_order_independent() {
+    let temp = TempDir::new().unwrap();
+    let mut digests = Vec::new();
+    for reverse in [false, true] {
+        let path = temp.path().join(format!("{reverse}.sqlite"));
+        let mut reports = unit_reports(false);
+        if reverse {
+            reports.reverse();
+        }
+        digests.push(warrant_model::build_model(&path, [], reports).unwrap());
+        let store = QueryStore::open(path).unwrap();
+        assert_eq!(
+            store
+                .sql("SELECT COUNT(*) FROM units", QueryLimits::default())
+                .unwrap()
+                .rows,
+            vec![vec![json!(2)]]
+        );
+        assert_eq!(
+            store
+                .sql(
+                    "SELECT integration, json FROM capability_reports",
+                    QueryLimits::default()
+                )
+                .unwrap()
+                .rows,
+            vec![vec![
+                json!("typescript"),
+                json!(r#"{"symbol_level":"binding"}"#)
+            ]]
+        );
+    }
+    assert_eq!(digests[0], digests[1]);
+}
+
+#[test]
+fn conflicting_capabilities_are_rejected_in_both_orders() {
+    let temp = TempDir::new().unwrap();
+    let results: Vec<_> = [false, true]
+        .into_iter()
+        .map(|reverse| {
+            let mut reports = unit_reports(true);
+            if reverse {
+                reports.reverse();
+            }
+            warrant_model::build_model(temp.path().join(format!("{reverse}.sqlite")), [], reports)
+        })
+        .collect();
+    eprintln!("conflicting reports in forward/reverse order: {results:?}");
+    for result in results {
+        assert!(
+            matches!(result, Err(warrant_model::ModelError::Invalid(message))
+            if message.contains("conflicting capability report") && message.contains("typescript"))
+        );
+    }
+}

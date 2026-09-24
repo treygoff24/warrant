@@ -8,7 +8,7 @@ use std::{
 };
 
 use petgraph::{algo::kosaraju_scc, graphmap::DiGraphMap};
-use rusqlite::{Connection, OpenFlags, params, types::ValueRef};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params, types::ValueRef};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -423,8 +423,26 @@ impl ModelBuilder {
 
     pub fn write_capability_report(&mut self, row: &CapabilityReportRow) -> Result<()> {
         let json = serde_json_canonicalizer::to_string(&row.json)?;
+        let stored: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT json FROM capability_reports WHERE integration = ?1",
+                [&row.integration],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(stored) = stored {
+            return if stored == json {
+                Ok(())
+            } else {
+                Err(ModelError::Invalid(format!(
+                    "conflicting capability report for integration {}",
+                    row.integration
+                )))
+            };
+        }
         self.connection.execute(
-            "INSERT OR REPLACE INTO capability_reports(integration, json) VALUES (?1, ?2)",
+            "INSERT INTO capability_reports(integration, json) VALUES (?1, ?2)",
             params![row.integration, json],
         )?;
         Ok(())

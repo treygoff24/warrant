@@ -1,0 +1,37 @@
+W1.1-F1: pre-fix INSERT OR REPLACE; cargo test --locked -p warrant-model
+exit: 101
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.00s
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 8 tests
+test materialized_views_contain_edges_consumers_cycles_and_unowned_files ... ok
+test byte_cap_sets_truncated_and_continuation ... ok
+test row_cap_sets_truncated_and_continuation ... ok
+test schema_contains_every_table_and_view ... ok
+test authorizer_rejects_every_named_write_statement_kind ... ok
+test repeated_capabilities_are_order_independent ... ok
+test conflicting_capabilities_are_rejected_in_both_orders ... FAILED
+test digest_is_stable_across_insertion_order_and_timestamps ... ok
+
+failures:
+
+---- conflicting_capabilities_are_rejected_in_both_orders stdout ----
+conflicting reports in forward/reverse order: [Ok("sha256:8cdec4d1c6c76e6159231a9145315f989b0f98c02f5277b872dd19ff756a009a"), Ok("sha256:5e0fd967a4796964f4b163c7906925a9d3cbe82ef11acc322b511050f8494375")]
+
+thread 'conflicting_capabilities_are_rejected_in_both_orders' (763591) panicked at crates/model/tests/store.rs:442:9:
+assertion failed: matches!(result, Err(warrant_model::ModelError::Invalid(message)) if
+    message.contains("conflicting capability report") &&
+    message.contains("typescript"))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    conflicting_capabilities_are_rejected_in_both_orders
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+
+error: test failed, to rerun pass `-p warrant-model --test store`

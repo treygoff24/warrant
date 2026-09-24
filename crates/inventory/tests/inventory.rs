@@ -1529,3 +1529,51 @@ fn ignored_count_is_unknown_outside_the_worktree() {
         );
     }
 }
+
+/// A bare snapshot blob id is prefixed by its object format; a length that names no
+/// format is an error, not a guess.
+#[test]
+fn snapshot_blob_of_unrecognized_length_is_rejected() {
+    let root = tempdir().expect("temporary repository");
+    let listing = [snapshot_entry(
+        "notes.xyz",
+        InventoryClass::Unknown,
+        Some("abc123"),
+    )];
+    let error = build_on_disk(
+        root.path(),
+        &listing,
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect_err("a six-character blob id has no object format");
+    assert_eq!(error.code(), "invalid-declaration");
+    assert_eq!(
+        error.to_string(),
+        "snapshot blob `abc123` has no recognized object format"
+    );
+}
+
+/// A blob id of SHA-1 length that is not hexadecimal is rejected, not prefixed.
+#[test]
+fn snapshot_blob_that_is_not_hexadecimal_is_rejected() {
+    let root = tempdir().expect("temporary repository");
+    let blob = "z".repeat(40);
+    let listing = [snapshot_entry(
+        "notes.xyz",
+        InventoryClass::Unknown,
+        Some(&blob),
+    )];
+    let error = build_on_disk(
+        root.path(),
+        &listing,
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect_err("a non-hex blob id is not an object id");
+    assert_eq!(error.code(), "invalid-declaration");
+    assert_eq!(
+        error.to_string(),
+        format!("snapshot blob `{blob}` is not a hexadecimal object id")
+    );
+}

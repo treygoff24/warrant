@@ -1046,6 +1046,36 @@ fn inventory_does_not_read_through_an_external_symlink() {
     );
 }
 
+/// A gitignored manifest is outside the snapshot tree, so the tree cannot tell two
+/// limits apart; the cache key must, or the second capture overwrites the first.
+#[test]
+fn one_tree_under_two_size_limits_caches_two_snapshots() {
+    let repository = repository();
+    let root = repository.path();
+    fs::write(root.join(".gitignore"), "/warrant/\n").expect("ignore the manifest");
+    fs::write(root.join("large.rs"), format!("// {}\n", "x".repeat(100))).expect("large file");
+    git(root, &["add", ".gitignore", "large.rs"]);
+    commit(root, "large file");
+    let cache = tempfile::tempdir().expect("temp cache");
+    let mut oversize = Vec::new();
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
+    for limit in [40, 4096] {
+        fs::write(
+            root.join("warrant/warrant.yaml"),
+            format!("schema_version: warrant.manifest/1\nsnapshot:\n  max_file_bytes: {limit}\n"),
+        )
+        .expect("manifest");
+        let snapshot = json(&warrant_in(root, cache.path(), &["snapshot", "--worktree"]));
+        oversize.push(snapshot["excluded"]["oversize"].clone());
+    }
+    assert_eq!(oversize, [serde_json::json!(1), serde_json::json!(0)]);
+    let cached: Vec<_> = walk_files(cache.path())
+        .into_iter()
+        .filter(|path| path.ends_with("snapshot.json"))
+        .collect();
+    assert_eq!(cached.len(), 2, "{cached:?}");
+}
+
 /// Spec 4.5: every downstream artifact carries the snapshot manifest.
 #[test]
 fn inventory_carries_its_snapshot_manifest() {

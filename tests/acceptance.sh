@@ -234,7 +234,7 @@ if [ -n "$final_milestone" ]; then
   # A document is in scope at a milestone when its owning task is at or before
   # it. The owning task id travels with each name so this list stays checkable
   # against the plan's owned_files rather than being trusted.
-  m0_docs="snapshot:W0.2 inventory:W0.2 capabilities:W0.2 manifest:W0.2 error:W0.2"
+  m0_docs="snapshot:W0.2 inventory:W0.2 capabilities:W0.2 manifest:W0.2 error:W0.2 commands:W0.7"
   m1_docs="instruments:W1.4 policy:W1.7 effective-policy:W1.7 census:W1.10 context:W1.11 propose:W1.11 map:W1.12 hook:W1.13"
   m2_docs="obligations:W2.1 finding:W2.3 evidence:W2.4 test-receipt:W2.4 verdict:W2.5 receipt:W2.5 profile:W2.6 ruling:W2.7 diff:W2.8 verify:W2.9"
   case "$final_milestone" in

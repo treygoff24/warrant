@@ -1122,7 +1122,7 @@ fn untracked_nested_repository_matches_git_and_has_an_exclusion_reason() {
                     (
                         s.mode("nested").unwrap().to_owned(),
                         entry.blob.clone(),
-                        entry.class.clone(),
+                        entry.class,
                         entry.reason.clone(),
                         entry.unread.clone(),
                     )

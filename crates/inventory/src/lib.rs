@@ -1749,10 +1749,11 @@ fn summarize(
     });
     // `files` counts what the snapshot holds: an ignored path is outside it, and a
     // declared generated file that is absent is listed for its producer, not present.
-    let files = entries
-        .iter()
-        .filter(|entry| entry.class != InventoryClass::Ignored && entry.reason != GENERATED_ABSENT)
-        .count() as u64;
+    // `by_class` breaks down the same files, so it sums to `files` (spec 5.5).
+    let held = |entry: &&InventoryEntry| {
+        entry.class != InventoryClass::Ignored && entry.reason != GENERATED_ABSENT
+    };
+    let files = entries.iter().filter(held).count() as u64;
     let mut summary = InventorySummary {
         files,
         ignored_files,
@@ -1760,11 +1761,13 @@ fn summarize(
         generated_absent,
         ..InventorySummary::default()
     };
-    for entry in entries {
+    for entry in entries.iter().filter(held) {
         *summary
             .by_class
             .entry(entry.class.as_str().into())
             .or_default() += 1;
+    }
+    for entry in entries {
         match entry.class {
             InventoryClass::Unread => summary.unread.push(UnreadPath {
                 path: entry.path.clone(),

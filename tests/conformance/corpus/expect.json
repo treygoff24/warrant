@@ -28,7 +28,6 @@
       "by_class": {
         "config": 16,
         "doc": 492,
-        "ignored": 53604,
         "migration": 9,
         "script": 3,
         "source": 308,
@@ -68,7 +67,6 @@
         "asset": 1,
         "config": 4,
         "doc": 1,
-        "ignored": 31866,
         "schema": 1,
         "source": 14,
         "unknown": 4
@@ -105,7 +103,6 @@
       "by_class": {
         "config": 13,
         "doc": 1,
-        "ignored": 178,
         "source": 4,
         "unknown": 3
       },
@@ -142,7 +139,6 @@
         "asset": 1,
         "config": 2,
         "doc": 1,
-        "ignored": 10022,
         "source": 4,
         "unknown": 7
       },
@@ -179,7 +175,6 @@
         "asset": 1,
         "config": 3,
         "doc": 1,
-        "ignored": 7867,
         "source": 3,
         "unknown": 5
       },
@@ -216,7 +211,6 @@
         "asset": 14,
         "config": 20,
         "doc": 46,
-        "ignored": 16717,
         "migration": 2,
         "schema": 2,
         "source": 34,

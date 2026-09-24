@@ -174,6 +174,8 @@ fn overlapping_module_selectors_are_an_error() {
             },
         )
         .expect_err("overlap must not be resolved by declaration order");
+        // Modules come from policy, which the M0 CLI does not load; the code is pinned here.
+        assert_eq!(error.code(), "ownership-overlap");
         assert!(matches!(
             error,
             InventoryError::OwnershipOverlap { path, modules }

@@ -1076,6 +1076,150 @@ fn one_tree_under_two_size_limits_caches_two_snapshots() {
     assert_eq!(cached.len(), 2, "{cached:?}");
 }
 
+/// Runs `inventory` in a fixture repository whose manifest enables both language
+/// integrations and appends `inventory`, and returns the error document.
+fn inventory_error(root: &Path, inventory: &str) -> serde_json::Value {
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        format!(
+            "schema_version: warrant.manifest/1\nintegrations:\n  lang-ts:\n    enabled: true\n  lang-rust:\n    enabled: true\n{inventory}"
+        ),
+    )
+    .expect("manifest");
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(root, cache.path(), &["inventory"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    serde_json::from_str(stderr.trim()).expect("error document")
+}
+
+/// Spec 12.1: each inventory error has its own code, and the reason still explains it.
+fn assert_inventory_error(error: &serde_json::Value, code: &str, reason: &str) {
+    assert_eq!(error["code"], code, "{error}");
+    assert!(
+        error["reason"].as_str().expect("reason").contains(reason),
+        "{error}"
+    );
+}
+
+#[test]
+fn inventory_error_code_invalid_glob() {
+    let repository = repository();
+    let error = inventory_error(
+        repository.path(),
+        "inventory:\n  classes:\n    - class: doc\n      files: [\"docs/[\"]\n",
+    );
+    assert_inventory_error(&error, "invalid-glob", "docs/[");
+}
+
+#[test]
+fn inventory_error_code_classification_conflict() {
+    let repository = repository();
+    let error = inventory_error(
+        repository.path(),
+        "inventory:\n  classes:\n    - class: doc\n      files: [\"main.rs\"]\n      replaces: source\n    - class: script\n      files: [\"*.rs\"]\n      replaces: source\n",
+    );
+    assert_inventory_error(&error, "classification-conflict", "main.rs");
+}
+
+#[test]
+fn inventory_error_code_missing_default_replacement() {
+    let repository = repository();
+    let error = inventory_error(
+        repository.path(),
+        "inventory:\n  classes:\n    - class: doc\n      files: [\"main.rs\"]\n",
+    );
+    assert_inventory_error(&error, "missing-default-replacement", "main.rs");
+}
+
+#[test]
+fn inventory_error_code_wrong_default_replacement() {
+    let repository = repository();
+    let error = inventory_error(
+        repository.path(),
+        "inventory:\n  classes:\n    - class: doc\n      files: [\"main.rs\"]\n      replaces: test\n",
+    );
+    assert_inventory_error(&error, "wrong-default-replacement", "main.rs");
+}
+
+#[test]
+fn inventory_error_code_nested_repository() {
+    let repository = repository();
+    let nested = repository.path().join("vendor/nested");
+    fs::create_dir_all(&nested).expect("nested directory");
+    fs::write(nested.join("lib.rs"), "pub fn nested() {}\n").expect("nested source");
+    git(&nested, &["init", "-q"]);
+    let error = inventory_error(repository.path(), "");
+    assert_inventory_error(&error, "nested-repository", "vendor/nested");
+}
+
+#[test]
+fn inventory_error_code_invalid_declaration() {
+    let repository = repository();
+    fs::write(repository.path().join("tsconfig.json"), "{ not json\n").expect("tsconfig");
+    git(repository.path(), &["add", "tsconfig.json"]);
+    commit(repository.path(), "broken tsconfig");
+    let error = inventory_error(repository.path(), "");
+    assert_inventory_error(&error, "invalid-declaration", "tsconfig.json");
+}
+
+/// Git failing after capture, when inventory lists untracked files, is an I/O failure
+/// of the inventory, not of the snapshot: the wrapper lets capture's own untracked
+/// listing through and fails the second one.
+#[cfg(unix)]
+#[test]
+fn inventory_error_code_inventory_io() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repository = repository();
+    let control = tempfile::tempdir().expect("git wrapper directory");
+    let real_git = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .expect("locate real git");
+    let wrapper = control.path().join("git");
+    fs::write(
+        &wrapper,
+        format!(
+            r#"#!/bin/sh
+case " $* " in
+  *" ls-files --others --exclude-standard -z "*)
+    if [ -e "{marker}" ]; then echo "fatal: listing refused" >&2; exit 128; fi
+    : > "{marker}" ;;
+esac
+exec "{git}" "$@"
+"#,
+            marker = control.path().join("listed").display(),
+            git = String::from_utf8(real_git.stdout).expect("git path").trim(),
+        ),
+    )
+    .expect("git wrapper");
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).expect("executable");
+    let mut paths = vec![control.path().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").expect("PATH"),
+    ));
+    let cache = tempfile::tempdir().expect("temp cache");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_warrant"));
+    neutralize_git_environment(&mut command);
+    let output = command
+        .arg("inventory")
+        .current_dir(repository.path())
+        .env("XDG_CACHE_HOME", cache.path())
+        .env("PATH", std::env::join_paths(paths).expect("fixture PATH"))
+        .output()
+        .expect("run warrant");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        control.path().join("listed").exists(),
+        "capture listed untracked files"
+    );
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("error document");
+    assert_inventory_error(&error, "inventory-io", "listing refused");
+}
+
 /// Spec 4.5: every downstream artifact carries the snapshot manifest.
 #[test]
 fn inventory_carries_its_snapshot_manifest() {

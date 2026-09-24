@@ -193,6 +193,26 @@ pub enum InventoryError {
     },
 }
 
+impl InventoryError {
+    /// Spec 12.1: errors are distinguishable by code, so each variant has its own stable
+    /// code; spec names are used where they exist (`nested-repository`, 5.6). A refused
+    /// snapshot read keeps the snapshot's code, which capture's retry depends on.
+    pub fn code(&self) -> &str {
+        match self {
+            Self::Io { .. } => "inventory-io",
+            Self::Read { code, .. } => code,
+            Self::InvalidGlob { .. } => "invalid-glob",
+            Self::ClassificationConflict { .. } => "classification-conflict",
+            Self::MissingDefaultReplacement { .. } => "missing-default-replacement",
+            Self::WrongDefaultReplacement { .. } => "wrong-default-replacement",
+            Self::OwnershipOverlap { .. } => "ownership-overlap",
+            Self::NestedRepository { .. } => "nested-repository",
+            Self::InvalidDeclaration { .. } => "invalid-declaration",
+            Self::ProducerFailed { .. } => "producer-failed",
+        }
+    }
+}
+
 impl fmt::Display for InventoryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -240,7 +260,7 @@ impl fmt::Display for InventoryError {
             }
             Self::NestedRepository { path } => write!(
                 formatter,
-                "nested-repository: `{path}` is not a declared submodule"
+                "`{path}` is a nested repository and not a declared submodule"
             ),
             Self::InvalidDeclaration { reason } => formatter.write_str(reason),
             Self::ProducerFailed { producer, status } => {

@@ -621,7 +621,7 @@ fn run_inventory_api(repository: &Path, expectation: &Expectation) -> Observatio
             .map_err(|error| warrant_snapshot::SnapshotError {
                 document: warrant_core::nouns::ErrorDocument {
                     schema_version: "warrant.error/1".into(),
-                    code: "inventory".into(),
+                    code: error.code().into(),
                     reason: error.to_string(),
                     locations: Vec::new(),
                     next_diagnostic: None,

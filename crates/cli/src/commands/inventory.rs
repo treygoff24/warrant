@@ -92,7 +92,7 @@ fn inventory_error(error: warrant_inventory::InventoryError) -> warrant_snapshot
         warrant_inventory::InventoryError::Read { path, code, reason } => {
             error_document(&code, format!("{path}: {reason}"))
         }
-        error => error_document("inventory", error.to_string()),
+        error => error_document(error.code(), error.to_string()),
     };
     warrant_snapshot::SnapshotError { document }
 }

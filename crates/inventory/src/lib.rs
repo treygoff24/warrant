@@ -284,9 +284,21 @@ pub fn build(
 ) -> Result<BuiltInventory, InventoryError> {
     let snapshot_entries = snapshot.entries;
     let read = snapshot.read;
+    // Spec 5.6: the worktree snapshot records an untracked nested repository as the
+    // gitlink Git would stage, with this reason. It is not a declared submodule.
+    if let Some(path) = snapshot_entries
+        .iter()
+        .filter(|entry| entry.reason == UNDECLARED_NESTED_REPOSITORY)
+        .map(|entry| &entry.path)
+        .min()
+    {
+        return Err(InventoryError::NestedRepository { path: path.clone() });
+    }
     let submodules: Vec<_> = snapshot_entries
         .iter()
-        .filter(|entry| entry.class == InventoryClass::Submodule)
+        .filter(|entry| {
+            entry.class == InventoryClass::Submodule && entry.reason != UNDECLARED_NESTED_REPOSITORY
+        })
         .map(|entry| entry.path.clone())
         .collect();
     let mut paths: Vec<String> = snapshot_entries
@@ -1566,6 +1578,9 @@ fn alias_tables(
     rows.sort_by(|left, right| left.unit.cmp(&right.unit));
     Ok(rows)
 }
+
+/// The snapshot's reason on an untracked nested repository it recorded as a gitlink.
+const UNDECLARED_NESTED_REPOSITORY: &str = "undeclared-nested-repository";
 
 /// The reason on a declared generated path the snapshot does not contain.
 const GENERATED_ABSENT: &str = "generated-absent";

@@ -236,6 +236,54 @@ fn nested_repository_is_rejected() {
     }
 }
 
+/// The worktree snapshot records an untracked nested repository as a `submodule`-class
+/// entry (the gitlink Git would stage) with reason `undeclared-nested-repository`; an
+/// unborn one carries no commit. Neither is a declared submodule (spec 5.6).
+#[test]
+fn snapshot_recorded_undeclared_nested_repository_is_rejected() {
+    let listing_with = |reason: &str| {
+        let root = tempdir().expect("temporary repository");
+        write(root.path(), "src/a.ts", "export {};\n");
+        let mut listing = snapshot(root.path());
+        for (path, blob) in [("vendor/zeta", Some("sha1:abc")), ("vendor/alpha", None)] {
+            let mut entry = snapshot_entry(path, InventoryClass::Submodule, blob);
+            entry.reason = reason.into();
+            entry.unread = Some("submodule-not-descended".into());
+            listing.push(entry);
+        }
+        (root, listing)
+    };
+
+    let (root, listing) = listing_with("undeclared-nested-repository");
+    let result = build_on_disk(
+        root.path(),
+        &listing,
+        &empty_manifest(),
+        &BuildConfig::default(),
+    );
+    assert!(
+        matches!(&result, Err(InventoryError::NestedRepository { path }) if path == "vendor/alpha"),
+        "undeclared nested repository built: {result:?}"
+    );
+
+    let (root, listing) = listing_with("captured");
+    let built = build_on_disk(
+        root.path(),
+        &listing,
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect("declared submodules build");
+    let submodules: Vec<_> = built
+        .document
+        .summary
+        .submodules
+        .iter()
+        .map(|submodule| submodule.path.as_str())
+        .collect();
+    assert_eq!(submodules, ["vendor/alpha", "vendor/zeta"]);
+}
+
 #[test]
 fn declared_submodule_contents_are_not_first_party() {
     let root = tempdir().expect("temporary repository");

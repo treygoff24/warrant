@@ -3473,6 +3473,7 @@ dependencies = [
  "cargo_metadata",
  "globset",
  "ignore",
+ "json-strip-comments",
  "pretty_assertions",
  "serde",
  "serde-saphyr",

@@ -208,8 +208,6 @@ pub fn build(
     let class_rules = compile_rules(&rules)?;
     let generated = compile_generated(manifest)?;
     let vendored = compile_vendored(manifest)?;
-    let mut units = discover_units_from_paths(root, &paths)?;
-    let package_entrypoints = discover_package_entrypoints(root, &paths)?;
     let enabled = EnabledIntegrations::from_manifest(manifest);
     let mut entries = Vec::new();
 
@@ -297,29 +295,51 @@ pub fn build(
             });
         }
         let module = owners.into_iter().next();
-        let mut unit = unit_for(relative, &units, source_language(relative, enabled))
-            .map(|unit| unit.root.clone());
-        let by = if class == InventoryClass::Source && unit.is_none() {
-            unit = Some(".".into());
-            "implicit-root-unit".into()
-        } else {
-            by
-        };
-        let entrypoints = entrypoints_for(relative, manifest, &package_entrypoints);
         entries.push(InventoryEntry {
             path: relative.clone(),
             blob: prefixed_git_oid(&snapshot_entry.blob)?,
             class,
             language: language(relative, enabled),
-            unit,
+            unit: None,
             module,
             by,
             reason,
-            entrypoints,
+            entrypoints: Vec::new(),
             unread: snapshot_entry.unread.clone(),
             generated_by,
             vendored_from,
         });
+    }
+
+    let discovery_paths: Vec<String> = entries
+        .iter()
+        .filter(|entry| {
+            !matches!(
+                entry.class,
+                InventoryClass::Ignored
+                    | InventoryClass::Submodule
+                    | InventoryClass::BuildOutput
+                    | InventoryClass::Vendored
+            )
+        })
+        .map(|entry| entry.path.clone())
+        .collect();
+    let mut units = discover_units_from_paths(root, &discovery_paths)?;
+    let package_entrypoints = discover_package_entrypoints(root, &discovery_paths)?;
+    for entry in &mut entries {
+        if matches!(
+            entry.class,
+            InventoryClass::Ignored | InventoryClass::Submodule | InventoryClass::Unread
+        ) {
+            continue;
+        }
+        entry.unit = unit_for(&entry.path, &units, source_language(&entry.path, enabled))
+            .map(|unit| unit.root.clone());
+        if entry.class == InventoryClass::Source && entry.unit.is_none() {
+            entry.unit = Some(".".into());
+            entry.by = "implicit-root-unit".into();
+        }
+        entry.entrypoints = entrypoints_for(&entry.path, manifest, &package_entrypoints);
     }
 
     if entries
@@ -336,7 +356,7 @@ pub fn build(
     }
     let generated_absent = add_absent_generated(&mut entries, &generated, &paths)?;
     entries.sort_by(|left, right| left.path.cmp(&right.path));
-    let unit_aliases = alias_tables(root, &paths, &units)?;
+    let unit_aliases = alias_tables(root, &discovery_paths, &units)?;
     let summary = summarize(&entries, unit_aliases, generated_absent);
     let document = InventoryDocument {
         schema_version: "warrant.inventory/1".into(),
@@ -943,13 +963,7 @@ fn discover_tsconfig_references(
         if !seen.insert(configuration.clone()) {
             continue;
         }
-        let value: Value = serde_json::from_slice(
-            &fs::read(root.join(&configuration))
-                .map_err(|error| io_error(&configuration, error))?,
-        )
-        .map_err(|error| InventoryError::InvalidDeclaration {
-            reason: format!("invalid `{configuration}`: {error}"),
-        })?;
+        let value = read_tsconfig(root, &configuration)?;
         for reference in value
             .get("references")
             .and_then(Value::as_array)
@@ -980,6 +994,19 @@ fn discover_tsconfig_references(
         }
     }
     Ok(())
+}
+
+fn read_tsconfig(root: &Path, configuration: &str) -> Result<Value, InventoryError> {
+    let mut bytes =
+        fs::read(root.join(configuration)).map_err(|error| io_error(configuration, error))?;
+    json_strip_comments::strip_slice(&mut bytes).map_err(|error| {
+        InventoryError::InvalidDeclaration {
+            reason: format!("invalid `{configuration}`: {error}"),
+        }
+    })?;
+    serde_json::from_slice(&bytes).map_err(|error| InventoryError::InvalidDeclaration {
+        reason: format!("invalid `{configuration}`: {error}"),
+    })
 }
 
 fn normalize_relative(path: &Path) -> Option<String> {
@@ -1139,6 +1166,9 @@ fn discover_cargo_units(
     for package in metadata.packages {
         let manifest_path = PathBuf::from(package.manifest_path.as_std_path());
         let relative = relative_path(root, &manifest_path)?;
+        if !paths.contains(&relative) {
+            continue;
+        }
         let unit_root = parent_string(&relative);
         units.entry(unit_root.clone()).or_insert(Unit {
             root: unit_root,
@@ -1304,13 +1334,7 @@ fn alias_tables(
     for unit in units {
         let mut alias_table = None;
         if is_tsconfig(&unit.configuration) && !unit.configuration.is_empty() {
-            let value: Value = serde_json::from_slice(
-                &fs::read(root.join(&unit.configuration))
-                    .map_err(|error| io_error(&unit.configuration, error))?,
-            )
-            .map_err(|error| InventoryError::InvalidDeclaration {
-                reason: format!("invalid `{}`: {error}", unit.configuration),
-            })?;
+            let value = read_tsconfig(root, &unit.configuration)?;
             if value
                 .get("compilerOptions")
                 .and_then(|options| options.get("paths"))

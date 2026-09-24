@@ -47,6 +47,14 @@ else:
         violations.append(f"deps: invalid workspace rust-version: {workspace_msrv!r}")
     elif tuple(workspace_msrv.split(".")[:2]) != tuple(ci_msrv.split(".")[:2]):
         violations.append(f"deps: workspace rust-version {workspace_msrv} differs from CI MSRV {ci_msrv}")
+env_toolchains = re.findall(r"(?m)^      RUSTUP_TOOLCHAIN:[ \t]*['\"]?([^'\"\s#]+)", job["body"]) if job else []
+if len(env_toolchains) != 1:
+    found = ", ".join(env_toolchains) if env_toolchains else "<missing>"
+    violations.append(f"deps: CI job msrv RUSTUP_TOOLCHAIN {found} differs from workspace rust-version {workspace_msrv}")
+else:
+    env_msrv = env_toolchains[0]
+    if not re.fullmatch(r"\d+\.\d+(?:\.\d+)?", env_msrv) or tuple(env_msrv.split(".")[:2]) != tuple(str(workspace_msrv).split(".")[:2]):
+        violations.append(f"deps: CI job msrv RUSTUP_TOOLCHAIN {env_msrv} differs from workspace rust-version {workspace_msrv}")
 
 manifest_node = json.loads((root / "tests/corpus/manifest.yaml").read_text())["inputs"]["node_observed"]
 expected_node = manifest_node.removeprefix("v")
@@ -54,14 +62,22 @@ jobs = re.findall(r"(?ms)^  ([\w-]+):[^\n]*\n(.*?)(?=^  [\w-]+:|\Z)", ci)
 gate_jobs = 0
 for job_name, body in jobs:
     steps = re.findall(r"(?ms)^      - (.*?)(?=^      - |\Z)", body)
-    if not any(re.search(r"(?m)^(?:run|        run):[ \t]*scripts/gate\.sh[ \t]*$", step) for step in steps):
+    gate_indices = [index for index, step in enumerate(steps) if "scripts/gate.sh" in step]
+    if not gate_indices:
         continue
     gate_jobs += 1
+    for index in gate_indices:
+        if not re.search(r"(?m)^(?:run|        run):[ \t]*scripts/gate\.sh[ \t]*$", steps[index]):
+            violations.append(f"deps: CI job {job_name} has unsupported gate invocation")
     versions = []
-    for step in steps:
+    setup_indices = []
+    for index, step in enumerate(steps):
         if not re.search(r"(?m)^(?:uses|        uses):[ \t]*actions/setup-node@v[0-9]+[ \t]*$", step):
             continue
+        setup_indices.append(index)
         versions.extend(re.findall(r"(?m)^          node-version:[ \t]*['\"]?([^'\"\s#]+)", step) or ["<missing>"])
+    if any(not any(setup < gate for setup in setup_indices) for gate in gate_indices):
+        violations.append(f"deps: CI job {job_name} setup-node must precede gate step")
     if len(versions) != 1 or versions[0].removeprefix("v") != expected_node:
         found = ", ".join(versions) if versions else "<missing>"
         violations.append(f"deps: CI job {job_name} setup-node node-version {found} differs from corpus node_observed {manifest_node}")
@@ -130,6 +146,50 @@ EOF
     return 1
   fi
   printf '%s\n' "self-test: violation detected"
+
+  local ci_copy case_name expected
+  ci_copy="$tmp_root/.github/workflows/ci.yml"
+  for case_name in block_gate late_node wrong_msrv_env; do
+    cp "$repo_root/.github/workflows/ci.yml" "$ci_copy"
+    python3 - "$ci_copy" "$case_name" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+case = sys.argv[2]
+text = path.read_text()
+gate = "      - name: Run gate\n        run: scripts/gate.sh\n"
+setup = "      - uses: actions/setup-node@v7\n        with:\n          node-version: 26.9.0\n"
+if case == "block_gate":
+    assert text.count(gate) == 2
+    text = text.replace(gate, "      - name: Run gate\n        run: |\n          scripts/gate.sh\n", 1)
+elif case == "late_node":
+    assert text.count(setup + gate) == 2
+    text = text.replace(setup + gate, gate + setup, 1)
+elif case == "wrong_msrv_env":
+    selector = "      RUSTUP_TOOLCHAIN: 1.96.0\n"
+    assert text.count(selector) == 1
+    text = text.replace(selector, "      RUSTUP_TOOLCHAIN: 1.95.0\n", 1)
+else:
+    raise SystemExit(f"unknown deps self-test case: {case}")
+path.write_text(text)
+PY
+    if output="$(check_dependencies "$tmp_root" 2>&1)"; then
+      printf 'self-test: detector accepted %s\n' "$case_name" >&2
+      return 1
+    fi
+    case "$case_name" in
+      block_gate) expected='deps: CI job stable has unsupported gate invocation' ;;
+      late_node) expected='deps: CI job stable setup-node must precede gate step' ;;
+      wrong_msrv_env) expected='deps: CI job msrv RUSTUP_TOOLCHAIN 1.95.0 differs from workspace rust-version 1.96' ;;
+    esac
+    if ! command grep -Fxq "$expected" <<<"$output"; then
+      printf 'self-test: %s failed for the wrong reason\n%s\n' "$case_name" "$output" >&2
+      return 1
+    fi
+    printf 'self-test: %s\n' "$expected"
+  done
+  cp "$repo_root/.github/workflows/ci.yml" "$ci_copy"
 }
 
 case "${1:-}" in

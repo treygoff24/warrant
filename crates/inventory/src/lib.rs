@@ -269,7 +269,6 @@ pub fn build(
         .filter(|entry| entry.class == InventoryClass::Submodule)
         .map(|entry| entry.path.clone())
         .collect();
-    check_nested_repositories(root, &submodules)?;
     let mut paths: Vec<String> = snapshot_entries
         .iter()
         .filter(|entry| {
@@ -286,6 +285,14 @@ pub fn build(
             reason: "duplicate path in snapshot listing".into(),
         });
     }
+    let looked_at: Vec<&str> = snapshot_entries
+        .iter()
+        .filter(|entry| {
+            entry.class != InventoryClass::Ignored && paths.binary_search(&entry.path).is_ok()
+        })
+        .map(|entry| entry.path.as_str())
+        .collect();
+    check_nested_repositories(root, &looked_at, snapshot.untracked, &submodules)?;
     let modules = compile_modules(&config.modules)?;
     let mut rules = manifest_rules(&manifest.inventory.classes);
     rules.extend(config.class_rules.clone());
@@ -664,28 +671,39 @@ struct VendoredPattern {
     treatment: String,
 }
 
-fn check_nested_repositories(root: &Path, submodules: &[String]) -> Result<(), InventoryError> {
-    let git = root.join(".git");
-    let excluded: Vec<_> = submodules.iter().map(|path| root.join(path)).collect();
-    let mut walker = WalkBuilder::new(root);
-    walker
-        .hidden(false)
-        .ignore(false)
-        .git_ignore(false)
-        .git_exclude(false)
-        .parents(false)
-        .filter_entry(move |entry| {
-            entry.path() != git && !excluded.iter().any(|path| entry.path().starts_with(path))
-        });
-    for result in walker.build() {
-        let entry = result.map_err(|error| io_error(root, error))?;
-        if entry.path() != root && entry.file_name() == ".git" {
-            return Err(InventoryError::NestedRepository {
-                path: relative_path(
-                    root,
-                    entry.path().parent().expect("nested .git has a parent"),
-                )?,
-            });
+/// Spec 5.6: a nested repository that is not a declared submodule gives its files two
+/// identities. Only directories the snapshot looks into are checked: every ancestor of
+/// a captured non-ignored entry, and every directory Git's untracked, non-ignored
+/// listing reports instead of descending (that is how Git lists a nested repository).
+/// A repository under an ignored directory with no captured entries is not looked at.
+fn check_nested_repositories(
+    root: &Path,
+    captured: &[&str],
+    untracked: &BTreeSet<String>,
+    submodules: &[String],
+) -> Result<(), InventoryError> {
+    let mut directories = BTreeSet::new();
+    for path in captured {
+        let mut ancestor = Path::new(path).parent();
+        while let Some(directory) = ancestor.filter(|directory| *directory != Path::new("")) {
+            if !directories.insert(directory.to_string_lossy().into_owned()) {
+                break;
+            }
+            ancestor = directory.parent();
+        }
+    }
+    directories.extend(
+        untracked
+            .iter()
+            .filter_map(|path| path.strip_suffix('/'))
+            .map(str::to_owned),
+    );
+    for directory in directories {
+        let within_submodule = submodules
+            .iter()
+            .any(|submodule| Path::new(&directory).starts_with(submodule));
+        if !within_submodule && fs::symlink_metadata(root.join(&directory).join(".git")).is_ok() {
+            return Err(InventoryError::NestedRepository { path: directory });
         }
     }
     Ok(())

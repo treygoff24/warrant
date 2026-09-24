@@ -141,6 +141,18 @@ fn capture(
     manifest: &WarrantManifest,
     config: &BuildConfig,
 ) -> Result<Captured, SnapshotError> {
+    try_capture(repository, kind, revision, manifest, config)
+        .map(|built| built.unwrap_or_else(|error| panic!("inventory failed: {error}")))
+}
+
+/// As `capture`, returning the inventory error instead of failing the test.
+fn try_capture(
+    repository: &Repository,
+    kind: SnapshotKind,
+    revision: Option<&str>,
+    manifest: &WarrantManifest,
+    config: &BuildConfig,
+) -> Result<Result<Captured, InventoryError>, SnapshotError> {
     let root = repository.root();
     warrant_snapshot::capture(root, kind, revision, &manifest.snapshot, |snapshot| {
         let requested = RefCell::new(Vec::new());
@@ -163,12 +175,11 @@ fn capture(
             },
             manifest,
             config,
-        )
-        .unwrap_or_else(|error| panic!("inventory failed: {error}"));
-        Ok(Captured {
+        );
+        Ok(built.map(|built| Captured {
             built,
             requested: requested.into_inner(),
-        })
+        }))
     })
     .map(|(_, captured)| captured)
 }
@@ -569,4 +580,79 @@ fn build_output_default_never_reclassifies_a_tracked_file() {
             );
         },
     );
+}
+
+/// A worktree inventory's error, for a repository the inventory must refuse.
+fn worktree_error(repository: &Repository) -> InventoryError {
+    match try_capture(
+        repository,
+        SnapshotKind::Worktree,
+        None,
+        &manifest(""),
+        &BuildConfig::default(),
+    ) {
+        Ok(Err(error)) => error,
+        Ok(Ok(_)) => panic!("the inventory was built"),
+        Err(error) => panic!("worktree capture: {error}"),
+    }
+}
+
+/// B9: a nested repository under an ignored directory is outside the snapshot, as this
+/// repository's own `/.worktrees/<name>/.git` checkouts are.
+#[test]
+fn nested_repository_under_an_ignored_directory_is_not_looked_at() {
+    in_neutral_git_child(
+        "nested_repository_under_an_ignored_directory_is_not_looked_at",
+        || {
+            let repository = Repository::new();
+            repository.write(".gitignore", ".worktrees/\nnode_modules/\n");
+            repository.write("src/index.ts", "export {};\n");
+            repository.commit_all("sources");
+            for nested in [".worktrees/feature", "node_modules/pkg"] {
+                repository.write(&format!("{nested}/src/copy.ts"), "export {};\n");
+                repository.git(&["-C", nested, "init", "-q"]);
+            }
+            assert_eq!(
+                repository.git(&["ls-files", "--others", "--ignored", "--exclude-standard"]),
+                ".worktrees/feature/\nnode_modules/pkg/\n"
+            );
+
+            let captured = worktree(&repository, &manifest(""));
+            assert_eq!(captured.entry("src/index.ts").class, InventoryClass::Source);
+        },
+    );
+}
+
+/// B9, spec 5.6: "A nested git repository that is not a submodule is an error in v1
+/// (`nested-repository`), because its files have two identities."
+#[test]
+fn nested_repository_beside_tracked_files_is_rejected() {
+    in_neutral_git_child("nested_repository_beside_tracked_files_is_rejected", || {
+        // Untracked: Git lists the nested repository as one directory and never descends.
+        let repository = Repository::new();
+        repository.write("vendor/a.ts", "export {};\n");
+        repository.commit_all("tracked vendor file");
+        repository.write("vendor/nested/src/b.ts", "export {};\n");
+        repository.git(&["-C", "vendor/nested", "init", "-q"]);
+        assert_eq!(
+            repository.git(&["ls-files", "--others", "--exclude-standard"]),
+            "vendor/nested/\n"
+        );
+        let error = worktree_error(&repository);
+        assert!(
+            matches!(&error, InventoryError::NestedRepository { path } if path == "vendor/nested"),
+            "{error:?}"
+        );
+
+        // Tracked by the outer repository and inside the nested one: two identities.
+        let repository = Repository::new();
+        repository.write("vendor/nested/src/b.ts", "export {};\n");
+        repository.commit_all("tracked nested file");
+        repository.git(&["-C", "vendor/nested", "init", "-q"]);
+        let error = worktree_error(&repository);
+        assert!(
+            matches!(&error, InventoryError::NestedRepository { path } if path == "vendor/nested"),
+            "{error:?}"
+        );
+    });
 }

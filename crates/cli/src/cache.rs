@@ -46,10 +46,16 @@ pub fn artifact_path(
         .join(name)
 }
 
-pub fn write_atomic(path: &Path, bytes: &[u8]) -> crate::error::Result<()> {
+/// Write `bytes` to `path` below the cache root `cache` atomically. Error documents name
+/// cache paths relative to the cache root, never by their absolute path.
+pub fn write_atomic(cache: &Path, path: &Path, bytes: &[u8]) -> crate::error::Result<()> {
     cancel::check()?;
+    let io_error = |at: &Path, error: std::io::Error| io_error(cache, at, error);
     let parent = path.parent().ok_or_else(|| {
-        CommandError::internal(format!("cache path has no parent: {}", path.display()))
+        CommandError::internal(format!(
+            "cache path has no parent: {}",
+            relative(cache, path).display()
+        ))
     })?;
     fs::create_dir_all(parent).map_err(|error| io_error(parent, error))?;
     let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
@@ -79,6 +85,18 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> crate::error::Result<()> {
     result
 }
 
-fn io_error(path: &Path, error: std::io::Error) -> Box<CommandError> {
-    CommandError::internal(format!("{}: {error}", path.display()))
+fn io_error(cache: &Path, path: &Path, error: std::io::Error) -> Box<CommandError> {
+    CommandError::internal(format!(
+        "cache {}: {error}",
+        relative(cache, path).display()
+    ))
+}
+
+/// `path` below the cache root; the root itself reads as `.`.
+fn relative<'a>(cache: &Path, path: &'a Path) -> &'a Path {
+    match path.strip_prefix(cache) {
+        Ok(relative) if relative.as_os_str().is_empty() => Path::new("."),
+        Ok(relative) => relative,
+        Err(_) => path,
+    }
 }

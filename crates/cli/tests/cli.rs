@@ -1360,6 +1360,55 @@ fn inventory_error_code_producer_failed() {
     assert_inventory_error(&error, "producer-failed", "exit 3");
 }
 
+/// Error documents name repository files relative to the repository root, so a document
+/// is the same wherever the checkout lives and never discloses the machine's layout.
+#[test]
+fn manifest_errors_carry_repository_relative_paths() {
+    let repository = repository();
+    let root = repository.path();
+    let cache = tempfile::tempdir().expect("temp cache");
+    let absolute = root.to_str().expect("UTF-8 temp path");
+
+    // A directory where the manifest file belongs cannot be read: manifest-io.
+    fs::create_dir_all(root.join("warrant/warrant.yaml")).expect("manifest directory");
+    let output = warrant_in(root, cache.path(), &["inventory"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("error document");
+    assert_eq!(error["code"], "manifest-io", "{error}");
+    let reason = error["reason"].as_str().expect("reason");
+    assert!(reason.starts_with("warrant/warrant.yaml: "), "{reason}");
+    assert!(!reason.contains(absolute), "{reason}");
+
+    // An unparseable manifest names the same relative location.
+    fs::remove_dir(root.join("warrant/warrant.yaml")).expect("remove manifest directory");
+    fs::write(root.join("warrant/warrant.yaml"), "not: [valid\n").expect("invalid manifest");
+    let output = warrant_in(root, cache.path(), &["snapshot"]);
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).expect("error document");
+    assert_eq!(error["code"], "invalid-manifest", "{error}");
+    assert_eq!(error["next_diagnostic"], "warrant/warrant.yaml", "{error}");
+}
+
+/// Cache failures name the artifact relative to the cache root.
+#[test]
+fn cache_errors_carry_cache_relative_paths() {
+    let repository = repository();
+    let holder = tempfile::tempdir().expect("temp directory");
+    // A file where the cache directory belongs: creating the artifact directory fails.
+    let cache = holder.path().join("cache");
+    fs::write(&cache, "not a directory\n").expect("cache file");
+    let output = warrant_in(repository.path(), &cache, &["snapshot"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("error document");
+    let reason = error["reason"].as_str().expect("reason");
+    assert!(reason.starts_with("cache warrant/"), "{reason}");
+    assert!(
+        !reason.contains(holder.path().to_str().expect("UTF-8 temp path")),
+        "{reason}"
+    );
+}
+
 /// Spec 4.5: every downstream artifact carries the snapshot manifest.
 #[test]
 fn inventory_carries_its_snapshot_manifest() {

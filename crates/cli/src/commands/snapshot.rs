@@ -51,7 +51,7 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
         &analysis_key(&manifest.capture, &governing.snapshot),
         "snapshot.json",
     );
-    cache::write_atomic(&path, &bytes)?;
+    cache::write_atomic(&cache_root, &path, &bytes)?;
     output::document(&manifest, format)
 }
 

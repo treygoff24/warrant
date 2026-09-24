@@ -7,21 +7,21 @@ use crate::{error::CommandError, repository};
 const MANIFEST_PATH: &str = "warrant/warrant.yaml";
 const DEFAULT_MANIFEST: &str = "schema_version: warrant.manifest/1\n";
 
-/// The worktree manifest: the file on disk, or the default when it is absent.
+/// The worktree manifest: the file on disk, or the default when it is absent. Error
+/// documents name it relative to the repository root, never by its absolute path.
 pub fn load_manifest(root: &Path) -> crate::error::Result<WarrantManifest> {
-    let path = root.join(MANIFEST_PATH);
-    let text = match fs::read_to_string(&path) {
+    let text = match fs::read_to_string(root.join(MANIFEST_PATH)) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => DEFAULT_MANIFEST.into(),
         Err(error) => {
             return Err(CommandError::evaluation(
                 "manifest-io",
-                format!("{}: {error}", path.display()),
+                format!("{MANIFEST_PATH}: {error}"),
                 None,
             ));
         }
     };
-    parse(&text, path.display().to_string())
+    parse(&text, MANIFEST_PATH.into())
 }
 
 /// The manifest a snapshot of `kind` is governed by. Object snapshots read it from the

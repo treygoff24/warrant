@@ -96,7 +96,7 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
         analysis_key,
         "inventory.json",
     );
-    cache::write_atomic(&path, &bytes)?;
+    cache::write_atomic(&cache_root, &path, &bytes)?;
     let blocked = built
         .document
         .summary

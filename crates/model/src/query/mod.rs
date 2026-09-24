@@ -87,6 +87,12 @@ impl QueryStore {
             }
             let row_bytes = serde_json::to_vec(&values)?.len();
             if used_bytes.saturating_add(row_bytes) > limits.bytes {
+                if rows.is_empty() {
+                    return Err(ModelError::Invalid(format!(
+                        "row-too-large: row 1 requires {row_bytes} bytes, exceeding byte cap {}",
+                        limits.bytes
+                    )));
+                }
                 truncated = true;
                 break;
             }

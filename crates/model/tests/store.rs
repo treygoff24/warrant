@@ -488,3 +488,22 @@ fn digest_preserves_scalar_meta_bytes() {
         meta_digest("integration_version", "1.0")
     );
 }
+
+#[test]
+fn first_row_exceeding_byte_cap_errors_without_a_continuation() {
+    let temp = TempDir::new().unwrap();
+    let (path, _) = build(&temp, "model.sqlite", false, "now");
+    let store = QueryStore::open(path).unwrap();
+    let result = store.sql(
+        "SELECT path FROM files WHERE id = 10",
+        QueryLimits {
+            rows: 100,
+            bytes: 1,
+        },
+    );
+    assert!(
+        matches!(&result, Err(warrant_model::ModelError::Invalid(message))
+        if message.contains("row-too-large") && message.contains("row 1")),
+        "{result:?}"
+    );
+}

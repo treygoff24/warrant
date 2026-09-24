@@ -7,14 +7,18 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 check_dependencies() {
   local root="$1"
   local metadata
-  metadata="$(cargo metadata --format-version=1 --no-deps --manifest-path "$root/Cargo.toml")"
+  metadata="$(cargo metadata --locked --format-version=1 --no-deps --manifest-path "$root/Cargo.toml")"
 
-  METADATA="$metadata" python - <<'PY'
+  METADATA="$metadata" ROOT="$root" python3 - <<'PY'
 import json
 import os
+from pathlib import Path
+import re
 import sys
+import tomllib
 
 metadata = json.loads(os.environ["METADATA"])
+root = Path(os.environ["ROOT"])
 workspace = {package["id"]: package for package in metadata["packages"]}
 by_name = {package["name"] for package in workspace.values()}
 
@@ -31,8 +35,27 @@ core_only = {
 language = {"warrant-lang-ts", "warrant-lang-rust"}
 
 violations = []
+workspace_msrv = tomllib.loads((root / "Cargo.toml").read_text())["workspace"]["package"].get("rust-version")
+ci = (root / ".github/workflows/ci.yml").read_text()
+job = re.search(r"(?ms)^  msrv:\s*\n(?P<body>.*?)(?=^  [\w-]+:|\Z)", ci)
+toolchains = re.findall(r"(?m)^          toolchain:\s*['\"]?(\d+\.\d+(?:\.\d+)?)['\"]?\s*$", job["body"]) if job else []
+if len(toolchains) != 1:
+    violations.append("deps: expected one numeric toolchain in CI msrv job")
+else:
+    ci_msrv = toolchains[0]
+    if not isinstance(workspace_msrv, str) or not re.fullmatch(r"\d+\.\d+(?:\.\d+)?", workspace_msrv):
+        violations.append(f"deps: invalid workspace rust-version: {workspace_msrv!r}")
+    elif tuple(workspace_msrv.split(".")[:2]) != tuple(ci_msrv.split(".")[:2]):
+        violations.append(f"deps: workspace rust-version {workspace_msrv} differs from CI MSRV {ci_msrv}")
+
 for package in workspace.values():
     source = package["name"]
+    manifest = tomllib.loads(Path(package["manifest_path"]).read_text())
+    declaration = manifest["package"].get("rust-version")
+    if declaration != {"workspace": True}:
+        violations.append(f"deps: {source} must inherit workspace rust-version; found {declaration!r}")
+    if package["rust_version"] != workspace_msrv:
+        violations.append(f"deps: {source} rust-version {package['rust_version']!r} differs from workspace {workspace_msrv!r}")
     for dependency in package["dependencies"]:
         target = dependency["name"]
         if target not in by_name:
@@ -64,6 +87,8 @@ self_test() {
 
   cp "$repo_root/Cargo.toml" "$repo_root/Cargo.lock" "$tmp_root/"
   cp -R "$repo_root/crates" "$tmp_root/crates"
+  mkdir -p "$tmp_root/.github/workflows"
+  cp "$repo_root/.github/workflows/ci.yml" "$tmp_root/.github/workflows/ci.yml"
   cat >>"$tmp_root/crates/snapshot/Cargo.toml" <<'EOF'
 warrant-inventory = { version = "0.1.0", path = "../inventory" }
 EOF

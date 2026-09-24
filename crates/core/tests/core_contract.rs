@@ -2,7 +2,8 @@ use std::{collections::BTreeSet, fs, path::Path};
 
 use warrant_core::manifest::{ManifestError, WarrantManifest};
 use warrant_core::nouns::{
-    GeneratedBy, InventoryClass, InventorySummary, SnapshotKind, SnapshotManifest,
+    GeneratedBy, InventoryClass, InventoryDocument, InventorySummary, SnapshotKind,
+    SnapshotManifest,
 };
 use warrant_core::schema::{DOCUMENTS, canonical_bytes};
 
@@ -119,6 +120,23 @@ inventory:
     .expect("old inventory summaries should keep deserializing");
     assert!(old_summary.unit_aliases.is_empty());
     assert!(old_summary.generated_absent.is_empty());
+
+    let old_document: InventoryDocument = serde_json::from_value(serde_json::json!({
+        "schema_version": "warrant.inventory/1",
+        "entries": [],
+        "summary": old_summary
+    }))
+    .expect("old inventory documents should keep deserializing");
+    assert!(!old_document.truncated);
+    assert_eq!(old_document.total, 0);
+    assert_eq!(old_document.next_cursor, None);
+
+    let schema = warrant_core::schema::generate("warrant.inventory")
+        .expect("inventory schema should generate");
+    let schema = serde_json::to_value(schema).expect("inventory schema should serialize");
+    for field in ["truncated", "total", "next_cursor"] {
+        assert!(schema["properties"].get(field).is_some(), "missing {field}");
+    }
 }
 
 #[test]
@@ -149,6 +167,7 @@ fn implemented_document_schemas_are_stable_and_require_schema_version() {
         "warrant.snapshot",
         "warrant.inventory",
         "warrant.capabilities",
+        "warrant.commands",
         "warrant.manifest",
         "warrant.error",
     ] {
@@ -217,5 +236,8 @@ fn implemented_document_schemas_are_stable_and_require_schema_version() {
             "{} did not require schema_version",
             document.name
         );
+        if document.name == "warrant.commands" {
+            assert_eq!(schema["additionalProperties"], false);
+        }
     }
 }

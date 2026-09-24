@@ -16,6 +16,7 @@ pub fn canonical_bytes(schema: &Schema) -> Result<Vec<u8>, serde_json::Error> {
 
 mod capabilities;
 mod census;
+mod commands;
 mod context;
 mod diff;
 mod effective_policy;
@@ -67,6 +68,7 @@ pub const DOCUMENTS: &[DocumentSchema] = &[
     document("warrant.snapshot", snapshot::schema),
     document("warrant.inventory", inventory::schema),
     document("warrant.capabilities", capabilities::schema),
+    document("warrant.commands", commands::schema),
     document("warrant.manifest", manifest::schema),
     document("warrant.policy", policy::schema),
     document("warrant.effective-policy", effective_policy::schema),

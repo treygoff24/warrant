@@ -1,91 +1,57 @@
-use clap::Args as ClapArgs;
-use serde::Serialize;
+use clap::{Args as ClapArgs, Subcommand};
+use warrant_core::{
+    nouns::{CommandRecord, CommandStatus, CommandsDocument},
+    schema::DOCUMENTS,
+};
 
-use crate::{cli::Format, error::CommandError, output};
+use crate::{cli, cli::Format, output};
+
+use super::page;
 
 const IMPLEMENTED: &[&str] = &["snapshot", "inventory", "schema", "capabilities"];
-const STUBS: &[&str] = &[
-    "model",
-    "query",
-    "context",
-    "propose",
-    "check",
-    "gate",
-    "explain",
-    "verify",
-    "policy",
-    "rule",
-    "attest",
-    "evidence",
-    "instrument",
-    "census",
-    "map",
-    "serve",
-    "hook",
-    "selftest",
-    "self-qualify",
-    "judgment",
-];
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
     /// Maximum number of command records returned.
-    #[arg(long, default_value_t = 100, value_parser = parse_limit)]
+    #[arg(long, default_value_t = 100, value_parser = page::parse_limit)]
     limit: usize,
     /// Zero-based cursor returned by a previous invocation.
     #[arg(long, default_value_t = 0)]
     cursor: usize,
 }
 
-fn parse_limit(value: &str) -> Result<usize, String> {
-    value
-        .parse::<usize>()
-        .map_err(|error| error.to_string())
-        .and_then(|limit| {
-            (limit > 0)
-                .then_some(limit)
-                .ok_or_else(|| "limit must be positive".into())
-        })
-}
-
-#[derive(Serialize)]
-struct Capabilities<'a> {
-    schema_version: &'static str,
-    implemented: Vec<&'a str>,
-    stubs: Vec<&'a str>,
-    adapters: Vec<&'a str>,
-    truncated: bool,
-    total: usize,
-    next_cursor: Option<usize>,
-}
-
 pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
-    let all: Vec<_> = IMPLEMENTED.iter().chain(STUBS).copied().collect();
-    if args.cursor > all.len() {
-        return Err(CommandError::evaluation(
-            "invalid-cursor",
-            format!("cursor {} exceeds total {}", args.cursor, all.len()),
-            Some("omit --cursor to start from the beginning".into()),
-        ));
-    }
-    let end = args.cursor.saturating_add(args.limit).min(all.len());
-    let selected = &all[args.cursor..end];
-    let capabilities = Capabilities {
-        schema_version: "warrant.capabilities/1",
-        implemented: selected
-            .iter()
-            .copied()
-            .filter(|name| IMPLEMENTED.contains(name))
-            .collect(),
-        stubs: selected
-            .iter()
-            .copied()
-            .filter(|name| STUBS.contains(name))
-            .collect(),
+    // Clap retains enum declaration order in its generated subcommands.
+    let registered =
+        <cli::Command as Subcommand>::augment_subcommands(clap::Command::new("warrant"));
+    let commands: Vec<_> = registered
+        .get_subcommands()
+        .map(|command| {
+            let name = command.get_name();
+            CommandRecord {
+                name: name.to_owned(),
+                status: if IMPLEMENTED.contains(&name) {
+                    CommandStatus::Implemented
+                } else {
+                    CommandStatus::Stub
+                },
+            }
+        })
+        .collect();
+    let page = page::bounds(commands.len(), args.limit, args.cursor)?;
+    let document = CommandsDocument {
+        schema_version: "warrant.commands/1".into(),
+        commands: commands[page.range].to_vec(),
+        implemented: IMPLEMENTED.iter().map(|name| (*name).into()).collect(),
         adapters: Vec::new(),
-        truncated: end < all.len(),
-        total: all.len(),
-        next_cursor: (end < all.len()).then_some(end),
+        schemas: DOCUMENTS
+            .iter()
+            .filter(|document| document.implemented())
+            .map(|document| document.name.into())
+            .collect(),
+        truncated: page.truncated,
+        total: page.total,
+        next_cursor: page.next_cursor,
     };
-    output::document(&capabilities, format)
+    output::document(&document, format)
 }

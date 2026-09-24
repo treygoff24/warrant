@@ -1,5 +1,7 @@
 use std::{fs, path::Path, process::Command};
 
+use warrant_core::nouns::{CommandStatus, CommandsDocument, InventoryDocument};
+
 fn warrant(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_warrant"))
         .args(args)
@@ -39,17 +41,72 @@ fn repository() -> tempfile::TempDir {
 }
 
 #[test]
-fn capabilities_names_implemented_and_stub_commands() {
+fn capabilities_document_and_page_walk() {
     let output = warrant(&["capabilities"]);
     assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    // Strict core-noun deserialization checks the emitted shape without a JSON Schema validator dependency.
+    let document: CommandsDocument =
+        serde_json::from_slice(&output.stdout).expect("commands document");
+    assert_eq!(document.schema_version, "warrant.commands/1");
     assert_eq!(
-        value["implemented"],
-        serde_json::json!(["snapshot", "inventory", "schema", "capabilities"])
+        document.implemented,
+        ["snapshot", "inventory", "schema", "capabilities"]
     );
-    assert!(value["stubs"].as_array().expect("stub list").len() >= 19);
+    assert_eq!(document.commands.len() as u64, document.total);
+    assert!(document.schemas.contains(&"warrant.snapshot".into()));
+    assert!(document.schemas.contains(&"warrant.inventory".into()));
+    assert!(document.schemas.contains(&"warrant.commands".into()));
+    assert!(!document.schemas.contains(&"warrant.verdict".into()));
+    let mut cursor = 0;
+    let mut walked = Vec::new();
+    loop {
+        let output = warrant(&[
+            "capabilities",
+            "--limit",
+            "5",
+            "--cursor",
+            &cursor.to_string(),
+        ]);
+        assert!(output.status.success());
+        let page: CommandsDocument = serde_json::from_slice(&output.stdout).expect("commands page");
+        assert_eq!(page.total, document.total);
+        assert_eq!(page.implemented, document.implemented);
+        for record in &page.commands {
+            assert_eq!(
+                record.status,
+                if document.implemented.contains(&record.name) {
+                    CommandStatus::Implemented
+                } else {
+                    CommandStatus::Stub
+                }
+            );
+        }
+        walked.extend(page.commands);
+        if !page.truncated {
+            assert_eq!(page.next_cursor, None);
+            break;
+        }
+        cursor = page.next_cursor.expect("truncated page needs cursor");
+        assert_eq!(cursor, walked.len() as u64);
+    }
+    assert_eq!(walked, document.commands);
+    let beyond = warrant(&[
+        "capabilities",
+        "--cursor",
+        &(document.total + 1).to_string(),
+    ]);
+    assert_eq!(beyond.status.code(), Some(2));
+    let error: warrant_core::nouns::ErrorDocument =
+        serde_json::from_slice(&beyond.stderr).expect("cursor error");
+    assert_eq!(error.code, "invalid-cursor");
+    let end = warrant(&["capabilities", "--cursor", &document.total.to_string()]);
+    assert!(end.status.success());
+    let end: CommandsDocument = serde_json::from_slice(&end.stdout).expect("empty end page");
+    assert!(end.commands.is_empty());
+    assert!(!end.truncated);
     assert!(!output.stdout.contains(&0x1b));
     assert!(!output.stderr.contains(&0x1b));
+    assert!(!beyond.stderr.contains(&0x1b));
 }
 
 #[test]
@@ -124,6 +181,82 @@ fn snapshot_and_inventory_emit_typed_json_and_atomic_cache_files() {
     assert!(files.iter().any(|path| path.ends_with("snapshot.json")));
     assert!(files.iter().any(|path| path.ends_with("inventory.json")));
     assert!(!files.iter().any(|path| path.ends_with(".tmp")));
+}
+
+#[test]
+fn inventory_pages_entries_without_changing_cached_full_document() {
+    let repository = repository();
+    fs::write(repository.path().join("extra.rs"), "pub fn extra() {}\n").expect("second file");
+    fs::write(repository.path().join("third.rs"), "pub fn third() {}\n").expect("third file");
+    let cache = tempfile::tempdir().expect("temp cache");
+    let full = warrant_in(repository.path(), cache.path(), &["inventory"]);
+    assert!(
+        full.status.success(),
+        "{}",
+        String::from_utf8_lossy(&full.stderr)
+    );
+    let full: InventoryDocument = serde_json::from_slice(&full.stdout).expect("full inventory");
+    assert!(full.entries.len() >= 3);
+    assert_eq!(full.total, full.entries.len() as u64);
+    assert!(!full.truncated);
+    let cached_path = walk_files(cache.path())
+        .into_iter()
+        .find(|path| path.ends_with("inventory.json"))
+        .expect("cached inventory");
+    let cached_before = fs::read(&cached_path).expect("cached full document");
+    let cached: InventoryDocument =
+        serde_json::from_slice(&cached_before).expect("cached inventory");
+    assert_eq!(cached, full);
+
+    let mut cursor = 0;
+    let mut walked = Vec::new();
+    loop {
+        let output = warrant_in(
+            repository.path(),
+            cache.path(),
+            &["inventory", "--limit", "1", "--cursor", &cursor.to_string()],
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let page: InventoryDocument =
+            serde_json::from_slice(&output.stdout).expect("inventory page");
+        assert_eq!(page.total, full.total);
+        assert_eq!(page.summary, full.summary);
+        assert_eq!(page.entries.len(), 1);
+        walked.extend(page.entries);
+        if !page.truncated {
+            assert_eq!(page.next_cursor, None);
+            break;
+        }
+        cursor = page.next_cursor.expect("truncated page needs cursor");
+        assert_eq!(cursor, walked.len() as u64);
+    }
+    assert_eq!(walked, full.entries);
+    assert_eq!(
+        fs::read(&cached_path).expect("cached after pagination"),
+        cached_before
+    );
+    let beyond = warrant_in(
+        repository.path(),
+        cache.path(),
+        &["inventory", "--cursor", &(full.total + 1).to_string()],
+    );
+    assert_eq!(beyond.status.code(), Some(2));
+    let error: warrant_core::nouns::ErrorDocument =
+        serde_json::from_slice(&beyond.stderr).expect("cursor error");
+    assert_eq!(error.code, "invalid-cursor");
+    let end = warrant_in(
+        repository.path(),
+        cache.path(),
+        &["inventory", "--cursor", &full.total.to_string()],
+    );
+    assert!(end.status.success());
+    let end: InventoryDocument = serde_json::from_slice(&end.stdout).expect("empty end page");
+    assert!(end.entries.is_empty());
+    assert!(!end.truncated);
 }
 
 #[test]

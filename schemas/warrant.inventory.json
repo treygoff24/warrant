@@ -10,11 +10,30 @@
         "$ref": "#/$defs/InventoryEntry"
       }
     },
+    "next_cursor": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "default": null,
+      "minimum": 0
+    },
     "schema_version": {
       "type": "string"
     },
     "summary": {
       "$ref": "#/$defs/InventorySummary"
+    },
+    "total": {
+      "type": "integer",
+      "format": "uint64",
+      "default": 0,
+      "minimum": 0
+    },
+    "truncated": {
+      "type": "boolean",
+      "default": false
     }
   },
   "additionalProperties": false,

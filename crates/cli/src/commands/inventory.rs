@@ -5,10 +5,19 @@ use warrant_core::{manifest::WarrantManifest, nouns::SnapshotKind};
 
 use crate::{cache, cancel, cli::Format, error::CommandError, output};
 
-#[derive(Debug, ClapArgs)]
-pub struct Args {}
+use super::page;
 
-pub fn run(_args: Args, format: Option<Format>) -> crate::error::Result<()> {
+#[derive(Debug, ClapArgs)]
+pub struct Args {
+    /// Maximum number of inventory entries returned.
+    #[arg(long, value_parser = page::parse_limit)]
+    limit: Option<usize>,
+    /// Zero-based cursor returned by a previous invocation.
+    #[arg(long, default_value_t = 0)]
+    cursor: usize,
+}
+
+pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
     let root = env::current_dir()
         .map_err(|error| CommandError::evaluation("repository-io", error.to_string(), None))?;
     let manifest = load_manifest(&root)?;
@@ -47,7 +56,17 @@ pub fn run(_args: Args, format: Option<Format>) -> crate::error::Result<()> {
         "inventory.json",
     );
     cache::write_atomic(&path, &bytes)?;
-    output::document(&built.document, format)
+    let mut document = built.document;
+    let page = page::bounds(
+        document.entries.len(),
+        args.limit.unwrap_or(usize::MAX),
+        args.cursor,
+    )?;
+    document.entries = document.entries[page.range].to_vec();
+    document.truncated = page.truncated;
+    document.total = page.total;
+    document.next_cursor = page.next_cursor;
+    output::document(&document, format)
 }
 
 fn load_manifest(root: &Path) -> crate::error::Result<WarrantManifest> {

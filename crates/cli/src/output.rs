@@ -17,18 +17,33 @@ pub fn selected(explicit: Option<Format>) -> Format {
 pub fn document(value: &impl Serialize, format: Option<Format>) -> crate::error::Result<()> {
     let stdout = io::stdout();
     let mut writer = stdout.lock();
-    match selected(format) {
+    let result = match selected(format) {
         Format::Json => serde_json::to_writer(&mut writer, value),
         Format::Human => serde_json::to_writer_pretty(&mut writer, value),
+    };
+    if let Err(error) = result {
+        return if error.io_error_kind() == Some(io::ErrorKind::BrokenPipe) {
+            Ok(())
+        } else {
+            Err(CommandError::internal(format!(
+                "could not write output: {error}"
+            )))
+        };
     }
-    .map_err(|error| CommandError::internal(format!("could not write output: {error}")))?;
-    writeln!(writer)
-        .map_err(|error| CommandError::internal(format!("could not write output: {error}")))
+    write_result(writeln!(writer).and_then(|()| writer.flush()))
 }
 
 pub fn bytes(bytes: &[u8]) -> crate::error::Result<()> {
-    io::stdout()
-        .lock()
-        .write_all(bytes)
-        .map_err(|error| CommandError::internal(format!("could not write output: {error}")))
+    let mut writer = io::stdout().lock();
+    write_result(writer.write_all(bytes).and_then(|()| writer.flush()))
+}
+
+fn write_result(result: io::Result<()>) -> crate::error::Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        Err(error) => Err(CommandError::internal(format!(
+            "could not write output: {error}"
+        ))),
+    }
 }

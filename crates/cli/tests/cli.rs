@@ -319,47 +319,178 @@ fn human_format_contains_the_same_data() {
 #[cfg(unix)]
 #[test]
 fn sigterm_during_capture_exits_143_without_a_partial_artifact() {
-    use std::{process::Stdio, thread, time::Duration};
+    signal_during_capture(&[nix::sys::signal::Signal::SIGTERM], 143);
+}
 
-    let repository = repository();
-    for index in 0..3_000 {
-        fs::write(
-            repository.path().join(format!("file-{index:04}.txt")),
-            vec![b'x'; 4_096],
+#[cfg(unix)]
+#[test]
+fn sigint_during_capture_exits_130() {
+    signal_during_capture(&[nix::sys::signal::Signal::SIGINT], 130);
+}
+
+#[cfg(unix)]
+#[test]
+fn first_recorded_signal_decides_exit_code() {
+    use nix::sys::signal::Signal::{SIGINT, SIGTERM};
+    signal_during_capture(&[SIGTERM, SIGINT], 143);
+}
+
+#[cfg(unix)]
+fn signal_during_capture(signals: &[nix::sys::signal::Signal], exit: i32) {
+    use std::{
+        thread,
+        time::{Duration, Instant},
+    };
+
+    let mut capture = PausedCapture::new(&["snapshot", "--worktree"]);
+    for signal in signals {
+        assert_eq!(capture.child.try_wait().expect("child liveness"), None);
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(i32::try_from(capture.child.id()).expect("pid fits i32")),
+            *signal,
         )
-        .expect("large fixture file");
+        .expect("signal live warrant; ESRCH means the fixture failed");
+        // Keep capture held while the process handles this signal before sending the next.
+        let until = Instant::now() + Duration::from_millis(50);
+        while Instant::now() < until {
+            assert_eq!(capture.child.try_wait().expect("child liveness"), None);
+            thread::sleep(Duration::from_millis(1));
+        }
     }
-    for args in [&["add", "."][..], &["commit", "-qm", "large fixture"][..]] {
-        assert!(
-            Command::new("git")
-                .args(args)
-                .current_dir(repository.path())
-                .status()
-                .expect("run git")
-                .success()
-        );
-    }
-    let cache = tempfile::tempdir().expect("temp cache");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_warrant"))
-        .args(["snapshot", "--worktree"])
-        .current_dir(repository.path())
-        .env("XDG_CACHE_HOME", cache.path())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start warrant");
-    thread::sleep(Duration::from_millis(25));
-    nix::sys::signal::kill(
-        nix::unistd::Pid::from_raw(i32::try_from(child.id()).expect("pid fits i32")),
-        nix::sys::signal::Signal::SIGTERM,
-    )
-    .expect("send SIGTERM");
-    let status = child.wait().expect("wait for warrant");
-    assert_eq!(status.code(), Some(143));
+    capture.release();
+    assert_eq!(capture.wait().code(), Some(exit));
+    assert!(walk_files(capture.cache.path()).is_empty());
+}
 
-    let files = walk_files(cache.path());
-    assert!(!files.iter().any(|path| path.ends_with(".tmp")));
-    assert!(!files.iter().any(|path| path.ends_with(".json")));
+#[cfg(unix)]
+#[test]
+fn broken_pipe_is_not_an_internal_failure() {
+    use std::io::Read;
+
+    // Git is held before inventory can write, so the pipe is certainly closed first.
+    let mut capture = PausedCapture::new(&["inventory"]);
+    drop(capture.child.stdout.take().expect("piped stdout"));
+    capture.release();
+    let status = capture.wait();
+    let mut stderr = String::new();
+    capture
+        .child
+        .stderr
+        .take()
+        .expect("piped stderr")
+        .read_to_string(&mut stderr)
+        .expect("read stderr");
+    assert_eq!(status.code(), Some(0), "{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[cfg(unix)]
+struct PausedCapture {
+    child: std::process::Child,
+    cache: tempfile::TempDir,
+    control: tempfile::TempDir,
+    _repository: tempfile::TempDir,
+}
+
+#[cfg(unix)]
+impl PausedCapture {
+    fn new(args: &[&str]) -> Self {
+        use std::{
+            os::unix::fs::PermissionsExt,
+            process::Stdio,
+            thread,
+            time::{Duration, Instant},
+        };
+
+        let repository = repository();
+        let cache = tempfile::tempdir().expect("temp cache");
+        let control = tempfile::tempdir().expect("capture control");
+        let git = Command::new("sh")
+            .args(["-c", "command -v git"])
+            .output()
+            .expect("locate real git");
+        assert!(git.status.success());
+        let wrapper = control.path().join("git");
+        fs::write(
+            &wrapper,
+            r#"#!/bin/sh
+: > "$WARRANT_TEST_CONTROL/ready"
+while [ ! -e "$WARRANT_TEST_CONTROL/release" ]; do sleep 0.01; done
+"$WARRANT_TEST_GIT" "$@"
+result=$?
+: > "$WARRANT_TEST_CONTROL/finished"
+exit "$result"
+"#,
+        )
+        .expect("git wrapper");
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))
+            .expect("executable wrapper");
+        let mut paths = vec![control.path().to_path_buf()];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").expect("PATH"),
+        ));
+        let child = Command::new(env!("CARGO_BIN_EXE_warrant"))
+            .args(args)
+            .current_dir(repository.path())
+            .env("XDG_CACHE_HOME", cache.path())
+            .env("PATH", std::env::join_paths(paths).expect("fixture PATH"))
+            .env("WARRANT_TEST_CONTROL", control.path())
+            .env(
+                "WARRANT_TEST_GIT",
+                String::from_utf8(git.stdout).expect("git path").trim(),
+            )
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("start warrant");
+        let mut capture = Self {
+            child,
+            cache,
+            control,
+            _repository: repository,
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            assert_eq!(capture.child.try_wait().expect("child liveness"), None);
+            // The first Git call proves signal installation finished and capture started.
+            if capture.control.path().join("ready").exists() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "warrant did not enter capture");
+            thread::sleep(Duration::from_millis(1));
+        }
+        capture
+    }
+
+    fn release(&self) {
+        fs::write(self.control.path().join("release"), b"").expect("release capture");
+    }
+
+    fn wait(&mut self) -> std::process::ExitStatus {
+        use wait_timeout::ChildExt;
+        self.child
+            .wait_timeout(std::time::Duration::from_secs(10))
+            .expect("wait for warrant")
+            .expect("warrant must exit after capture resumes")
+    }
+}
+
+#[cfg(unix)]
+impl Drop for PausedCapture {
+    fn drop(&mut self) {
+        // Also unblock Git and reap our child when an assertion fails.
+        self.release();
+        let _ = self.child.wait();
+        // A fatal-signal mutation can orphan the Git wrapper; let it finish before
+        // removing its release file and repository.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while self.control.path().join("ready").exists()
+            && !self.control.path().join("finished").exists()
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
 }
 
 fn walk_files(root: &Path) -> Vec<String> {

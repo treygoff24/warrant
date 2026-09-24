@@ -2,7 +2,10 @@ use std::{fs, path::Path, process::Command};
 
 use warrant_core::nouns::{CommandStatus, CommandsDocument, InventoryDocument};
 
-const STUB_COMMANDS: &[&str] = &[
+/// The commands that were stubs when M0 exited. Later milestones implement them one at a
+/// time; the assertions below are monotone (the implemented set only grows, the stub set
+/// only shrinks) so implementing a command never requires editing this list.
+const M0_STUB_COMMANDS: &[&str] = &[
     "model",
     "query",
     "context",
@@ -185,22 +188,50 @@ fn capabilities_names_implemented_and_stub_commands() {
     let output = warrant(&["capabilities"]);
     assert!(output.status.success(), "{output:?}");
     let document: CommandsDocument = serde_json::from_slice(&output.stdout).expect("commands");
-    assert_eq!(
-        document.implemented,
-        ["snapshot", "inventory", "schema", "capabilities"]
-    );
+    for command in ["snapshot", "inventory", "schema", "capabilities"] {
+        assert!(
+            document.implemented.iter().any(|name| name == command),
+            "{command} must remain implemented"
+        );
+    }
     let stubs: Vec<_> = document
         .commands
         .iter()
         .filter(|record| record.status == CommandStatus::Stub)
         .map(|record| record.name.as_str())
         .collect();
-    assert_eq!(stubs, STUB_COMMANDS);
+    for command in &stubs {
+        assert!(
+            M0_STUB_COMMANDS.contains(command),
+            "{command} is a stub that M0 did not declare"
+        );
+    }
+    for record in &document.commands {
+        assert_eq!(
+            record.status == CommandStatus::Stub,
+            !document.implemented.contains(&record.name),
+            "{}",
+            record.name
+        );
+    }
 }
 
 #[test]
 fn every_stub_returns_the_error_contract() {
-    for command in STUB_COMMANDS {
+    let output = warrant(&["capabilities"]);
+    assert!(output.status.success(), "{output:?}");
+    let document: CommandsDocument = serde_json::from_slice(&output.stdout).expect("commands");
+    let stubs: Vec<_> = document
+        .commands
+        .iter()
+        .filter(|record| record.status == CommandStatus::Stub)
+        .map(|record| record.name.as_str())
+        .collect();
+    assert!(
+        stubs.len() + document.implemented.len() == document.commands.len(),
+        "every command is a stub or implemented"
+    );
+    for command in &stubs {
         let output = warrant(&[command]);
         assert_eq!(output.status.code(), Some(2), "{command}");
         let error: serde_json::Value =
@@ -223,12 +254,27 @@ fn schema_prints_an_implemented_document_schema() {
             serde_json::from_slice(&output.stdout).expect("valid schema");
         assert_eq!(value["title"], title);
     }
-    let output = warrant(&["schema", "warrant.policy"]);
-    assert_eq!(output.status.code(), Some(2));
-    let error: warrant_core::nouns::ErrorDocument =
-        serde_json::from_slice(&output.stderr).expect("schema error");
-    assert_eq!(error.schema_version, "warrant.error/1");
-    assert_eq!(error.code, "not-implemented");
+    let mut implemented = 0;
+    let mut stubs = 0;
+    for document in warrant_core::schema::DOCUMENTS {
+        let output = warrant(&["schema", document.name]);
+        if document.implemented() {
+            implemented += 1;
+            assert!(output.status.success(), "{}: {output:?}", document.name);
+            let value: serde_json::Value =
+                serde_json::from_slice(&output.stdout).expect("valid schema");
+            assert!(value["title"].is_string(), "{} has a title", document.name);
+        } else {
+            stubs += 1;
+            assert_eq!(output.status.code(), Some(2), "{}", document.name);
+            let error: warrant_core::nouns::ErrorDocument =
+                serde_json::from_slice(&output.stderr).expect("schema error");
+            assert_eq!(error.schema_version, "warrant.error/1", "{}", document.name);
+            assert_eq!(error.code, "not-implemented", "{}", document.name);
+        }
+    }
+    assert!(implemented >= 2, "the M0 schemas remain implemented");
+    assert!(stubs + implemented == warrant_core::schema::DOCUMENTS.len());
 }
 
 #[test]

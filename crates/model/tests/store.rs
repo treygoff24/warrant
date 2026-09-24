@@ -339,6 +339,7 @@ fn authorizer_rejects_every_named_write_statement_kind() {
     let temp = TempDir::new().expect("temporary directory");
     let (path, _) = build(&temp, "model.sqlite", false, "2026-09-24T00:00:00Z");
     let store = QueryStore::open(&path).expect("open model");
+    let mut failures = Vec::new();
     for sql in [
         "INSERT INTO meta VALUES ('x', 'y')",
         "UPDATE meta SET value = 'y' WHERE key = 'taken_at'",
@@ -347,11 +348,15 @@ fn authorizer_rejects_every_named_write_statement_kind() {
         "PRAGMA user_version",
         "PRAGMA user_version = 1",
     ] {
-        assert!(
-            store.sql(sql, QueryLimits::default()).is_err(),
-            "write unexpectedly authorized: {sql}"
-        );
+        let result = store.sql(sql, QueryLimits::default());
+        if !matches!(&result,
+            Err(warrant_model::ModelError::Sql(rusqlite::Error::SqliteFailure(error, Some(message))))
+                if error.code == rusqlite::ErrorCode::AuthorizationForStatementDenied && message == "not authorized")
+        {
+            failures.push(format!("{sql}: expected authorizer denial, got {result:?}"));
+        }
     }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
     assert!(
         store
             .sql("SELECT key FROM meta", QueryLimits::default())

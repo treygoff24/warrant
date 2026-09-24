@@ -700,3 +700,106 @@ fn policy_digest_changes_with_removed_store() {
         "  stores: []",
     ));
 }
+
+#[test]
+fn policy_claim_capability_table_is_exact() {
+    use super::Capability::*;
+    use Claim::*;
+    use ContractKind::*;
+    let rows: &[(ContractKind, Claim, &[super::Capability])] = &[
+        (Module, DeclaredOwnership, &[]),
+        (Dependency, ResolvedDependencyBoundary, &[ModuleResolution]),
+        (Interface, ObservedConsumerBoundary, &[BindingReferences]),
+        (
+            Effect,
+            ObservedConsumerBoundary,
+            &[BindingReferences, RecognizedCallSites, StructuralMatch],
+        ),
+        (State, RecognizedWriteBoundary, &[StructuralMatch]),
+        (
+            Capability,
+            RequiredStructure,
+            &[BindingReferences, StructuralMatch],
+        ),
+        (Pattern, RequiredStructure, &[StructuralMatch]),
+        (Evidence, TestedBehavior, &[AuthenticatedTestCaseResults]),
+        (Data, ObservedConsumerBoundary, &[BindingReferences]),
+    ];
+    for &(kind, valid_claim, expected) in rows {
+        for claim in [
+            DeclaredOwnership,
+            ResolvedDependencyBoundary,
+            ObservedConsumerBoundary,
+            RecognizedWriteBoundary,
+            RequiredStructure,
+            TestedBehavior,
+        ] {
+            let expected = (claim == valid_claim).then(|| expected.iter().copied().collect());
+            assert_eq!(
+                claim_capabilities(kind, claim),
+                expected,
+                "{kind:?} / {claim:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn policy_rejects_capability_edits_for_every_kind() {
+    let document: serde_json::Value = serde_saphyr::from_str(ALL_KINDS).expect("fixture");
+    let contracts = document["contracts"].as_array().expect("contracts");
+    assert_eq!(contracts.len(), 9);
+    for index in 0..contracts.len() {
+        let mut changed = document.clone();
+        let contract = &mut changed["contracts"][index];
+        // Module ownership requires no capabilities, so only widening is possible.
+        contract["requires_capabilities"] = if contract["kind"] == "module" {
+            serde_json::json!(["module-resolution"])
+        } else {
+            serde_json::json!([])
+        };
+        let id = contract["id"].as_str().expect("contract id").to_owned();
+        let error = compile_one(&changed.to_string()).expect_err("edited capabilities must fail");
+        assert!(
+            error
+                .issues()
+                .iter()
+                .any(|issue| issue.code == "claim-capabilities" && issue.contracts == [id.clone()]),
+            "{id}: {error}"
+        );
+    }
+    let mut module_empty = document;
+    module_empty["contracts"][0]["requires_capabilities"] = serde_json::json!([]);
+    compile_one(&module_empty.to_string()).expect("module's empty mapping is valid");
+}
+
+#[test]
+fn policy_enforcement_capability_table_is_exact() {
+    use super::Capability::*;
+    use super::Enforcement;
+    let rows: &[(Enforcement, &[Capability])] = &[
+        (Enforcement::Static, &[ModuleResolution, BindingReferences]),
+        (
+            Enforcement::Pattern,
+            &[RecognizedCallSites, StructuralMatch],
+        ),
+        (Enforcement::Evidence, &[AuthenticatedTestCaseResults]),
+        (
+            Enforcement::Mixed,
+            &[
+                ModuleResolution,
+                BindingReferences,
+                RecognizedCallSites,
+                StructuralMatch,
+                AuthenticatedTestCaseResults,
+            ],
+        ),
+    ];
+    for &(mode, expected) in rows {
+        assert_eq!(
+            super::compiler::enforcement_capabilities(mode),
+            expected.iter().copied().collect(),
+            "{mode:?}"
+        );
+    }
+}

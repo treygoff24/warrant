@@ -547,7 +547,7 @@ pub fn claim_capabilities(kind: ContractKind, claim: Claim) -> Option<BTreeSet<C
     Some(capabilities.iter().copied().collect())
 }
 
-fn enforcement_capabilities(enforcement: Enforcement) -> BTreeSet<Capability> {
+pub(super) fn enforcement_capabilities(enforcement: Enforcement) -> BTreeSet<Capability> {
     use Capability::{
         AuthenticatedTestCaseResults, BindingReferences, ModuleResolution, RecognizedCallSites,
         StructuralMatch,

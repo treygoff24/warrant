@@ -4,4 +4,6 @@
 30-test.sh
 35-deps.sh
 40-schema.sh
+45-corpus.sh
+50-conformance.sh
 55-budget.sh

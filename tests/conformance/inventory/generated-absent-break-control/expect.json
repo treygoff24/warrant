@@ -1,0 +1,4 @@
+{
+  "driver":"cli","args":["inventory"],"exit_code":0,
+  "inventory":{"generated_absent":["gen/*.ts"]}
+}

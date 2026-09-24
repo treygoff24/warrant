@@ -1,0 +1,4 @@
+{
+  "driver":"cli","args":["snapshot","--index"],"exit_code":0,
+  "document":{"kind":"index"},"tree_matches_index":true
+}

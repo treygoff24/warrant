@@ -1,0 +1,5 @@
+{
+  "driver":"cli","args":["inventory"],"exit_code":0,
+  "setup":{"force_add":["tracked.log"]},
+  "inventory":{"classes":{"tracked.log":"unknown"},"ignored_files":0,"unread":{}}
+}

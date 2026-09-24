@@ -1,0 +1,10 @@
+{
+  "driver": "inventory-api",
+  "exit_code": 0,
+  "modules": [{"id": "app", "files": ["src/**"]}],
+  "inventory": {
+    "classes": {"src/app.test.ts": "test"},
+    "modules": {"src/app.test.ts": "app"},
+    "unowned_source": []
+  }
+}

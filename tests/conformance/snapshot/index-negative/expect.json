@@ -1,0 +1,5 @@
+{
+  "driver":"cli","args":["snapshot","--worktree"],"exit_code":0,
+  "setup":{"worktree_files":{"main.txt":"modified\n"}},
+  "document":{"kind":"worktree"},"tree_matches_index":false
+}

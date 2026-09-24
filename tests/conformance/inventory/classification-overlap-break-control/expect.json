@@ -1,0 +1,6 @@
+{
+  "driver": "cli",
+  "args": ["inventory"],
+  "exit_code": 2,
+  "error": {"code": "inventory", "reason_contains": "conflicting class rules"}
+}

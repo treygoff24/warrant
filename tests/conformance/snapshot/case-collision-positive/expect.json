@@ -1,0 +1,4 @@
+{
+  "driver":"cli","args":["snapshot","--worktree"],"exit_code":0,
+  "document":{"schema_version":"warrant.snapshot/1","kind":"worktree"}
+}

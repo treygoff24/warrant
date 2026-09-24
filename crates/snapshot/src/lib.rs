@@ -181,19 +181,18 @@ fn capture_once(
     let (tree, capture_kind) = match kind {
         SnapshotKind::Commit => {
             let revision = revision.unwrap_or("HEAD");
-            commit = Some(
-                git::text(
-                    repo,
-                    &[
-                        "rev-parse",
-                        "--verify",
-                        "--end-of-options",
-                        &format!("{revision}^{{commit}}"),
-                    ],
-                    None,
-                )
-                .map_err(|_| SnapshotError::new("missing-commit", revision))?,
-            );
+            let resolved = git::text(
+                repo,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--end-of-options",
+                    &format!("{revision}^{{commit}}"),
+                ],
+                None,
+            )
+            .map_err(|_| SnapshotError::new("missing-commit", revision))?;
+            commit = Some(resolved.clone());
             (
                 git::text(
                     repo,
@@ -201,7 +200,7 @@ fn capture_once(
                         "rev-parse",
                         "--verify",
                         "--end-of-options",
-                        &format!("{revision}^{{tree}}"),
+                        &format!("{resolved}^{{tree}}"),
                     ],
                     None,
                 )?,

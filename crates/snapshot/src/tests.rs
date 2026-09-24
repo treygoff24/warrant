@@ -1006,3 +1006,36 @@ fn assert_stream_round_trip(streaming: bool) {
         actual.as_ref().map(|result| result.as_ref().map(Vec::len))
     );
 }
+
+#[test]
+fn commit_tree_resolution_uses_the_resolved_commit_id() {
+    let dir = repo();
+    let id = git(dir.path(), &["rev-parse", "HEAD"]);
+    git::CALLS.with_borrow_mut(|calls| *calls = Some(Vec::new()));
+    let (manifest, ()) = capture(
+        dir.path(),
+        SnapshotKind::Commit,
+        Some("HEAD"),
+        &SnapshotConfig::default(),
+        |_| Ok(()),
+    )
+    .unwrap();
+    let calls = git::CALLS.take().unwrap();
+    let tree_call = calls
+        .into_iter()
+        .find(|args| args.last().is_some_and(|arg| arg.ends_with("^{tree}")))
+        .unwrap();
+    assert_eq!(
+        (manifest.commit, tree_call),
+        (
+            Some(id.clone()),
+            vec![
+                "rev-parse".into(),
+                "--verify".into(),
+                "--end-of-options".into(),
+                format!("{id}^{{tree}}")
+            ]
+        ),
+        "commit tree resolution must use the already resolved commit id"
+    );
+}

@@ -5,6 +5,11 @@ use std::{
     process::{Command, Stdio},
 };
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CALLS: std::cell::RefCell<Option<Vec<Vec<String>>>> = const { std::cell::RefCell::new(None) };
+}
+
 pub(crate) fn run(
     repo: &Path,
     args: &[&str],
@@ -25,6 +30,12 @@ pub(crate) fn run_stream(
     index: Option<&Path>,
     input: Option<&mut dyn Read>,
 ) -> Result<Vec<u8>, SnapshotError> {
+    #[cfg(test)]
+    CALLS.with_borrow_mut(|calls| {
+        if let Some(calls) = calls {
+            calls.push(args.iter().map(|arg| (*arg).to_owned()).collect());
+        }
+    });
     let mut command = Command::new("git");
     command
         .arg("-C")

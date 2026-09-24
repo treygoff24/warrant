@@ -48,6 +48,26 @@ else:
     elif tuple(workspace_msrv.split(".")[:2]) != tuple(ci_msrv.split(".")[:2]):
         violations.append(f"deps: workspace rust-version {workspace_msrv} differs from CI MSRV {ci_msrv}")
 
+manifest_node = json.loads((root / "tests/corpus/manifest.yaml").read_text())["inputs"]["node_observed"]
+expected_node = manifest_node.removeprefix("v")
+jobs = re.findall(r"(?ms)^  ([\w-]+):[^\n]*\n(.*?)(?=^  [\w-]+:|\Z)", ci)
+gate_jobs = 0
+for job_name, body in jobs:
+    steps = re.findall(r"(?ms)^      - (.*?)(?=^      - |\Z)", body)
+    if not any(re.search(r"(?m)^(?:run|        run):[ \t]*scripts/gate\.sh[ \t]*$", step) for step in steps):
+        continue
+    gate_jobs += 1
+    versions = []
+    for step in steps:
+        if not re.search(r"(?m)^(?:uses|        uses):[ \t]*actions/setup-node@v[0-9]+[ \t]*$", step):
+            continue
+        versions.extend(re.findall(r"(?m)^          node-version:[ \t]*['\"]?([^'\"\s#]+)", step) or ["<missing>"])
+    if len(versions) != 1 or versions[0].removeprefix("v") != expected_node:
+        found = ", ".join(versions) if versions else "<missing>"
+        violations.append(f"deps: CI job {job_name} setup-node node-version {found} differs from corpus node_observed {manifest_node}")
+if gate_jobs == 0:
+    violations.append("deps: no CI job runs scripts/gate.sh")
+
 for package in workspace.values():
     source = package["name"]
     manifest = tomllib.loads(Path(package["manifest_path"]).read_text())
@@ -89,6 +109,8 @@ self_test() {
   cp -R "$repo_root/crates" "$tmp_root/crates"
   mkdir -p "$tmp_root/.github/workflows"
   cp "$repo_root/.github/workflows/ci.yml" "$tmp_root/.github/workflows/ci.yml"
+  mkdir -p "$tmp_root/tests/corpus"
+  cp "$repo_root/tests/corpus/manifest.yaml" "$tmp_root/tests/corpus/manifest.yaml"
   cat >>"$tmp_root/crates/snapshot/Cargo.toml" <<'EOF'
 warrant-inventory = { version = "0.1.0", path = "../inventory" }
 EOF

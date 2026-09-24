@@ -20,6 +20,9 @@ jobs:
           components: clippy,rustfmt
       - name: Install cargo-deny
         run: cargo +stable install cargo-deny --locked
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26.9.0
       - name: Run gate
         run: scripts/gate.sh
 
@@ -36,5 +39,8 @@ jobs:
           components: clippy,rustfmt
       - name: Install cargo-deny
         run: cargo +stable install cargo-deny --locked
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26.9.0
       - name: Run gate
         run: scripts/gate.sh

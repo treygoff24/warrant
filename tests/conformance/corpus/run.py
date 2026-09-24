@@ -102,13 +102,14 @@ def observe(binary, member, corpus_dir, destination):
             "empty or truncated inventory"
         )
         assert sum(inventory["summary"]["by_class"].values()) == inventory["total"]
+        # The unowned-source count returns at W2.1 with CLI module selectors;
+        # until then it only restates by_class.source for corpus/warrant.yaml.
         return {
             "snapshot": snapshots,
             "inventory": {
                 "schema_version": inventory["schema_version"],
                 "files": inventory["summary"]["files"],
                 "by_class": inventory["summary"]["by_class"],
-                "unowned_source_count": len(inventory["summary"]["unowned_source"]),
                 "unread_count": len(inventory["summary"]["unread"]),
             },
         }
@@ -120,10 +121,7 @@ def main():
     corpus_dir = Path(os.environ.get("WARRANT_CORPUS_DIR", default_corpus_dir))
     members = json.loads((ROOT / "tests/corpus/manifest.yaml").read_text())["members"]
     default_expectations = Path(__file__).parent / "expect.json"
-    expectation_path = Path(
-        os.environ.get("WARRANT_CORPUS_EXPECTATIONS", default_expectations)
-    )
-    expected = json.loads(expectation_path.read_text(encoding="utf-8"))
+    expected = json.loads(default_expectations.read_text(encoding="utf-8"))
     assert {member["name"] for member in members} == set(expected), (
         "corpus expectation inventory differs"
     )

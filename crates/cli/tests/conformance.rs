@@ -1,9 +1,10 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env, fs,
     os::unix::fs::symlink,
     path::{Path, PathBuf},
     process::{Command, Output},
+    sync::OnceLock,
 };
 
 use serde::Deserialize;
@@ -167,6 +168,69 @@ fn snapshot_expectation_rejects_a_disabled_exclusion_control() {
     );
 }
 
+#[test]
+fn snapshot_expectation_rejects_missing_exclusion_counts_and_submodules() {
+    let case = fixture_root().join("snapshot/exclusions-break-control");
+    let (expectation, mut observation) = execute_case(&case);
+    assert_expectation(&case, &expectation, &observation);
+    let original = observation.document.clone().expect("inventory document");
+    for (pointer, value, diagnostic) in [
+        ("/summary/ignored_files", json!(0), "ignored_files"),
+        ("/summary/submodules", json!([]), "submodules"),
+    ] {
+        let mut document = original.clone();
+        let field = document.pointer_mut(pointer).expect("observed facet");
+        assert_ne!(*field, value, "mutation must change {pointer}");
+        *field = value;
+        observation.document = Some(document);
+        let error = check_expectation(&expectation, &observation)
+            .expect_err("missing exclusion facet must fail");
+        assert!(error.contains(diagnostic), "{error}");
+    }
+}
+
+#[test]
+fn inventory_expectation_rejects_changed_class_module_and_count() {
+    let case = fixture_root().join("inventory/colocated-test-break-control");
+    let (expectation, mut observation) = execute_case(&case);
+    assert_expectation(&case, &expectation, &observation);
+    let original = observation.document.clone().expect("inventory document");
+    let index = original["entries"]
+        .as_array()
+        .expect("inventory entries")
+        .iter()
+        .position(|entry| entry["path"] == "src/__tests__/helpers.ts")
+        .expect("colocated test entry");
+    for (pointer, value, diagnostic) in [
+        (format!("/entries/{index}/class"), json!("source"), "class"),
+        (format!("/entries/{index}/module"), Value::Null, "module"),
+        ("/summary/by_class/test".into(), json!(0), "count"),
+    ] {
+        let mut document = original.clone();
+        let field = document.pointer_mut(&pointer).expect("observed facet");
+        assert_ne!(*field, value, "mutation must change {pointer}");
+        *field = value;
+        observation.document = Some(document);
+        let error = check_expectation(&expectation, &observation)
+            .expect_err("changed inventory facet must fail");
+        assert!(error.contains(diagnostic), "{error}");
+    }
+}
+
+#[test]
+fn inventory_expectation_rejects_missing_unknown_files() {
+    let case = fixture_root().join("inventory/unowned-source-negative");
+    let (expectation, mut observation) = execute_case(&case);
+    assert_expectation(&case, &expectation, &observation);
+    let unknown =
+        &mut observation.document.as_mut().expect("inventory document")["summary"]["unknown"];
+    assert_ne!(*unknown, json!([]), "unknown fixture must be nonempty");
+    *unknown = json!([]);
+    let error =
+        check_expectation(&expectation, &observation).expect_err("missing unknown files must fail");
+    assert!(error.contains("unknown"), "{error}");
+}
+
 fn run_area(area: &str) {
     let root = fixture_root().join(area);
     let mut cases = fs::read_dir(&root)
@@ -175,7 +239,47 @@ fn run_area(area: &str) {
         .filter(|path| path.is_dir())
         .collect::<Vec<_>>();
     cases.sort();
-    assert!(!cases.is_empty(), "{area} conformance area has no cases");
+    let expected: &[&str] = match area {
+        "snapshot" => &[
+            "case-collision-break-control",
+            "case-collision-directory-break-control",
+            "case-collision-negative",
+            "case-collision-positive",
+            "exclusions-break-control",
+            "exclusions-negative",
+            "exclusions-positive",
+            "index-break-control",
+            "index-negative",
+            "index-positive",
+        ],
+        "inventory" => &[
+            "classification-overlap-break-control",
+            "classification-overlap-negative",
+            "classification-overlap-positive",
+            "colocated-test-break-control",
+            "colocated-test-negative",
+            "colocated-test-positive",
+            "generated-absent-break-control",
+            "generated-absent-negative",
+            "generated-absent-positive",
+            "generated-drift-break-control",
+            "generated-drift-negative",
+            "generated-drift-positive",
+            "unowned-source-break-control",
+            "unowned-source-negative",
+            "unowned-source-positive",
+        ],
+        _ => panic!("unknown conformance area {area}"),
+    };
+    let actual = cases
+        .iter()
+        .map(|case| case.file_name().unwrap().to_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        actual,
+        expected.iter().copied().collect::<BTreeSet<_>>(),
+        "{area} fixture census differs"
+    );
     for case in cases {
         run_case(&case);
     }
@@ -290,13 +394,14 @@ fn apply_setup(repository: &Path, temporary: &Path, setup: &Setup) {
                 "submodule fixture",
             ],
         );
-        let output = Command::new("git")
+        let mut command = Command::new("git");
+        command
             .args(["-c", "protocol.file.allow=always", "submodule", "add", "-q"])
             .arg(&source)
             .arg(path)
-            .current_dir(repository)
-            .output()
-            .expect("add local submodule");
+            .current_dir(repository);
+        neutralize_git_environment(&mut command);
+        let output = command.output().expect("add local submodule");
         assert!(
             output.status.success(),
             "git submodule add: {}",
@@ -314,12 +419,13 @@ fn write_file(root: &Path, path: &str, contents: &[u8]) {
 }
 
 fn run_cli(repository: &Path, cache: &Path, args: &[String]) -> Observation {
-    let output = Command::new(env!("CARGO_BIN_EXE_warrant"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_warrant"));
+    command
         .args(args)
         .current_dir(repository)
-        .env("XDG_CACHE_HOME", cache.join("cache"))
-        .output()
-        .expect("run warrant");
+        .env("XDG_CACHE_HOME", cache.join("cache"));
+    neutralize_git_environment(&mut command);
+    let output = command.output().expect("run warrant");
     let mut observation = output_observation(output);
     let format = git(repository, &["rev-parse", "--show-object-format"]);
     observation.index_tree = Some(format!("{format}:{}", git(repository, &["write-tree"])));
@@ -647,13 +753,10 @@ fn sort_json(values: &mut [Value]) {
 }
 
 fn git(repository: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(repository)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .output()
-        .expect("run git");
+    let mut command = Command::new("git");
+    command.args(args).current_dir(repository);
+    neutralize_git_environment(&mut command);
+    let output = command.output().expect("run git");
     assert!(
         output.status.success(),
         "git {args:?}: {}",
@@ -663,4 +766,27 @@ fn git(repository: &Path, args: &[&str]) -> String {
         .expect("git UTF-8")
         .trim()
         .to_owned()
+}
+
+fn neutralize_git_environment(command: &mut Command) {
+    static EMPTY_EXCLUDES: OnceLock<tempfile::NamedTempFile> = OnceLock::new();
+    let excludes = EMPTY_EXCLUDES
+        .get_or_init(|| tempfile::NamedTempFile::new().expect("create empty Git excludes file"));
+
+    command
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.excludesFile")
+        .env("GIT_CONFIG_VALUE_0", excludes.path());
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ] {
+        command.env_remove(name);
+    }
 }

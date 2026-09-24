@@ -1,4 +1,4 @@
 {
   "driver":"cli","args":["snapshot","--worktree"],"exit_code":0,
-  "document":{"kind":"worktree"}
+  "document":{"kind":"worktree"},"tree_matches_index":true
 }

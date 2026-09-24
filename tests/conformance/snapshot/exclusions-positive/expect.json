@@ -1,4 +1,4 @@
 {
   "driver":"cli","args":["inventory"],"exit_code":0,
-  "inventory":{"unread":{},"ignored_files":0,"submodules":[]}
+  "inventory":{"classes":{"main.txt":"doc"},"unread":{},"ignored_files":0,"submodules":[]}
 }

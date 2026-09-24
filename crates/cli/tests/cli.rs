@@ -2046,3 +2046,107 @@ fn commit_snapshot_of_an_unknown_revision_is_missing_commit() {
     assert_eq!(error["code"], "missing-commit", "{error}");
     assert_eq!(error["reason"], "no-such-revision", "{error}");
 }
+
+/// Run `inventory --verify-generated` and return its exit code with the drifted paths.
+fn verified_drift(root: &Path) -> (Option<i32>, Vec<String>) {
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(root, cache.path(), &["inventory", "--verify-generated"]);
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|_| {
+        panic!(
+            "inventory document: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    let paths = document["summary"]["generated_drift"]
+        .as_array()
+        .expect("verified drift list")
+        .iter()
+        .map(|row| row["path"].as_str().expect("drift path").to_owned())
+        .collect();
+    (output.status.code(), paths)
+}
+
+/// B35: a captured regular file that a producer recreates as a symlink has drifted, even
+/// when the regular file's clean filter would map the link's target path onto the
+/// captured bytes. Git stores the link's payload unfiltered, which is a different blob.
+#[cfg(unix)]
+#[test]
+fn verify_generated_reports_a_regular_output_reproduced_as_a_symlink() {
+    let repository = repository();
+    let root = repository.path();
+    git(root, &["config", "filter.canonical.clean", "tr a-z A-Z"]);
+    fs::write(
+        root.join(".gitattributes"),
+        "gen/out.txt filter=canonical\n",
+    )
+    .expect("attributes");
+    fs::create_dir_all(root.join("gen")).expect("generated directory");
+    fs::write(root.join("gen/out.txt"), "target.txt").expect("generated output");
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\ninventory:\n  generated:\n    - files: [\"gen/out.txt\"]\n      producer: \"mkdir -p gen && ln -s target.txt gen/out.txt\"\n      reproducible: true\n",
+    )
+    .expect("manifest");
+    git(
+        root,
+        &[
+            "add",
+            ".gitattributes",
+            "gen/out.txt",
+            "warrant/warrant.yaml",
+        ],
+    );
+    commit(root, "filtered regular output");
+    // Oracle: Git's own blob for the reproduced link, staged under the same filter in a
+    // scratch repository, is not the captured (filtered) blob.
+    let captured = git(root, &["rev-parse", "HEAD:gen/out.txt"]);
+    let scratch = tempfile::tempdir().expect("scratch repository");
+    git(scratch.path(), &["init", "-q"]);
+    git(
+        scratch.path(),
+        &["config", "filter.canonical.clean", "tr a-z A-Z"],
+    );
+    fs::write(
+        scratch.path().join(".gitattributes"),
+        "gen/out.txt filter=canonical\n",
+    )
+    .expect("scratch attributes");
+    fs::create_dir_all(scratch.path().join("gen")).expect("scratch directory");
+    std::os::unix::fs::symlink("target.txt", scratch.path().join("gen/out.txt"))
+        .expect("scratch link");
+    git(scratch.path(), &["add", "gen/out.txt"]);
+    let reproduced = git(scratch.path(), &["rev-parse", ":gen/out.txt"]);
+    assert_ne!(captured, reproduced, "Git stores the link unfiltered");
+
+    let (code, drift) = verified_drift(root);
+    assert_eq!(drift, ["gen/out.txt"]);
+    assert_eq!(code, Some(1));
+}
+
+/// B35: a captured symlink that a producer recreates as a regular file holding the link's
+/// target path has drifted: it is a different file type in Git.
+#[cfg(unix)]
+#[test]
+fn verify_generated_reports_a_symlink_output_reproduced_as_a_regular_file() {
+    let repository = repository();
+    let root = repository.path();
+    fs::create_dir_all(root.join("gen")).expect("generated directory");
+    fs::write(root.join("gen/target.txt"), "target contents\n").expect("link target");
+    std::os::unix::fs::symlink("target.txt", root.join("gen/link")).expect("generated link");
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\ninventory:\n  generated:\n    - files: [\"gen/link\"]\n      producer: \"mkdir -p gen && printf target.txt > gen/link\"\n      reproducible: true\n",
+    )
+    .expect("manifest");
+    git(
+        root,
+        &["add", "gen/target.txt", "gen/link", "warrant/warrant.yaml"],
+    );
+    commit(root, "generated link");
+
+    let (code, drift) = verified_drift(root);
+    assert_eq!(drift, ["gen/link"]);
+    assert_eq!(code, Some(1));
+}

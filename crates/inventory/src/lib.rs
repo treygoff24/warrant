@@ -628,7 +628,7 @@ pub fn verify_generated(
             let code = if !present.contains(path.as_str()) {
                 Some(GeneratedIssueCode::GeneratedAbsent)
             } else if !(reproduced.is_file() || reproduced.is_symlink())
-                || captured_blob(snapshot, &path)? != reproduced_blob(hash, &path, &reproduced)?
+                || !reproduces_captured(snapshot, mode, hash, &path, &reproduced)?
             {
                 Some(GeneratedIssueCode::GeneratedDrift)
             } else {
@@ -1143,6 +1143,26 @@ fn captured_blob(snapshot: CapturedSnapshot<'_>, path: &str) -> Result<String, I
     prefixed_git_oid(&blob)?.ok_or_else(|| InventoryError::InvalidDeclaration {
         reason: format!("captured output `{path}` has no blob"),
     })
+}
+
+/// Whether the reproduced output is the captured one: the same file type (a symlink
+/// for a captured `120000`, otherwise a regular file) and the same blob. The file type
+/// is decided first, because `hash` selects Git's filters by the captured mode and
+/// would hash a link's payload as the captured regular file. The captured output is
+/// read first either way, so a refused read stays an error.
+fn reproduces_captured(
+    snapshot: CapturedSnapshot<'_>,
+    mode: ModeOf<'_>,
+    hash: HashOf<'_>,
+    path: &str,
+    reproduced: &Path,
+) -> Result<bool, InventoryError> {
+    let captured = captured_blob(snapshot, path)?;
+    let captured_link = mode(path).as_deref() == Some("120000");
+    if captured_link != reproduced.is_symlink() {
+        return Ok(false);
+    }
+    Ok(captured == reproduced_blob(hash, path, reproduced)?)
 }
 
 /// The blob id Git would assign the reproduced output at `path`; a symlink hashes its

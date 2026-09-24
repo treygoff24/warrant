@@ -202,16 +202,27 @@ fn first_party_source_outside_module_is_unowned() {
     in_neutral_git_child("first_party_source_outside_module_is_unowned", || {
         let repository = Repository::new();
         repository.write("outside.ts", "export {};\n");
+        repository.write("tools/run.mjs", "export {};\n");
         repository.commit_all("outside");
 
-        let captured = worktree(&repository, &manifest(""));
+        let captured = worktree(
+            &repository,
+            &manifest(
+                "inventory:\n  classes:\n    - class: source\n      files: [\"tools/*.mjs\"]\n",
+            ),
+        );
         let outside = captured.entry("outside.ts");
         assert_eq!(outside.class, InventoryClass::Source);
         assert_eq!(outside.module, None);
         assert_eq!(outside.unit.as_deref(), Some("."));
-        assert_eq!(outside.by, "implicit-root-unit");
+        // `by` names the rule that classified the file, not the unit fallback.
+        assert_eq!(outside.by, "default:source");
+        let declared = captured.entry("tools/run.mjs");
+        assert_eq!(declared.class, InventoryClass::Source);
+        assert_eq!(declared.unit.as_deref(), Some("."));
+        assert_eq!(declared.by, "rule:manifest:inventory.classes[0]");
         let summary = &captured.built.document.summary;
-        assert_eq!(summary.unowned_source, ["outside.ts"]);
+        assert_eq!(summary.unowned_source, ["outside.ts", "tools/run.mjs"]);
         assert_eq!(summary.unit_aliases.len(), 1);
         assert_eq!(summary.unit_aliases[0].unit, ".");
         assert_eq!(summary.unit_aliases[0].alias_table, None);

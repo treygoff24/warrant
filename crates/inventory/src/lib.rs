@@ -454,9 +454,9 @@ pub fn build(
         }
         entry.unit = unit_for(&entry.path, &units, source_language(&entry.path, enabled))
             .map(|unit| unit.root.clone());
+        // `by` stays the classifying rule; the fallback unit records its own basis.
         if entry.class == InventoryClass::Source && entry.unit.is_none() {
             entry.unit = Some(".".into());
-            entry.by = "implicit-root-unit".into();
         }
         entry.entrypoints = entrypoints_for(&entry.path, manifest, &package_entrypoints);
     }

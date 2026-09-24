@@ -1,0 +1,109 @@
+W1.1-F11: constant canonical_digest mutation; cargo test --locked -p warrant-model
+exit: 101
+warning: unused variable: `digest`
+   --> crates/model/src/lib.rs:628:9
+    |
+628 |     let digest = Sha256::digest(bytes);
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_digest`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `warrant-model` (lib test) generated 1 warning (run `cargo fix --lib -p warrant-model --tests` to apply 1 suggestion)
+warning: `warrant-model` (lib) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.54s
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 13 tests
+test byte_cap_sets_truncated_and_continuation ... ok
+test materialized_views_contain_edges_consumers_cycles_and_unowned_files ... ok
+test every_table_preserves_written_column_values ... ok
+test row_cap_sets_truncated_and_continuation ... ok
+test authorizer_rejects_every_named_write_statement_kind ... ok
+test first_row_exceeding_byte_cap_errors_without_a_continuation ... ok
+test schema_contains_every_table_and_view ... ok
+test conflicting_capabilities_are_rejected_in_both_orders ... ok
+test digest_includes_meta_keys_ending_in_at_without_an_underscore ... FAILED
+test digest_preserves_scalar_meta_bytes ... FAILED
+test repeated_capabilities_are_order_independent ... ok
+test consumers_follow_reexport_bindings_and_preserve_any_reexport_route ... ok
+test digest_is_stable_across_insertion_order_and_timestamps ... FAILED
+
+failures:
+
+---- digest_includes_meta_keys_ending_in_at_without_an_underscore stdout ----
+
+thread 'digest_includes_meta_keys_ending_in_at_without_an_underscore' (902151) panicked at crates/model/tests/store.rs:503:5:
+assertion `left != right` failed
+  left: "sha256:constant"
+ right: "sha256:constant"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- digest_preserves_scalar_meta_bytes stdout ----
+
+thread 'digest_preserves_scalar_meta_bytes' (902153) panicked at crates/model/tests/store.rs:508:5:
+assertion `left != right` failed
+  left: "sha256:constant"
+ right: "sha256:constant"
+
+---- digest_is_stable_across_insertion_order_and_timestamps stdout ----
+
+thread 'digest_is_stable_across_insertion_order_and_timestamps' (902152) panicked at crates/model/tests/store.rs:341:5:
+assertion `left != right` failed: semantic unsupported rows must affect the digest
+  left: "sha256:constant"
+ right: "sha256:constant"
+
+
+failures:
+    digest_includes_meta_keys_ending_in_at_without_an_underscore
+    digest_is_stable_across_insertion_order_and_timestamps
+    digest_preserves_scalar_meta_bytes
+
+test result: FAILED. 10 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+error: test failed, to rerun pass `-p warrant-model --test store`
+
+W1.1-F11: unsupported TABLES entry removed; cargo test --locked -p warrant-model
+exit: 101
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.57s
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 13 tests
+test row_cap_sets_truncated_and_continuation ... ok
+test byte_cap_sets_truncated_and_continuation ... ok
+test first_row_exceeding_byte_cap_errors_without_a_continuation ... ok
+test schema_contains_every_table_and_view ... ok
+test every_table_preserves_written_column_values ... ok
+test authorizer_rejects_every_named_write_statement_kind ... ok
+test materialized_views_contain_edges_consumers_cycles_and_unowned_files ... ok
+test conflicting_capabilities_are_rejected_in_both_orders ... ok
+test digest_includes_meta_keys_ending_in_at_without_an_underscore ... ok
+test digest_preserves_scalar_meta_bytes ... ok
+test repeated_capabilities_are_order_independent ... ok
+test consumers_follow_reexport_bindings_and_preserve_any_reexport_route ... ok
+test digest_is_stable_across_insertion_order_and_timestamps ... FAILED
+
+failures:
+
+---- digest_is_stable_across_insertion_order_and_timestamps stdout ----
+
+thread 'digest_is_stable_across_insertion_order_and_timestamps' (904066) panicked at crates/model/tests/store.rs:341:5:
+assertion `left != right` failed: semantic unsupported rows must affect the digest
+  left: "sha256:e54b6efe08bdc6e4c261010e2f31285155f1735f75a28a1801421571d9e2c14b"
+ right: "sha256:e54b6efe08bdc6e4c261010e2f31285155f1735f75a28a1801421571d9e2c14b"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    digest_is_stable_across_insertion_order_and_timestamps
+
+test result: FAILED. 12 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+error: test failed, to rerun pass `-p warrant-model --test store`

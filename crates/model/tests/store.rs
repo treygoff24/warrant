@@ -122,6 +122,16 @@ fn build(
     reverse: bool,
     timestamp: &str,
 ) -> (std::path::PathBuf, String) {
+    build_with_unsupported_reason(temp, name, reverse, timestamp, "non-literal specifier")
+}
+
+fn build_with_unsupported_reason(
+    temp: &TempDir,
+    name: &str,
+    reverse: bool,
+    timestamp: &str,
+    reason: &str,
+) -> (std::path::PathBuf, String) {
     let path = temp.path().join(name);
     let mut builder = ModelBuilder::create(&path).expect("create model");
     builder
@@ -193,8 +203,10 @@ fn build(
             .write_symbol(&target_symbol)
             .expect("write target symbol");
     }
+    let mut integration_report = report(file_rows);
+    integration_report.unsupported[0].reason = reason.into();
     builder
-        .write_report(&report(file_rows))
+        .write_report(&integration_report)
         .expect("write integration report");
     if !reverse {
         builder
@@ -323,6 +335,18 @@ fn digest_is_stable_across_insertion_order_and_timestamps() {
     let (_, first) = build(&temp, "first.sqlite", false, "2026-09-24T00:00:00Z");
     let (second_path, second) = build(&temp, "second.sqlite", true, "2026-09-25T00:00:00Z");
     assert_eq!(first, second);
+    let (_, changed) = build_with_unsupported_reason(
+        &temp,
+        "changed.sqlite",
+        false,
+        "2026-09-24T00:00:00Z",
+        "unsupported resolver mode",
+    );
+    assert_ne!(
+        first, changed,
+        "semantic unsupported rows must affect the digest"
+    );
+    assert_ne!(second, changed);
 
     let store = QueryStore::open(second_path).expect("open model");
     let stored = store

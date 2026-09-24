@@ -6,6 +6,7 @@ resolver = "3"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0 OR MIT"
+rust-version = "1.96"
 
 [workspace.dependencies]
 ast-grep-core = "=0.45.3"

@@ -1,0 +1,8 @@
+{
+  "supports": ["esm-reexport"],
+  "edges": [
+    ["index.ts", "reexport", false, "resolution-pending", "export * from './middle';"],
+    ["middle.ts", "reexport", false, "resolution-pending", "foo as renamed"]
+  ],
+  "unsupported": []
+}

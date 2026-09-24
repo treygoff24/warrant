@@ -1,0 +1,5 @@
+{
+  "supports": [],
+  "edges": [["index.ts", "dynamic_import", false, "dynamic-nonliteral", "import(name)"]],
+  "unsupported": [["index.ts", "dynamic-import-nonliteral", "dynamic-nonliteral", "import(name)"]]
+}

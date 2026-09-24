@@ -1,0 +1,5 @@
+{
+  "supports": ["esm-import"],
+  "edges": [["index.ts", "import", false, "resolution-pending", "foo as local"]],
+  "unsupported": []
+}

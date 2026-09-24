@@ -1,0 +1,5 @@
+{
+  "supports": ["cjs-require-literal"],
+  "edges": [["index.ts", "require", false, "resolution-pending", "require('./dep')"]],
+  "unsupported": []
+}

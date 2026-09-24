@@ -1,3 +1,7 @@
+/// Whether `warrant capabilities` reports this command as implemented. The task that
+/// implements the command flips this constant in the module it owns.
+pub const IMPLEMENTED: bool = true;
+
 use clap::{Args as ClapArgs, Subcommand};
 use warrant_core::{
     nouns::{CommandRecord, CommandStatus, CommandsDocument},
@@ -8,7 +12,35 @@ use crate::{cli, cli::Format, output};
 
 use super::page;
 
-const IMPLEMENTED: &[&str] = &["snapshot", "inventory", "schema", "capabilities"];
+/// Each command module declares its own status; `self-qualify` shares the selftest module.
+fn implemented(name: &str) -> bool {
+    match name {
+        "snapshot" => super::snapshot::IMPLEMENTED,
+        "inventory" => super::inventory::IMPLEMENTED,
+        "model" => super::model::IMPLEMENTED,
+        "query" => super::query::IMPLEMENTED,
+        "context" => super::context::IMPLEMENTED,
+        "propose" => super::propose::IMPLEMENTED,
+        "check" => super::check::IMPLEMENTED,
+        "gate" => super::gate::IMPLEMENTED,
+        "explain" => super::explain::IMPLEMENTED,
+        "verify" => super::verify::IMPLEMENTED,
+        "policy" => super::policy::IMPLEMENTED,
+        "rule" => super::rule::IMPLEMENTED,
+        "attest" => super::attest::IMPLEMENTED,
+        "evidence" => super::evidence::IMPLEMENTED,
+        "instrument" => super::instrument::IMPLEMENTED,
+        "census" => super::census::IMPLEMENTED,
+        "map" => super::map::IMPLEMENTED,
+        "serve" => super::serve::IMPLEMENTED,
+        "hook" => super::hook::IMPLEMENTED,
+        "selftest" | "self-qualify" => super::selftest::IMPLEMENTED,
+        "judgment" => super::judgment::IMPLEMENTED,
+        "schema" => super::schema::IMPLEMENTED,
+        "capabilities" => IMPLEMENTED,
+        _ => false,
+    }
+}
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -30,7 +62,7 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
             let name = command.get_name();
             CommandRecord {
                 name: name.to_owned(),
-                status: if IMPLEMENTED.contains(&name) {
+                status: if implemented(name) {
                     CommandStatus::Implemented
                 } else {
                     CommandStatus::Stub
@@ -42,7 +74,11 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
     let document = CommandsDocument {
         schema_version: "warrant.commands/1".into(),
         commands: commands[page.range].to_vec(),
-        implemented: IMPLEMENTED.iter().map(|name| (*name).into()).collect(),
+        implemented: commands
+            .iter()
+            .filter(|record| record.status == CommandStatus::Implemented)
+            .map(|record| record.name.clone())
+            .collect(),
         adapters: Vec::new(),
         schemas: DOCUMENTS
             .iter()

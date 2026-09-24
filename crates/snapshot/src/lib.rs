@@ -78,6 +78,26 @@ impl Snapshot {
         self.modes.get(path).map(String::as_str)
     }
 
+    /// Resolve an internal symlink chain to its final snapshot entry.
+    pub fn resolve(&self, path: &str) -> Result<String, SnapshotError> {
+        links::resolve(self, path)
+    }
+    /// Compute the prefixed blob identity using the path's Git attributes.
+    pub fn blob_id(&self, path: &str, bytes: &[u8]) -> Result<String, SnapshotError> {
+        Ok(format!(
+            "{}:{}",
+            self.manifest.object_format,
+            worktree::hash(&self.repo, path, self.mode(path).unwrap_or("100644"), bytes)?
+        ))
+    }
+    /// Return the untracked listing observed while capturing the worktree.
+    pub fn untracked(&self) -> &BTreeSet<String> {
+        static EMPTY: BTreeSet<String> = BTreeSet::new();
+        self.captured_tree
+            .as_ref()
+            .map_or(&EMPTY, |tree| &tree.untracked)
+    }
+
     /// Read exact bytes, refusing exclusions and detecting worktree drift.
     pub fn read(&self, path: &str) -> Result<Vec<u8>, SnapshotError> {
         let entry = self

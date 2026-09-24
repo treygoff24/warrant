@@ -109,6 +109,7 @@ pub(crate) struct CapturedTree {
     oversize: BTreeSet<String>,
     undeclared: BTreeSet<String>,
     unborn: BTreeSet<String>,
+    pub(crate) untracked: BTreeSet<String>,
     kind: &'static str,
 }
 
@@ -144,6 +145,7 @@ pub(crate) fn tree(
             oversize: BTreeSet::new(),
             undeclared: BTreeSet::new(),
             unborn: BTreeSet::new(),
+            untracked: BTreeSet::new(),
             kind: "native-worktree",
         }),
         None => portable(repo, file_mode, config),
@@ -183,12 +185,13 @@ fn portable(
             Some((fields[1].to_owned(), fields[2].to_owned(), carry)),
         );
     }
-    for path in paths(&git::run(
+    let untracked = paths(&git::run(
         repo,
         &["ls-files", "--others", "--exclude-standard", "-z"],
         None,
         None,
-    )?)? {
+    )?)?;
+    for path in &untracked {
         files
             .entry(path.trim_end_matches('/').to_owned())
             .or_insert(None);
@@ -284,6 +287,7 @@ fn portable(
         oversize,
         undeclared,
         unborn,
+        untracked,
         kind: "temporary-index",
     })
 }

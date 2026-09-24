@@ -1371,3 +1371,95 @@ fn declared_unborn_submodule_matches_git_add() {
         "declared unborn submodules must refuse like Git and name the path"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn public_resolve_follows_internal_chains_and_rejects_external_links() {
+    let dir = repo();
+    for (name, target) in [("a", "b"), ("b", "file"), ("outside", "../outside")] {
+        std::os::unix::fs::symlink(target, dir.path().join(name)).unwrap();
+    }
+    capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |s| {
+            assert_eq!(
+                (
+                    s.resolve("a")?,
+                    s.resolve("file")?,
+                    s.resolve("outside").unwrap_err().document.code
+                ),
+                (
+                    "file".into(),
+                    "file".into(),
+                    s.read("outside").unwrap_err().document.code
+                ),
+                "resolve must follow internal chains and preserve read errors"
+            );
+            Ok(())
+        },
+    )
+    .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn public_blob_id_applies_clean_filters() {
+    let dir = repo();
+    git(
+        dir.path(),
+        &["config", "filter.canonical.clean", "tr a-z A-Z"],
+    );
+    fs::write(
+        dir.path().join(".gitattributes"),
+        "filtered filter=canonical\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("filtered"), b"lowercase\n").unwrap();
+    capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |s| {
+            let oid = s
+                .entries()
+                .iter()
+                .find(|entry| entry.path == "filtered")
+                .unwrap()
+                .blob
+                .as_ref()
+                .unwrap();
+            assert_eq!(
+                s.blob_id("filtered", b"lowercase\n")?,
+                format!("{}:{oid}", s.manifest().object_format),
+                "blob_id must use Git's clean-filtered identity"
+            );
+            Ok(())
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn public_untracked_is_the_capture_listing_and_empty_for_commits() {
+    let dir = repo();
+    fs::write(dir.path().join("new"), "untracked\n").unwrap();
+    let results: Vec<_> = [SnapshotKind::Worktree, SnapshotKind::Commit]
+        .into_iter()
+        .map(|kind| {
+            capture(dir.path(), kind, None, &SnapshotConfig::default(), |s| {
+                Ok(s.untracked().clone())
+            })
+            .unwrap()
+            .1
+        })
+        .collect();
+    assert_eq!(
+        results,
+        vec![BTreeSet::from(["new".into()]), BTreeSet::new()],
+        "untracked must expose the worktree capture listing and be empty for object kinds"
+    );
+}

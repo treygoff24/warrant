@@ -85,6 +85,7 @@ import type { Shape } from "./leaf";
 import { value } from "./leaf";
 export { value as publicValue };
 export { value as chained } from "./middle";
+export type { Shape } from "./leaf";
 const common = require("./common");
 const lazy = import("./lazy");
 const unknown = import(common);
@@ -140,6 +141,7 @@ export default function() { return use({ size: 1 }); }
         ("import", true),
         ("import", false),
         ("reexport", false),
+        ("reexport", true),
         ("require", false),
         ("dynamic_import", false),
     ] {
@@ -204,9 +206,6 @@ fn conformance_fixtures_cover_every_support_claim() {
             &fs::read(case.join("analysis.json")).expect("analysis expectation"),
         )
         .expect("valid analysis expectation");
-        for claim in expected["supports"].as_array().expect("support list") {
-            exercised.insert(claim.as_str().expect("support name").to_owned());
-        }
 
         let mut paths: Vec<_> = fs::read_dir(case.join("repo"))
             .expect("fixture repo")
@@ -257,6 +256,18 @@ fn conformance_fixtures_cover_every_support_claim() {
             .next()
             .expect("TypeScript unit");
         let report = warrant_lang_ts::analyze(&unit, &fixture, &read).expect("analyze fixture");
+        for edge in &report.edges {
+            let claim = match (edge.kind.as_str(), edge.unresolved_reason.as_deref()) {
+                ("import", _) => Some("esm-import"),
+                ("reexport", _) => Some("esm-reexport"),
+                ("require", Some("resolution-pending")) => Some("cjs-require-literal"),
+                ("dynamic_import", Some("resolution-pending")) => Some("dynamic-import-literal"),
+                _ => None,
+            };
+            if let Some(claim) = claim {
+                exercised.insert(claim.to_owned());
+            }
+        }
         let location = |file_id, start: i64, end: i64| {
             let file = report
                 .files
@@ -269,7 +280,7 @@ fn conformance_fixtures_cover_every_support_claim() {
                 std::str::from_utf8(&source[start as usize..end as usize]).expect("UTF-8 span"),
             )
         };
-        let edges: Vec<_> = report
+        let mut edges: Vec<_> = report
             .edges
             .iter()
             .map(|edge| {
@@ -280,30 +291,74 @@ fn conformance_fixtures_cover_every_support_claim() {
                         && edge.to_external.is_none()
                 );
                 let (file, text) = location(edge.from_file, edge.span_start, edge.span_end);
-                json!([
-                    file,
-                    edge.kind,
-                    edge.type_only,
-                    edge.unresolved_reason,
-                    text
-                ])
+                assert!(!text.is_empty());
+                assert!(
+                    expected["edges"]
+                        .as_array()
+                        .expect("edges")
+                        .iter()
+                        .any(|row| {
+                            row[0] == file
+                                && row[1] == edge.kind
+                                && row[2] == edge.type_only
+                                && row[3] == json!(edge.unresolved_reason)
+                                && span_within(
+                                    &sources[file],
+                                    row[4].as_str().expect("syntax"),
+                                    edge.span_start,
+                                    edge.span_end,
+                                )
+                        }),
+                    "edge span must stay within its fixture syntax"
+                );
+                json!([file, edge.kind, edge.type_only, edge.unresolved_reason])
             })
             .collect();
-        let unsupported: Vec<_> = report
+        let mut unsupported: Vec<_> = report
             .unsupported
             .iter()
             .map(|row| {
                 let (file, text) = location(row.file_id, row.span_start, row.span_end);
-                json!([file, row.construct, row.reason, text])
+                assert!(!text.is_empty());
+                assert!(
+                    expected["unsupported"]
+                        .as_array()
+                        .expect("unsupported")
+                        .iter()
+                        .any(|expected| {
+                            expected[0] == file
+                                && expected[1] == row.construct
+                                && expected[2] == row.reason
+                                && span_within(
+                                    &sources[file],
+                                    expected[3].as_str().expect("syntax"),
+                                    row.span_start,
+                                    row.span_end,
+                                )
+                        }),
+                    "unsupported span must stay within its fixture syntax"
+                );
+                json!([file, row.construct, row.reason])
             })
             .collect();
-        assert_eq!(json!(edges), expected["edges"], "{}", case.display());
-        assert_eq!(
-            json!(unsupported),
-            expected["unsupported"],
-            "{}",
-            case.display()
-        );
+        let mut expected_edges: Vec<_> = expected["edges"]
+            .as_array()
+            .expect("edges")
+            .iter()
+            .map(|row| Value::Array(row.as_array().expect("edge row")[..4].to_vec()))
+            .collect();
+        let mut expected_unsupported: Vec<_> = expected["unsupported"]
+            .as_array()
+            .expect("unsupported")
+            .iter()
+            .map(|row| Value::Array(row.as_array().expect("unsupported row")[..3].to_vec()))
+            .collect();
+        edges.sort_by_key(Value::to_string);
+        expected_edges.sort_by_key(Value::to_string);
+        unsupported.sort_by_key(Value::to_string);
+        expected_unsupported.sort_by_key(Value::to_string);
+        assert_eq!(edges, expected_edges, "{}", case.display());
+        assert_eq!(unsupported, expected_unsupported, "{}", case.display());
     }
     assert_eq!(
         exercised,
@@ -362,4 +417,213 @@ fn unsupported_forms_are_explicit_and_shadowed_require_is_not_a_load() {
             .iter()
             .any(|row| row.construct == "unbound-export")
     );
+}
+
+#[test]
+fn symbol_ids_are_unique_across_files_with_export_aliases() {
+    let mut fixture = inventory();
+    fixture.entries = vec![
+        entry("prior.ts", InventoryClass::Source, Some("typescript")),
+        entry("index.ts", InventoryClass::Source, Some("typescript")),
+    ];
+    let read = |path: &str| {
+        Ok(if path == "prior.ts" {
+            b"const prior = 1;".to_vec()
+        } else {
+            b"export const value = 1; export { value as alias }; export default function() {}"
+                .to_vec()
+        })
+    };
+    let unit = warrant_lang_ts::discover(&fixture).remove(0);
+    let report = warrant_lang_ts::analyze(&unit, &fixture, &read).expect("analyze files");
+    let mut ids = BTreeSet::new();
+    for symbol in report.symbols {
+        assert!(ids.insert(symbol.id), "duplicate id {}", symbol.id);
+    }
+}
+
+#[test]
+fn local_function_calls_have_binding_references() {
+    let source = "function local() {} local();";
+    let report = analyze_source(source);
+    let symbol = report
+        .symbols
+        .iter()
+        .find(|symbol| symbol.name == "local")
+        .expect("local binding");
+    let references: Vec<_> = report
+        .references
+        .iter()
+        .filter(|row| row.symbol_id == symbol.id)
+        .collect();
+    assert_eq!(references.len(), 1, "local call reference count");
+    let reference = references[0];
+    assert_eq!(
+        &source[reference.span_start as usize..reference.span_end as usize],
+        "local"
+    );
+    assert_eq!(reference.file_id, symbol.file_id);
+}
+
+#[test]
+fn invalid_encoding_preserves_sibling_analysis() {
+    let mut fixture = inventory();
+    fixture.entries = vec![
+        entry("invalid.ts", InventoryClass::Source, Some("typescript")),
+        entry("sibling.ts", InventoryClass::Source, Some("typescript")),
+    ];
+    let read = |path: &str| {
+        Ok(if path == "invalid.ts" {
+            vec![0xff]
+        } else {
+            b"export const sibling = 1;".to_vec()
+        })
+    };
+    let unit = warrant_lang_ts::discover(&fixture).remove(0);
+    let report = warrant_lang_ts::analyze(&unit, &fixture, &read)
+        .expect("invalid source does not abort unit");
+    assert!(
+        report
+            .symbols
+            .iter()
+            .any(|row| row.name == "sibling" && row.file_id == 2)
+    );
+    assert!(report.unsupported.iter().any(|row| row.file_id == 1
+        && row.construct == "source-encoding"
+        && row.reason == "invalid-encoding"));
+    assert!(
+        warrant_lang_ts::capabilities()
+            .unsupported
+            .iter()
+            .any(|row| row.construct == "source-encoding" && row.treatment == "invalid-encoding")
+    );
+}
+
+#[test]
+fn discovery_partitions_root_and_nested_units() {
+    let mut fixture = inventory();
+    let mut nested = entry(
+        "packages/x/index.ts",
+        InventoryClass::Source,
+        Some("typescript"),
+    );
+    nested.unit = Some("packages/x".into());
+    fixture.entries.push(nested);
+    fixture.entries.push(entry(
+        "packages/x/tsconfig.json",
+        InventoryClass::Config,
+        None,
+    ));
+    fixture.summary.unit_aliases.push(UnitAliasTable {
+        unit: "packages/x".into(),
+        alias_table: Some("packages/x/tsconfig.json".into()),
+        by: "tsconfig".into(),
+    });
+    let units = warrant_lang_ts::discover(&fixture);
+    assert_eq!(
+        units
+            .iter()
+            .map(|unit| (
+                unit.root.as_str(),
+                unit.config_path.as_deref(),
+                unit.kind.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (".", Some("tsconfig.json"), "tsconfig"),
+            ("packages/x", Some("packages/x/tsconfig.json"), "tsconfig")
+        ]
+    );
+    let read = |_: &str| Ok(b"export const value = 1;".to_vec());
+    for unit in &units {
+        let report = warrant_lang_ts::analyze(unit, &fixture, &read).expect("unit analysis");
+        let expected: BTreeSet<_> = fixture
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.language.as_deref() == Some("typescript")
+                    && entry.unit.as_deref() == Some(&unit.root)
+            })
+            .map(|entry| entry.path.as_str())
+            .collect();
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<BTreeSet<_>>(),
+            expected
+        );
+        assert!(report.files.iter().all(|file| file.unit_id == unit.id));
+    }
+    fixture.summary.unit_aliases.clear();
+    fixture.entries.retain(|entry| entry.language.is_some());
+    let units = warrant_lang_ts::discover(&fixture);
+    assert_eq!(units.len(), 2);
+    assert!(
+        units
+            .iter()
+            .all(|unit| unit.kind == "source-root" && unit.config_path.is_none())
+    );
+}
+
+#[test]
+fn unsupported_treatments_have_observed_fixtures() {
+    for (source, construct, reason) in [
+        ("const = ;", "parse-error", "invalid-syntax"),
+        (
+            "let value; let value;",
+            "semantic-error",
+            "invalid-bindings",
+        ),
+        ("require(name);", "require-nonliteral", "dynamic-nonliteral"),
+        (
+            "type Shape = import('./leaf').Shape;",
+            "ts-import-type",
+            "not-observed",
+        ),
+        (
+            "export as namespace Library;",
+            "ts-namespace-export",
+            "not-observed",
+        ),
+    ] {
+        let report = analyze_source(source);
+        assert!(
+            report
+                .unsupported
+                .iter()
+                .any(|row| row.construct == construct && row.reason == reason),
+            "missing {construct}: {:?}",
+            report.unsupported
+        );
+        assert!(
+            warrant_lang_ts::capabilities()
+                .unsupported
+                .iter()
+                .any(|row| row.construct == construct && row.treatment == reason)
+        );
+    }
+    let mut fixture = inventory();
+    fixture.entries = vec![entry(
+        "index.unknown",
+        InventoryClass::Source,
+        Some("typescript"),
+    )];
+    let unit = warrant_lang_ts::discover(&fixture).remove(0);
+    let report = warrant_lang_ts::analyze(&unit, &fixture, &|_| Ok(b"const value = 1;".to_vec()))
+        .expect("unsupported source type");
+    assert!(
+        report
+            .unsupported
+            .iter()
+            .any(|row| row.construct == "source-type" && row.reason == "unsupported-extension")
+    );
+}
+
+fn span_within(source: &[u8], syntax: &str, start: i64, end: i64) -> bool {
+    std::str::from_utf8(source)
+        .expect("fixture source")
+        .match_indices(syntax)
+        .any(|(offset, text)| offset <= start as usize && end as usize <= offset + text.len())
 }

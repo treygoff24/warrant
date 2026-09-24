@@ -226,9 +226,16 @@ pub fn analyze(
             path: entry.path.clone(),
             source,
         })?;
-        let source = std::str::from_utf8(&bytes).map_err(|_| {
-            AnalysisError::Invalid(format!("captured source `{}` is not UTF-8", entry.path))
-        })?;
+        let Ok(source) = std::str::from_utf8(&bytes) else {
+            push_unsupported(
+                &mut report,
+                file_id,
+                Span::new(0, bytes.len() as u32),
+                "source-encoding",
+                "invalid-encoding",
+            )?;
+            continue;
+        };
         analyze_file(file_id, &entry.path, source, &mut report)?;
     }
 
@@ -238,7 +245,7 @@ pub fn analyze(
     Ok(report)
 }
 
-/// The claims made by the syntax-and-binding fast path delivered in this task.
+/// Capability claims for the syntax-and-binding fast path.
 pub fn capabilities() -> CapabilityReport {
     CapabilityReport {
         schema_version: "warrant.capabilities/1".into(),
@@ -278,8 +285,7 @@ pub fn capabilities() -> CapabilityReport {
             ("semantic-error", "invalid-bindings"),
             ("unbound-export", "binding-not-found"),
             ("source-type", "unsupported-extension"),
-            ("reflection-registration", "requires-declaration"),
-            ("type-derived-reference", "not-observed"),
+            ("source-encoding", "invalid-encoding"),
         ]
         .into_iter()
         .map(|(construct, treatment)| UnsupportedCapability {
@@ -432,23 +438,21 @@ fn analyze_file(
             span_start: i64::from(span.start),
             span_end: i64::from(span.end),
         });
-        if flags.is_import() {
-            for reference in semantic.symbol_references(symbol_id) {
-                let span = semantic.reference_span(reference);
-                report.references.push(ReferenceRow {
-                    id: row_id(file_id, report.references.len() + 1)?,
-                    file_id,
-                    symbol_id: id,
-                    span_start: i64::from(span.start),
-                    span_end: i64::from(span.end),
-                });
-            }
+        for reference in semantic.symbol_references(symbol_id) {
+            let span = semantic.reference_span(reference);
+            report.references.push(ReferenceRow {
+                id: row_id(file_id, report.references.len() + 1)?,
+                file_id,
+                symbol_id: id,
+                span_start: i64::from(span.start),
+                span_end: i64::from(span.end),
+            });
         }
     }
 
     for (local, exported, span) in exports {
         if let Some(symbol) = root_binding_ids.get(&local).copied() {
-            export_binding(report, file_id, symbol, &exported)?;
+            export_binding(report, file_id, symbol_offset, symbol, &exported)?;
         } else {
             push_unsupported(report, file_id, span, "unbound-export", "binding-not-found")?;
         }
@@ -724,10 +728,11 @@ fn push_edge(
 fn export_binding(
     report: &mut IntegrationReport,
     file_id: i64,
+    symbol_offset: usize,
     symbol_id: i64,
     export_name: &str,
 ) -> Result<()> {
-    let next_id = row_id(file_id, report.symbols.len() + 1)?;
+    let next_id = row_id(file_id, report.symbols.len() - symbol_offset + 1)?;
     let symbol = report
         .symbols
         .iter_mut()

@@ -1,11 +1,31 @@
 {
   "driver": "cli",
-  "args": ["model"],
+  "args": [
+    "model",
+    "--rows"
+  ],
   "exit_code": 0,
-  "document": {
-    "integration": "lang-ts",
-    "symbol_level": "binding",
-    "resolution_authority": "unqualified",
-    "resolution_modes_qualified": []
+  "model": {
+    "edges": [
+      [
+        "index.ts",
+        "import",
+        true,
+        "resolution-pending"
+      ],
+      [
+        "index.ts",
+        "import",
+        true,
+        "resolution-pending"
+      ],
+      [
+        "index.ts",
+        "import",
+        false,
+        "resolution-pending"
+      ]
+    ],
+    "unsupported": []
   }
 }

@@ -107,12 +107,8 @@ fn error_document(code: &str, reason: String) -> warrant_core::nouns::ErrorDocum
     }
 }
 
+/// A recorded signal outranks this error: `main` reports cancellation first.
 fn snapshot_error(error: warrant_snapshot::SnapshotError) -> Box<CommandError> {
-    if error.document.code == "cancelled"
-        && let Err(cancelled) = cancel::check()
-    {
-        return cancelled;
-    }
     Box::new(CommandError {
         document: error.document,
         exit: 2,

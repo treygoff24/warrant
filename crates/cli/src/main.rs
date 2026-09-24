@@ -37,6 +37,10 @@ fn main() {
     };
 
     if let Err(command_error) = commands::run(cli.command, cli.format) {
+        // A terminal Ctrl-C signals the whole process group, so a Git child often dies
+        // first and its failure is what the command returns. Any error after a recorded
+        // signal is that signal's consequence: the run is cancelled, exit 128 + signal.
+        let command_error = cancel::check().err().unwrap_or(command_error);
         error::fail(*command_error);
     }
 }

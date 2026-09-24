@@ -470,6 +470,52 @@ fn signal_during_capture(signals: &[nix::sys::signal::Signal], exit: i32) {
     assert!(walk_files(capture.cache.path()).is_empty());
 }
 
+/// A terminal Ctrl-C signals the whole foreground process group: the held Git child
+/// dies first and its failure is what the command sees, and the run must still exit
+/// 130 as cancelled. Holding the first call lands in repository discovery; holding the
+/// second lands inside snapshot capture.
+#[cfg(unix)]
+#[test]
+fn process_group_interrupt_during_capture_exits_130() {
+    use std::io::Read;
+
+    for (args, passed) in [
+        (&["snapshot", "--worktree"][..], 0),
+        (&["snapshot", "--worktree"], 1),
+        (&["inventory"], 0),
+        (&["inventory"], 1),
+    ] {
+        let mut capture = PausedCapture::after_calls(args, passed);
+        let group =
+            nix::unistd::Pid::from_raw(i32::try_from(capture.child.id()).expect("pid fits i32"));
+        nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGINT)
+            .expect("signal the warrant process group");
+        let status = capture.wait();
+        // The group signal also killed the held Git wrapper, which never finishes.
+        fs::write(capture.control.path().join("finished"), b"").expect("mark wrapper gone");
+        let mut stderr = String::new();
+        capture
+            .child
+            .stderr
+            .take()
+            .expect("piped stderr")
+            .read_to_string(&mut stderr)
+            .expect("read stderr");
+        assert_eq!(
+            status.code(),
+            Some(130),
+            "{args:?} after {passed}: {stderr}"
+        );
+        let error: serde_json::Value =
+            serde_json::from_str(stderr.trim()).expect("cancellation document");
+        assert_eq!(error["code"], "cancelled", "{args:?} after {passed}");
+        assert!(
+            walk_files(capture.cache.path()).is_empty(),
+            "{args:?} after {passed}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn broken_pipe_is_not_an_internal_failure() {
@@ -503,8 +549,13 @@ struct PausedCapture {
 #[cfg(unix)]
 impl PausedCapture {
     fn new(args: &[&str]) -> Self {
+        Self::after_calls(args, 0)
+    }
+
+    /// Hold the first Git call after `passed` calls have run normally.
+    fn after_calls(args: &[&str], passed: usize) -> Self {
         use std::{
-            os::unix::fs::PermissionsExt,
+            os::unix::{fs::PermissionsExt, process::CommandExt},
             process::Stdio,
             thread,
             time::{Duration, Instant},
@@ -522,6 +573,9 @@ impl PausedCapture {
         fs::write(
             &wrapper,
             r#"#!/bin/sh
+calls=$(ls "$WARRANT_TEST_CONTROL" | grep -c '^call\.')
+: > "$WARRANT_TEST_CONTROL/call.$$"
+if [ "$calls" -lt "$WARRANT_TEST_PASSED_CALLS" ]; then exec "$WARRANT_TEST_GIT" "$@"; fi
 : > "$WARRANT_TEST_CONTROL/ready"
 while [ ! -e "$WARRANT_TEST_CONTROL/release" ]; do sleep 0.01; done
 "$WARRANT_TEST_GIT" "$@"
@@ -545,12 +599,16 @@ exit "$result"
             .env("XDG_CACHE_HOME", cache.path())
             .env("PATH", std::env::join_paths(paths).expect("fixture PATH"))
             .env("WARRANT_TEST_CONTROL", control.path())
+            .env("WARRANT_TEST_PASSED_CALLS", passed.to_string())
             .env(
                 "WARRANT_TEST_GIT",
                 String::from_utf8(git.stdout).expect("git path").trim(),
             )
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // Its own process group, so a group signal reaches warrant and its Git
+            // children as a terminal Ctrl-C does, and never this test process.
+            .process_group(0)
             .spawn()
             .expect("start warrant");
         let mut capture = Self {
@@ -562,7 +620,7 @@ exit "$result"
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             assert_eq!(capture.child.try_wait().expect("child liveness"), None);
-            // The first Git call proves signal installation finished and capture started.
+            // The held Git call proves signal installation finished and capture started.
             if capture.control.path().join("ready").exists() {
                 break;
             }

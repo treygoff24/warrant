@@ -213,6 +213,19 @@ pub struct InventorySummary {
     pub unit_aliases: Vec<UnitAliasTable>,
     #[serde(default)]
     pub generated_absent: Vec<GeneratedAbsent>,
+    /// Drift found by `inventory --verify-generated`; null when producers were not
+    /// re-run, which is not the same claim as an empty list (spec 12.2).
+    #[serde(default)]
+    pub generated_drift: Option<Vec<GeneratedDrift>>,
+}
+
+/// A reproducible generated file whose producer, re-run over the snapshot, wrote
+/// different bytes (spec 5.3, `generated-drift`).
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeneratedDrift {
+    pub path: String,
+    pub producer: String,
 }
 
 /// The complete classified inventory document.

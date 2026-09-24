@@ -1,5 +1,5 @@
 use clap::Args as ClapArgs;
-use warrant_core::nouns::SnapshotKind;
+use warrant_core::nouns::{GeneratedDrift, SnapshotKind};
 
 use crate::{
     cache, cancel, cli::Format, error::CommandError, manifest::load_manifest, output, repository,
@@ -15,6 +15,10 @@ pub struct Args {
     /// Zero-based cursor returned by a previous invocation.
     #[arg(long, default_value_t = 0)]
     cursor: usize,
+    /// Re-run reproducible generated producers over the snapshot and report drift
+    /// (spec 5.3). Drift exits 1, the blocked verdict (spec 10.2).
+    #[arg(long)]
+    verify_generated: bool,
 }
 
 pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
@@ -40,18 +44,41 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
             };
             let untracked = warrant_inventory::untracked_paths(&root, &captured.manifest().kind)
                 .map_err(inventory_error)?;
-            warrant_inventory::build(
+            let view = warrant_inventory::CapturedSnapshot {
+                manifest: captured.manifest(),
+                entries: captured.entries(),
+                read: &read,
+                untracked: &untracked,
+            };
+            let mut built = warrant_inventory::build(
                 &root,
-                warrant_inventory::CapturedSnapshot {
-                    manifest: captured.manifest(),
-                    entries: captured.entries(),
-                    read: &read,
-                    untracked: &untracked,
-                },
+                view,
                 &manifest,
                 &warrant_inventory::BuildConfig::default(),
             )
-            .map_err(inventory_error)
+            .map_err(inventory_error)?;
+            if args.verify_generated {
+                let mode = |path: &str| captured.mode(path).map(str::to_owned);
+                let issues = warrant_inventory::verify_generated(view, &mode, &manifest)
+                    .map_err(inventory_error)?;
+                // Absent declarations are already in `generated_absent`; drift is new.
+                built.document.summary.generated_drift = Some(
+                    issues
+                        .into_iter()
+                        .filter(|issue| {
+                            issue.code == warrant_inventory::GeneratedIssueCode::GeneratedDrift
+                        })
+                        .map(|issue| GeneratedDrift {
+                            path: issue.path,
+                            producer: issue.producer,
+                        })
+                        .collect(),
+                );
+                // The digest keys the cache, so it covers the verified document.
+                built.digest = warrant_inventory::inventory_digest(&built.document)
+                    .map_err(inventory_error)?;
+            }
+            Ok(built)
         },
     )
     .map_err(snapshot_error)?;
@@ -70,6 +97,12 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
         "inventory.json",
     );
     cache::write_atomic(&path, &bytes)?;
+    let blocked = built
+        .document
+        .summary
+        .generated_drift
+        .as_ref()
+        .is_some_and(|drift| !drift.is_empty());
     let mut document = built.document;
     let page = page::bounds(
         document.entries.len(),
@@ -80,7 +113,11 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
     document.truncated = page.truncated;
     document.total = page.total;
     document.next_cursor = page.next_cursor;
-    output::document(&document, format)
+    output::document(&document, format)?;
+    if blocked {
+        output::exit_blocked();
+    }
+    Ok(())
 }
 
 /// A refused snapshot read keeps the snapshot's code, so `snapshot-changed` still makes

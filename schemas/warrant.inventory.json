@@ -134,6 +134,23 @@
         "reproducible"
       ]
     },
+    "GeneratedDrift": {
+      "description": "A reproducible generated file whose producer, re-run over the snapshot, wrote\ndifferent bytes (spec 5.3, `generated-drift`).",
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "producer": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "producer"
+      ]
+    },
     "InventoryClass": {
       "description": "The exclusive classification assigned to an inventory path.",
       "type": "string",
@@ -259,6 +276,17 @@
           "default": [],
           "items": {
             "$ref": "#/$defs/GeneratedAbsent"
+          }
+        },
+        "generated_drift": {
+          "description": "Drift found by `inventory --verify-generated`; null when producers were not\nre-run, which is not the same claim as an empty list (spec 12.2).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "$ref": "#/$defs/GeneratedDrift"
           }
         },
         "ignored_files": {

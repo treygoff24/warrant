@@ -103,6 +103,31 @@ fn build_on_disk(
     build_on_disk_with_untracked(root, listing, &BTreeSet::new(), manifest, config)
 }
 
+/// `verify_generated` over the listing, reading fixture bytes as the snapshot would.
+fn verify_on_disk(
+    root: &Path,
+    listing: &[InventoryEntry],
+    manifest: &WarrantManifest,
+) -> Result<Vec<warrant_inventory::GeneratedIssue>, InventoryError> {
+    let read = |path: &str| {
+        fs::read(root.join(path)).map_err(|error| ReadError {
+            code: "io".into(),
+            reason: error.to_string(),
+        })
+    };
+    let mode = |_: &str| Some("100644".to_owned());
+    verify_generated(
+        CapturedSnapshot {
+            manifest: &worktree_manifest(),
+            entries: listing,
+            read: &read,
+            untracked: &BTreeSet::new(),
+        },
+        &mode,
+        manifest,
+    )
+}
+
 /// As `build_on_disk`, with the named paths untracked in the worktree.
 fn build_on_disk_with_untracked(
     root: &Path,
@@ -1272,7 +1297,8 @@ fn generated_verification_reports_drift_and_absence() {
         "mkdir -p generated && printf 'fresh\\n' > generated/value.txt"
     );
 
-    let issues = verify_generated(root.path(), &manifest).expect("producer runs");
+    let issues =
+        verify_on_disk(root.path(), &snapshot(root.path()), &manifest).expect("producer runs");
     assert_eq!(
         fs::read_to_string(&reproducible_effect).expect("reproducible producer ran"),
         "ran"
@@ -1333,7 +1359,8 @@ fn glob_declared_absent_generated_scope_is_summarized_and_verified() {
         "a glob declaration is not a file path"
     );
 
-    let issues = verify_generated(root.path(), &manifest).expect("producer runs");
+    let issues =
+        verify_on_disk(root.path(), &snapshot(root.path()), &manifest).expect("producer runs");
     assert_eq!(issues.len(), 1);
     assert_eq!(issues[0].code, GeneratedIssueCode::GeneratedAbsent);
     assert_eq!(issues[0].path, "generated/**");

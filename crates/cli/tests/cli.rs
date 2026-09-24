@@ -1258,6 +1258,108 @@ fn missing_cache_location_is_an_evaluation_error() {
     }
 }
 
+/// A repository whose reproducible producer runs `./link.sh`, a committed symlink to an
+/// executable `gen.sh` that writes whether an ignored `secret.txt` is visible.
+#[cfg(unix)]
+fn producer_repository(producer: &str) -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repository = repository();
+    let root = repository.path();
+    fs::write(root.join(".gitignore"), "secret.txt\n").expect("ignore file");
+    fs::write(
+        root.join("gen.sh"),
+        "#!/bin/sh\nmkdir -p gen\nif [ -e secret.txt ]; then echo leaked; else echo clean; fi > gen/out.txt\n",
+    )
+    .expect("producer script");
+    fs::set_permissions(root.join("gen.sh"), fs::Permissions::from_mode(0o755))
+        .expect("executable producer");
+    std::os::unix::fs::symlink("gen.sh", root.join("link.sh")).expect("producer link");
+    fs::create_dir_all(root.join("gen")).expect("generated directory");
+    fs::write(root.join("gen/out.txt"), "clean\n").expect("generated output");
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        format!(
+            "schema_version: warrant.manifest/1\ninventory:\n  generated:\n    - files: [\"gen/out.txt\"]\n      producer: \"{producer}\"\n      reproducible: true\n"
+        ),
+    )
+    .expect("manifest");
+    git(
+        root,
+        &[
+            "add",
+            ".gitignore",
+            "gen.sh",
+            "link.sh",
+            "gen/out.txt",
+            "warrant/warrant.yaml",
+        ],
+    );
+    commit(root, "producer");
+    fs::write(root.join("secret.txt"), "ignored\n").expect("ignored file on disk");
+    repository
+}
+
+/// Spec 5.3: producers re-run over the snapshot's own files, in their captured modes:
+/// the ignored file on disk is not in the copy, and the committed symlink and
+/// executable bit survive, so the producer runs and reproduces the committed bytes.
+#[cfg(unix)]
+#[test]
+fn verify_generated_reruns_producers_over_the_snapshot_only() {
+    let repository = producer_repository("./link.sh");
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(
+        repository.path(),
+        cache.path(),
+        &["inventory", "--verify-generated"],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("inventory document");
+    assert_eq!(
+        document["summary"]["generated_drift"],
+        serde_json::json!([])
+    );
+    assert_eq!(document["summary"]["ignored_files"], 1);
+}
+
+/// Without `--verify-generated` no producer ran, so drift is unknown (null), not none.
+#[cfg(unix)]
+#[test]
+fn inventory_without_verification_leaves_drift_unknown() {
+    let repository = producer_repository("./link.sh");
+    let cache = tempfile::tempdir().expect("temp cache");
+    let document = json(&warrant_in(repository.path(), cache.path(), &["inventory"]));
+    assert_eq!(
+        document["summary"]["generated_drift"],
+        serde_json::Value::Null
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn inventory_error_code_producer_failed() {
+    let repository = producer_repository("exit 3");
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(
+        repository.path(),
+        cache.path(),
+        &["inventory", "--verify-generated"],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(output.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("error document");
+    assert_inventory_error(&error, "producer-failed", "exit 3");
+}
+
 /// Spec 4.5: every downstream artifact carries the snapshot manifest.
 #[test]
 fn inventory_carries_its_snapshot_manifest() {

@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use warrant_core::{
     manifest::WarrantManifest,
-    nouns::{InventoryClass, InventoryDocument, SnapshotKind},
+    nouns::{GeneratedDrift, InventoryClass, InventoryDocument, SnapshotKind},
 };
 use warrant_inventory::{BuildConfig, ClassRule, ModuleSelector};
 
@@ -20,7 +20,6 @@ use warrant_inventory::{BuildConfig, ClassRule, ModuleSelector};
 enum Driver {
     Cli,
     InventoryApi,
-    VerifyGenerated,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -87,6 +86,10 @@ struct InventoryExpect {
     ignored_files: Option<u64>,
     #[serde(default)]
     submodules: Option<Vec<String>>,
+    /// The `--verify-generated` drift rows, compared whole; a document whose producers
+    /// were not re-run (null) never matches.
+    #[serde(default)]
+    generated_drift: Option<Vec<GeneratedDrift>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -116,8 +119,6 @@ struct Expectation {
     inventory: Option<InventoryExpect>,
     #[serde(default)]
     error: Option<ErrorExpect>,
-    #[serde(default)]
-    generated_issues: Option<Vec<Value>>,
     #[serde(default)]
     tree_matches_index: Option<bool>,
     /// What `git ls-files --others --ignored --exclude-standard` prints for the case.
@@ -373,7 +374,6 @@ fn execute_case(case: &Path) -> (Expectation, Observation) {
     let observation = match expectation.driver {
         Driver::Cli => run_cli(&repository, temporary.path(), &expectation.args),
         Driver::InventoryApi => run_inventory_api(&repository, &expectation),
-        Driver::VerifyGenerated => run_verify_generated(&repository),
     };
     (expectation, observation)
 }
@@ -559,7 +559,9 @@ fn run_cli(repository: &Path, cache: &Path, args: &[String]) -> Observation {
 fn output_observation(output: Output) -> Observation {
     let exit_code = output.status.code().expect("warrant did not exit normally");
     let stderr = String::from_utf8(output.stderr).expect("UTF-8 stderr");
-    let bytes = if output.status.success() {
+    // A finding-bearing document exits 1 with the document on stdout (spec 10.2); an
+    // error writes nothing there and its document goes to stderr.
+    let bytes = if output.status.success() || !output.stdout.is_empty() {
         &output.stdout
     } else {
         stderr.as_bytes()
@@ -659,26 +661,6 @@ fn run_inventory_api(repository: &Path, expectation: &Expectation) -> Observatio
     }
 }
 
-fn run_verify_generated(repository: &Path) -> Observation {
-    let manifest = load_manifest(repository);
-    match warrant_inventory::verify_generated(repository, &manifest) {
-        Ok(issues) => Observation {
-            exit_code: 0,
-            document: Some(serde_json::to_value(issues).expect("generated issue JSON")),
-            stderr: String::new(),
-            index_tree: None,
-            git_ignored: None,
-        },
-        Err(error) => Observation {
-            exit_code: 2,
-            document: None,
-            stderr: error.to_string(),
-            index_tree: None,
-            git_ignored: None,
-        },
-    }
-}
-
 fn load_manifest(repository: &Path) -> WarrantManifest {
     let path = repository.join("warrant/warrant.yaml");
     let source =
@@ -732,22 +714,6 @@ fn check_expectation(expectation: &Expectation, observation: &Observation) -> Re
             expected,
             observation.document.as_ref().ok_or("missing inventory")?,
         )?;
-    }
-    if let Some(expected) = &expectation.generated_issues {
-        let actual = observation
-            .document
-            .as_ref()
-            .and_then(Value::as_array)
-            .ok_or("generated issues are not an array")?;
-        let mut expected = expected.clone();
-        let mut actual = actual.clone();
-        sort_json(&mut expected);
-        sort_json(&mut actual);
-        if actual != expected {
-            return Err(format!(
-                "generated issues {actual:?}, expected {expected:?}"
-            ));
-        }
     }
     if let Some(expected) = &expectation.git_ignored {
         let actual = observation
@@ -844,6 +810,23 @@ fn check_inventory(expected: &InventoryExpect, actual: &Value) -> Result<(), Str
                 "generated_absent {declaration} producer {:?}, expected {producer:?}",
                 row.producer
             ));
+        }
+    }
+    if let Some(expected) = &expected.generated_drift {
+        let mut actual = document
+            .summary
+            .generated_drift
+            .clone()
+            .ok_or("generated producers were not re-run (generated_drift is null)")?;
+        let mut expected = expected.clone();
+        actual.sort_by(|left, right| {
+            (&left.path, &left.producer).cmp(&(&right.path, &right.producer))
+        });
+        expected.sort_by(|left, right| {
+            (&left.path, &left.producer).cmp(&(&right.path, &right.producer))
+        });
+        if actual != expected {
+            return Err(format!("generated_drift {actual:?}, expected {expected:?}"));
         }
     }
     if let Some(expected) = &expected.unread {

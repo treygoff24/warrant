@@ -536,9 +536,17 @@ pub fn discover_units(root: &Path) -> Result<Vec<Unit>, InventoryError> {
     discover_units_from_paths(root, &read, &paths)
 }
 
-/// Re-run each reproducible producer in an isolated copy and compare output blobs.
+/// A captured path's Git mode (`100644`, `100755`, `120000`), as the snapshot recorded it.
+pub type ModeOf<'a> = &'a dyn Fn(&str) -> Option<String>;
+
+/// Spec 5.3: re-run each reproducible producer over a copy of the captured snapshot and
+/// compare what it writes with the captured bytes. The copy is the snapshot's readable,
+/// non-ignored entries in their captured bytes and modes, never the disk tree: ignored
+/// files and edits made after capture are not the source being verified. Paths a
+/// reproducible declaration matches are left out of the copy for the producer to write.
 pub fn verify_generated(
-    root: &Path,
+    snapshot: CapturedSnapshot<'_>,
+    mode: ModeOf<'_>,
     manifest: &WarrantManifest,
 ) -> Result<Vec<GeneratedIssue>, InventoryError> {
     let declarations = compile_generated(manifest)?;
@@ -549,26 +557,34 @@ pub fn verify_generated(
     if reproducible.is_empty() {
         return Ok(Vec::new());
     }
+    let present: BTreeSet<&str> = snapshot
+        .entries
+        .iter()
+        .filter(|entry| {
+            !matches!(
+                entry.class,
+                InventoryClass::Ignored | InventoryClass::Submodule
+            )
+        })
+        .map(|entry| entry.path.as_str())
+        .collect();
     let temporary = tempfile::tempdir().map_err(|error| io_error("temporary directory", error))?;
-    copy_repository(root, temporary.path())?;
-    let original_paths = repository_paths(root)?;
-    for item in &reproducible {
-        for path in &original_paths {
-            if item.matcher.is_match(path) {
-                let target = temporary.path().join(path);
-                if target.is_dir() {
-                    fs::remove_dir_all(&target).map_err(|error| io_error(path, error))?;
-                } else if target.exists() {
-                    fs::remove_file(&target).map_err(|error| io_error(path, error))?;
-                }
-            }
+    for entry in snapshot.entries {
+        if !present.contains(entry.path.as_str())
+            || entry.unread.is_some()
+            || reproducible
+                .iter()
+                .any(|item| item.matcher.is_match(&entry.path))
+        {
+            continue;
         }
-        if is_literal(&item.pattern) {
-            let target = temporary.path().join(&item.pattern);
-            if target.exists() {
-                fs::remove_file(&target).map_err(|error| io_error(&item.pattern, error))?;
-            }
-        }
+        let bytes = read_captured(snapshot.read, &entry.path)?;
+        write_captured(
+            temporary.path(),
+            &entry.path,
+            &bytes,
+            mode(&entry.path).as_deref(),
+        )?;
     }
 
     let producers: BTreeSet<&str> = reproducible
@@ -593,21 +609,24 @@ pub fn verify_generated(
     let generated_paths = repository_paths(temporary.path())?;
     let mut issues = Vec::new();
     for item in reproducible {
-        let mut candidates: BTreeSet<String> = original_paths
+        let mut candidates: BTreeSet<String> = present
             .iter()
-            .chain(generated_paths.iter())
+            .map(|path| (*path).to_owned())
+            .chain(generated_paths.iter().cloned())
             .filter(|path| item.matcher.is_match(path.as_str()))
-            .cloned()
             .collect();
         if is_literal(&item.pattern) || candidates.is_empty() {
             candidates.insert(item.pattern.clone());
         }
         for path in candidates {
-            let original = root.join(&path);
             let reproduced = temporary.path().join(&path);
-            let code = if !original.is_file() {
+            let code = if !present.contains(path.as_str()) {
                 Some(GeneratedIssueCode::GeneratedAbsent)
-            } else if !reproduced.is_file() || blob_id(&original)? != blob_id(&reproduced)? {
+            } else if !(reproduced.is_file() || reproduced.is_symlink())
+                // A refused read (an oversize or external-symlink output) is an error,
+                // never a silent pass.
+                || digest_bytes(&read_captured(snapshot.read, &path)?) != blob_id(&reproduced)?
+            {
                 Some(GeneratedIssueCode::GeneratedDrift)
             } else {
                 None
@@ -1663,16 +1682,32 @@ fn summarize(
     summary
 }
 
-fn copy_repository(source: &Path, destination: &Path) -> Result<(), InventoryError> {
-    let paths = repository_paths(source)?;
-    for relative in paths {
-        let from = source.join(&relative);
-        let to = destination.join(&relative);
-        if let Some(parent) = to.parent() {
-            fs::create_dir_all(parent).map_err(|error| io_error(parent, error))?;
-        }
-        fs::copy(&from, &to).map_err(|error| io_error(&relative, error))?;
+/// Write one captured path into the verification copy with its recorded mode.
+fn write_captured(
+    root: &Path,
+    path: &str,
+    bytes: &[u8],
+    mode: Option<&str>,
+) -> Result<(), InventoryError> {
+    let target = root.join(path);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| io_error(parent, error))?;
     }
+    #[cfg(unix)]
+    if mode == Some("120000") {
+        use std::os::unix::ffi::OsStrExt;
+        return std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(bytes), &target)
+            .map_err(|error| io_error(path, error));
+    }
+    fs::write(&target, bytes).map_err(|error| io_error(path, error))?;
+    #[cfg(unix)]
+    if mode == Some("100755") {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755))
+            .map_err(|error| io_error(path, error))?;
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
     Ok(())
 }
 

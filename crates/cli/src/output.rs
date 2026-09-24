@@ -33,6 +33,12 @@ pub fn document(value: &impl Serialize, format: Option<Format>) -> crate::error:
     write_result(writeln!(writer).and_then(|()| writer.flush()))
 }
 
+/// Exit 1 after a finding-bearing document is on stdout: the document is the result and
+/// the exit code is its verdict (spec 10.2, blocked), so nothing goes to stderr.
+pub fn exit_blocked() -> ! {
+    std::process::exit(1)
+}
+
 pub fn bytes(bytes: &[u8]) -> crate::error::Result<()> {
     let mut writer = io::stdout().lock();
     write_result(writer.write_all(bytes).and_then(|()| writer.flush()))

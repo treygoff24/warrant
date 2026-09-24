@@ -6,10 +6,14 @@ use pretty_assertions::assert_eq;
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 use warrant_core::manifest::WarrantManifest;
-use warrant_core::nouns::{InventoryClass, InventoryEntry, SnapshotKind, SnapshotManifest};
+use warrant_core::nouns::{
+    GeneratedAbsent, GeneratedDrift, InventoryClass, InventoryEntry, InventorySummary,
+    SnapshotKind, SnapshotManifest,
+};
 use warrant_inventory::{
-    BuildConfig, BuiltInventory, CapturedSnapshot, ClassRule, GeneratedIssueCode, InventoryError,
-    ModuleSelector, ReadError, build, discover_units, verify_generated,
+    BuildConfig, BuiltInventory, CapturedSnapshot, ClassRule, GeneratedIssue, GeneratedIssueCode,
+    InventoryError, ModuleSelector, ReadError, build, discover_units, record_verification,
+    verify_generated,
 };
 
 fn write(root: &Path, path: &str, contents: &str) {
@@ -1661,4 +1665,50 @@ fn generated_provenance_keeps_undeclared_and_empty_inputs_apart() {
     };
     assert_eq!(inputs("gen/undeclared.ts"), None);
     assert_eq!(inputs("gen/none.ts"), Some(Vec::new()));
+}
+
+/// B25: verification's absences join discovery's rows unless a discovery row for the
+/// same producer already covers the path; drift is recorded as the verified result.
+#[test]
+fn verification_absences_join_discovery_rows_without_duplicates() {
+    let absent = |declaration: &str, producer: &str| GeneratedAbsent {
+        declaration: declaration.into(),
+        producer: producer.into(),
+    };
+    let issue = |code, path: &str, producer: &str| GeneratedIssue {
+        code,
+        path: path.into(),
+        producer: producer.into(),
+    };
+    let mut summary = InventorySummary {
+        generated_absent: vec![absent("out/*.js", "build"), absent("lit.ts", "lit")],
+        ..InventorySummary::default()
+    };
+    record_verification(
+        &mut summary,
+        vec![
+            issue(GeneratedIssueCode::GeneratedAbsent, "gen/b.ts", "gen"),
+            issue(GeneratedIssueCode::GeneratedAbsent, "lit.ts", "lit"),
+            issue(GeneratedIssueCode::GeneratedAbsent, "out/a.js", "build"),
+            issue(GeneratedIssueCode::GeneratedAbsent, "out/c.js", "other"),
+            issue(GeneratedIssueCode::GeneratedDrift, "gen/a.ts", "gen"),
+        ],
+    )
+    .expect("record verification");
+    assert_eq!(
+        summary.generated_absent,
+        [
+            absent("out/*.js", "build"),
+            absent("lit.ts", "lit"),
+            absent("gen/b.ts", "gen"),
+            absent("out/c.js", "other"),
+        ]
+    );
+    assert_eq!(
+        summary.generated_drift,
+        Some(vec![GeneratedDrift {
+            path: "gen/a.ts".into(),
+            producer: "gen".into(),
+        }])
+    );
 }

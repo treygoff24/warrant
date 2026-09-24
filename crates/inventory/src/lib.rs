@@ -14,9 +14,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use warrant_core::manifest::{ClassDeclaration, WarrantManifest};
 use warrant_core::nouns::{
-    Entrypoint, GeneratedAbsent, GeneratedBy, InventoryClass, InventoryDocument, InventoryEntry,
-    InventorySummary, SnapshotKind, SnapshotManifest, Submodule, UnitAliasTable, UnreadPath,
-    VendoredFrom,
+    Entrypoint, GeneratedAbsent, GeneratedBy, GeneratedDrift, InventoryClass, InventoryDocument,
+    InventoryEntry, InventorySummary, SnapshotKind, SnapshotManifest, Submodule, UnitAliasTable,
+    UnreadPath, VendoredFrom,
 };
 
 /// A module selector assigns ownership without changing a path's class.
@@ -671,6 +671,45 @@ pub fn verify_generated(
     });
     issues.dedup();
     Ok(issues)
+}
+
+/// Fold one `verify_generated` run into the summary. Drift rows are the verified result
+/// (an empty list means the producers ran and matched). Discovery records absence only
+/// for declarations with no captured match; an output a producer wrote that the
+/// snapshot lacks is added unless a discovery row for the same producer already covers
+/// it. Discovery's rows keep their order; added rows follow in path order.
+pub fn record_verification(
+    summary: &mut InventorySummary,
+    issues: Vec<GeneratedIssue>,
+) -> Result<(), InventoryError> {
+    let discovered = summary
+        .generated_absent
+        .iter()
+        .map(|row| Ok((compile_glob(&row.declaration)?, row.producer.clone())))
+        .collect::<Result<Vec<_>, InventoryError>>()?;
+    let mut drift = Vec::new();
+    for issue in issues {
+        match issue.code {
+            GeneratedIssueCode::GeneratedDrift => drift.push(GeneratedDrift {
+                path: issue.path,
+                producer: issue.producer,
+            }),
+            GeneratedIssueCode::GeneratedAbsent => {
+                let covered = discovered.iter().any(|(declaration, producer)| {
+                    *producer == issue.producer && declaration.is_match(&issue.path)
+                });
+                let row = GeneratedAbsent {
+                    declaration: issue.path,
+                    producer: issue.producer,
+                };
+                if !covered && !summary.generated_absent.contains(&row) {
+                    summary.generated_absent.push(row);
+                }
+            }
+        }
+    }
+    summary.generated_drift = Some(drift);
+    Ok(())
 }
 
 /// Hash the deterministic inventory document, including completeness accounting and the
@@ -1378,8 +1417,10 @@ fn discover_cargo_units(
         .canonicalize()
         .map_err(|error| io_error("temporary directory", error))?;
     for path in captured {
-        if matches!(path.as_str(), "Cargo.toml" | "Cargo.lock" | ".cargo/config.toml")
-            || path.ends_with("/Cargo.toml")
+        if matches!(
+            path.as_str(),
+            "Cargo.toml" | "Cargo.lock" | ".cargo/config.toml"
+        ) || path.ends_with("/Cargo.toml")
         {
             write_captured(&copy, path, &read_captured(read, path)?, None)?;
         } else if path.ends_with(".rs") {

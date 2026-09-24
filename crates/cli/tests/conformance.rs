@@ -322,6 +322,7 @@ fn run_area(area: &str) {
             "generated-absent-break-control",
             "generated-absent-negative",
             "generated-absent-positive",
+            "generated-drift-absent-output",
             "generated-drift-break-control",
             "generated-drift-negative",
             "generated-drift-positive",

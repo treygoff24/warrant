@@ -1,5 +1,5 @@
 use clap::Args as ClapArgs;
-use warrant_core::nouns::{GeneratedDrift, SnapshotKind};
+use warrant_core::nouns::SnapshotKind;
 
 use crate::{
     cache, cancel, cli::Format, error::CommandError, manifest::load_manifest, output, repository,
@@ -61,19 +61,9 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
                 let mode = |path: &str| captured.mode(path).map(str::to_owned);
                 let issues = warrant_inventory::verify_generated(view, &mode, &manifest)
                     .map_err(inventory_error)?;
-                // Absent declarations are already in `generated_absent`; drift is new.
-                built.document.summary.generated_drift = Some(
-                    issues
-                        .into_iter()
-                        .filter(|issue| {
-                            issue.code == warrant_inventory::GeneratedIssueCode::GeneratedDrift
-                        })
-                        .map(|issue| GeneratedDrift {
-                            path: issue.path,
-                            producer: issue.producer,
-                        })
-                        .collect(),
-                );
+                // Verification adds drift and the absences discovery could not see.
+                warrant_inventory::record_verification(&mut built.document.summary, issues)
+                    .map_err(inventory_error)?;
                 // The digest keys the cache, so it covers the verified document.
                 built.digest = warrant_inventory::inventory_digest(&built.document)
                     .map_err(inventory_error)?;

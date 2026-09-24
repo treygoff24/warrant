@@ -1,0 +1,6 @@
+schema_version: warrant.manifest/1
+inventory:
+  generated:
+    - files: ["gen/*.ts"]
+      producer: "mkdir -p gen && printf 'a\\n' > gen/a.ts && printf 'b\\n' > gen/b.ts"
+      reproducible: true

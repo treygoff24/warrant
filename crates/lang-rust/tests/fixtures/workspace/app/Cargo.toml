@@ -1,0 +1,20 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+renamed = { package = "fixture-core", path = "../core" }
+extra = { path = "../extra", optional = true }
+
+[features]
+default = ["extras"]
+extras = ["dep:extra"]
+
+[target.'cfg(windows)'.dependencies]
+windows = { path = "../windows" }
+
+[[bin]]
+name = "extra-bin"
+path = "src/main.rs"
+required-features = ["extras"]

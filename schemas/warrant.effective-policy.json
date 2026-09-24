@@ -1,0 +1,857 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EffectivePolicy",
+  "type": "object",
+  "properties": {
+    "contracts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EffectiveContract"
+      }
+    },
+    "declarations": {
+      "$ref": "#/$defs/Declarations"
+    },
+    "policy_digest": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PolicySourceRecord"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "policy_digest",
+    "contracts",
+    "declarations",
+    "sources"
+  ],
+  "$defs": {
+    "Capability": {
+      "type": "string",
+      "enum": [
+        "module-resolution",
+        "binding-references",
+        "recognized-call-sites",
+        "structural-match",
+        "authenticated-test-case-results",
+        "compiler-references",
+        "control-flow",
+        "taint-flow"
+      ]
+    },
+    "Claim": {
+      "type": "string",
+      "enum": [
+        "declared-ownership",
+        "resolved-dependency-boundary",
+        "observed-consumer-boundary",
+        "recognized-write-boundary",
+        "required-structure",
+        "tested-behavior"
+      ]
+    },
+    "Consequence": {
+      "type": "string",
+      "enum": [
+        "fail",
+        "review",
+        "note"
+      ]
+    },
+    "ContractClass": {
+      "type": "string",
+      "enum": [
+        "invariant",
+        "preference",
+        "migration"
+      ]
+    },
+    "Declarations": {
+      "type": "object",
+      "properties": {
+        "external_consumers": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ExternalConsumerDeclaration"
+          }
+        },
+        "loaders": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/LoaderDeclaration"
+          }
+        },
+        "registries": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RegistryDeclaration"
+          }
+        },
+        "stores": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/StoreDeclaration"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "DeclaredEdge": {
+      "type": "object",
+      "properties": {
+        "authority": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "reason",
+        "authority"
+      ]
+    },
+    "DependencyDefault": {
+      "type": "string",
+      "enum": [
+        "allow",
+        "deny"
+      ]
+    },
+    "DependencyTargets": {
+      "type": "object",
+      "properties": {
+        "modules": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "packages": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "DynamicLoads": {
+      "type": "string",
+      "enum": [
+        "forbid",
+        "declared-only",
+        "unresolved-allowed"
+      ]
+    },
+    "EffectiveContract": {
+      "type": "object",
+      "properties": {
+        "authority": {
+          "type": "string"
+        },
+        "claim": {
+          "$ref": "#/$defs/Claim"
+        },
+        "class": {
+          "$ref": "#/$defs/ContractClass"
+        },
+        "enforcement": {
+          "$ref": "#/$defs/Enforcement"
+        },
+        "expires": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "intent": {
+          "type": "string"
+        },
+        "limits": {
+          "type": "string"
+        },
+        "on_violation": {
+          "$ref": "#/$defs/Consequence"
+        },
+        "overrides": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "owner": {
+          "type": "string"
+        },
+        "requires_capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Capability"
+          },
+          "uniqueItems": true
+        },
+        "supersedes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "dynamic_loads": {
+              "$ref": "#/$defs/DynamicLoads",
+              "default": "forbid"
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            },
+            "interface": {
+              "$ref": "#/$defs/ModuleInterface"
+            },
+            "kind": {
+              "type": "string",
+              "const": "module"
+            },
+            "owns": {
+              "$ref": "#/$defs/ModuleOwnership",
+              "default": {
+                "responsibilities": [],
+                "stores": []
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "files",
+            "interface"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "allow": {
+              "$ref": "#/$defs/DependencyTargets",
+              "default": {
+                "modules": [],
+                "packages": []
+              }
+            },
+            "declares": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/DeclaredEdge"
+              }
+            },
+            "default": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DependencyDefault"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "deny": {
+              "$ref": "#/$defs/DependencyTargets",
+              "default": {
+                "modules": [],
+                "packages": []
+              }
+            },
+            "from": {
+              "$ref": "#/$defs/ModuleSelector"
+            },
+            "include_type_only": {
+              "type": "boolean",
+              "default": false
+            },
+            "kind": {
+              "type": "string",
+              "const": "dependency"
+            }
+          },
+          "required": [
+            "kind",
+            "from"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "consumers": {
+              "$ref": "#/$defs/ModuleSelector",
+              "default": {
+                "may_be_empty": false,
+                "modules": [],
+                "reason": null
+              }
+            },
+            "exports": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            },
+            "kind": {
+              "type": "string",
+              "const": "interface"
+            },
+            "module": {
+              "type": "string"
+            },
+            "only_via_entry": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          "required": [
+            "kind",
+            "module"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "evidence": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/EvidenceRequirement"
+              }
+            },
+            "interface": {
+              "$ref": "#/$defs/SymbolSelector"
+            },
+            "kind": {
+              "type": "string",
+              "const": "effect"
+            },
+            "permitted_callers": {
+              "$ref": "#/$defs/ModuleSelector"
+            },
+            "required_context": {
+              "$ref": "#/$defs/PatternDefinition"
+            }
+          },
+          "required": [
+            "kind",
+            "interface",
+            "permitted_callers",
+            "required_context"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "state"
+            },
+            "store": {
+              "type": "string"
+            },
+            "write_sites": {
+              "$ref": "#/$defs/PatternDefinition"
+            },
+            "writers": {
+              "$ref": "#/$defs/ModuleSelector"
+            }
+          },
+          "required": [
+            "kind",
+            "store",
+            "writers",
+            "write_sites"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "instances": {
+              "$ref": "#/$defs/RegistrySelector"
+            },
+            "kind": {
+              "type": "string",
+              "const": "capability"
+            },
+            "requires": {
+              "type": "array",
+              "items": true
+            }
+          },
+          "required": [
+            "kind",
+            "instances",
+            "requires"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "forbid": {
+              "type": "boolean",
+              "default": false
+            },
+            "kind": {
+              "type": "string",
+              "const": "pattern"
+            },
+            "rule": true,
+            "scope": {
+              "$ref": "#/$defs/SubjectSelector"
+            }
+          },
+          "required": [
+            "kind",
+            "scope",
+            "rule"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "evidence"
+            },
+            "requires": {
+              "$ref": "#/$defs/EvidenceRequirement"
+            }
+          },
+          "required": [
+            "kind",
+            "requires"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "data"
+            },
+            "permitted_sinks": {
+              "$ref": "#/$defs/ModuleSelector"
+            },
+            "sources": {
+              "$ref": "#/$defs/SymbolSelector"
+            }
+          },
+          "required": [
+            "kind",
+            "sources",
+            "permitted_sinks"
+          ]
+        }
+      ],
+      "required": [
+        "id",
+        "intent",
+        "owner",
+        "authority",
+        "class",
+        "claim",
+        "requires_capabilities",
+        "enforcement",
+        "limits",
+        "on_violation",
+        "supersedes",
+        "overrides"
+      ]
+    },
+    "Enforcement": {
+      "type": "string",
+      "enum": [
+        "static",
+        "pattern",
+        "evidence",
+        "mixed"
+      ]
+    },
+    "EvidenceRequirement": {
+      "type": "object",
+      "properties": {
+        "evidence_kind": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "scenario": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tag": {
+          "type": "string"
+        },
+        "unit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "tag",
+        "evidence_kind"
+      ]
+    },
+    "ExternalConsumerDeclaration": {
+      "type": "object",
+      "properties": {
+        "compatibility": {
+          "type": "string"
+        },
+        "depends_on": {
+          "$ref": "#/$defs/SymbolSelector"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "depends_on",
+        "compatibility"
+      ]
+    },
+    "FileSelector": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "may_be_empty": {
+          "type": "boolean",
+          "default": false
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "files"
+      ]
+    },
+    "LoaderDeclaration": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "references": {
+          "$ref": "#/$defs/FileSelector"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "file",
+        "references"
+      ]
+    },
+    "ModuleInterface": {
+      "type": "object",
+      "properties": {
+        "entry": {
+          "type": "string"
+        },
+        "exports": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "entry"
+      ]
+    },
+    "ModuleOwnership": {
+      "type": "object",
+      "properties": {
+        "responsibilities": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "stores": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "ModuleSelector": {
+      "type": "object",
+      "properties": {
+        "may_be_empty": {
+          "type": "boolean",
+          "default": false
+        },
+        "modules": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PatternDefinition": {
+      "type": "object",
+      "properties": {
+        "pattern": true
+      },
+      "additionalProperties": false,
+      "required": [
+        "pattern"
+      ]
+    },
+    "PolicySourceRecord": {
+      "type": "object",
+      "properties": {
+        "digest": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "digest"
+      ]
+    },
+    "RegistryDeclaration": {
+      "type": "object",
+      "properties": {
+        "captures": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "entrypoint_kind": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "intent": {
+          "type": "string"
+        },
+        "rule": true
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "intent",
+        "file",
+        "rule",
+        "entrypoint_kind"
+      ]
+    },
+    "RegistrySelector": {
+      "type": "object",
+      "properties": {
+        "may_be_empty": {
+          "type": "boolean",
+          "default": false
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "registry": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "registry"
+      ]
+    },
+    "StoreDeclaration": {
+      "type": "object",
+      "properties": {
+        "defined_in": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "defined_in"
+      ]
+    },
+    "SubjectSelector": {
+      "type": "object",
+      "properties": {
+        "may_be_empty": {
+          "type": "boolean",
+          "default": false
+        },
+        "modules": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "packages": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stores": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "symbols": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "units": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "SymbolSelector": {
+      "type": "object",
+      "properties": {
+        "may_be_empty": {
+          "type": "boolean",
+          "default": false
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "symbols": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "symbols"
+      ]
+    }
+  }
+}

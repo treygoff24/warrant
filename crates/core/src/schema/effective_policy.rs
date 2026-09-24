@@ -1,7 +1,7 @@
-use schemars::Schema;
+use schemars::{Schema, schema_for};
+
+use crate::policy::EffectivePolicy;
 
 pub(super) fn schema() -> Result<Schema, super::SchemaError> {
-    Err(super::SchemaError::NotImplemented(
-        "warrant.effective-policy",
-    ))
+    Ok(schema_for!(EffectivePolicy))
 }

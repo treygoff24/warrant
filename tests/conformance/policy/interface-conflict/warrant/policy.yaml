@@ -1,0 +1,20 @@
+schema_version: warrant.policy/1
+contracts:
+  - id: module.one
+    kind: module
+    intent: First owner.
+    owner: trey
+    authority: draft
+    files: ["src/shared/**"]
+    interface: { entry: src/shared/index.ts, exports: [run] }
+    enforcement: static
+    limits: Declared ownership.
+  - id: iface.missing
+    kind: interface
+    intent: Name an absent export.
+    owner: trey
+    authority: draft
+    module: module.one
+    exports: [missing]
+    enforcement: static
+    limits: Declared exports.

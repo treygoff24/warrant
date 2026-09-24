@@ -1,0 +1,11 @@
+schema_version: warrant.policy/1
+contracts:
+  - id: core.actions
+    kind: module
+    intent: Own action dispatch.
+    owner: trey
+    authority: draft
+    files: ["src/actions/**"]
+    interface: { entry: src/actions/index.ts, exports: [run] }
+    enforcement: static
+    limits: Ownership is declared.

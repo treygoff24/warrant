@@ -1,0 +1,11 @@
+schema_version: warrant.policy/1
+contracts:
+  - id: dep.core
+    kind: dependency
+    intent: Keep core independent.
+    owner: trey
+    authority: draft
+    from: { modules: [core.actions] }
+    deny: { packages: [react] }
+    enforcement: static
+    limits: Resolved edges only.

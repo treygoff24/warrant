@@ -1,0 +1,28 @@
+schema_version: warrant.policy/1
+contracts:
+- limits: Resolved edges only.
+  enforcement: static
+  deny:
+    packages:
+    - react
+  from:
+    modules:
+    - core.actions
+  authority: draft
+  owner: trey
+  intent: Keep core independent.
+  kind: dependency
+  id: dep.core
+- limits: Ownership is declared.
+  enforcement: static
+  interface:
+    exports:
+    - run
+    entry: src/actions/index.ts
+  files:
+  - src/actions/**
+  authority: draft
+  owner: trey
+  intent: Own action dispatch.
+  kind: module
+  id: core.actions

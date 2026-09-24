@@ -1942,3 +1942,107 @@ exit "$result"
         .expect("dist/bundle.js entry");
     assert_eq!(entry["class"], "build-output", "{entry}");
 }
+
+/// B34: `--commit` resolves the revision once. A Git wrapper moves the branch to another
+/// commit when the manifest blob is read, after the manifest's revision was resolved;
+/// the snapshot still names the commit resolved first, under that commit's limit.
+#[cfg(unix)]
+#[test]
+fn commit_snapshot_resolves_the_revision_once() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repository = repository();
+    let root = repository.path();
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\nsnapshot:\n  max_file_bytes: 100\n",
+    )
+    .expect("small-limit manifest");
+    fs::write(root.join("big.txt"), "x".repeat(200)).expect("big file");
+    git(root, &["add", "warrant/warrant.yaml", "big.txt"]);
+    commit(root, "small limit");
+    let first = git(root, &["rev-parse", "HEAD"]);
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\nsnapshot:\n  max_file_bytes: 4096\n",
+    )
+    .expect("large-limit manifest");
+    git(root, &["add", "warrant/warrant.yaml"]);
+    commit(root, "large limit");
+    let second = git(root, &["rev-parse", "HEAD"]);
+    git(root, &["update-ref", "HEAD", &first]);
+
+    let control = tempfile::tempdir().expect("git control");
+    let real_git = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .expect("locate real git");
+    assert!(real_git.status.success());
+    let wrapper = control.path().join("git");
+    fs::write(
+        &wrapper,
+        r#"#!/bin/sh
+case " $* " in
+  *" cat-file blob "*)
+    if [ ! -e "$WARRANT_TEST_CONTROL/moved" ]; then
+      "$WARRANT_TEST_GIT" -C "$WARRANT_TEST_ROOT" update-ref HEAD "$WARRANT_TEST_MOVE_TO" || exit 97
+      : > "$WARRANT_TEST_CONTROL/moved"
+    fi ;;
+esac
+exec "$WARRANT_TEST_GIT" "$@"
+"#,
+    )
+    .expect("git wrapper");
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).expect("executable wrapper");
+    let mut paths = vec![control.path().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").expect("PATH"),
+    ));
+    let cache = tempfile::tempdir().expect("temp cache");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_warrant"));
+    neutralize_git_environment(&mut command);
+    let output = command
+        .args(["snapshot", "--commit", "HEAD"])
+        .current_dir(root)
+        .env("XDG_CACHE_HOME", cache.path())
+        .env("PATH", std::env::join_paths(paths).expect("fixture PATH"))
+        .env("WARRANT_TEST_CONTROL", control.path())
+        .env("WARRANT_TEST_ROOT", root)
+        .env("WARRANT_TEST_MOVE_TO", &second)
+        .env(
+            "WARRANT_TEST_GIT",
+            String::from_utf8(real_git.stdout).expect("git path").trim(),
+        )
+        .output()
+        .expect("run warrant");
+    let document = json(&output);
+    // Precondition: the branch moved during the run.
+    assert!(control.path().join("moved").exists(), "the ref never moved");
+    assert_eq!(git(root, &["rev-parse", "HEAD"]), second);
+    let commit = document["commit"].as_str().expect("commit id");
+    assert!(
+        commit.ends_with(&first),
+        "snapshot names {commit}, not the first-resolved {first}"
+    );
+    // The first commit's 100-byte limit governs its capture: only big.txt exceeds it.
+    assert_eq!(document["excluded"]["oversize"], 1, "{document}");
+}
+
+/// B34: a `--commit` revision that names no commit is still reported by capture as
+/// `missing-commit`, naming the revision as given.
+#[test]
+fn commit_snapshot_of_an_unknown_revision_is_missing_commit() {
+    let repository = repository();
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(
+        repository.path(),
+        cache.path(),
+        &["snapshot", "--commit", "no-such-revision"],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("error document");
+    assert_eq!(error["code"], "missing-commit", "{error}");
+    assert_eq!(error["reason"], "no-such-revision", "{error}");
+}

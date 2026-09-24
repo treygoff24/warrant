@@ -58,3 +58,12 @@ result rows before output, leaving edges and other table results intact.
 
 - `cargo test --locked -p warrant-lang-ts`: exit 0; 8 analysis tests and 15 resolution tests passed.
 - `cargo test --locked -p warrant-cli --test conformance -- model`: exit 0; all 4 matching tests passed.
+
+## Instrument pin assertion
+
+After deriving the expected version from the workspace manifest, changed only
+the `oxc_resolver` instrument literal in `crates/lang-ts/src/lib.rs` to `0.0.0`.
+`cargo test --locked -p warrant-cli --test conformance -- model_capabilities`
+exited 101: `model_capabilities_remain_unqualified` observed `0.0.0` instead of
+the manifest pin `11.24.3`. Restored the literal; the same command exited 0
+with 1 test passed.

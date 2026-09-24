@@ -40,6 +40,7 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
             warrant_inventory::build(
                 &root,
                 warrant_inventory::CapturedSnapshot {
+                    manifest: captured.manifest(),
                     entries: captured.entries(),
                     read: &read,
                 },

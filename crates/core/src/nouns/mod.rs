@@ -220,6 +220,10 @@ pub struct InventorySummary {
 #[serde(deny_unknown_fields)]
 pub struct InventoryDocument {
     pub schema_version: String,
+    /// The snapshot this inventory classifies (spec 4.5). Always emitted; optional only
+    /// so documents written before it existed still deserialize.
+    #[serde(default)]
+    pub snapshot: Option<SnapshotManifest>,
     pub entries: Vec<InventoryEntry>,
     pub summary: InventorySummary,
     #[serde(default)]

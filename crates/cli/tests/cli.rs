@@ -356,9 +356,13 @@ fn inventory_pages_entries_without_changing_cached_full_document() {
         assert_eq!(cursor, walked.len() as u64);
     }
     assert_eq!(walked, full.entries);
+    // Every run re-captures, so the cached document's capture time moves; nothing else may.
+    let cached_after: serde_json::Value =
+        serde_json::from_slice(&fs::read(&cached_path).expect("cached after pagination"))
+            .expect("cached inventory after pagination");
     assert_eq!(
-        fs::read(&cached_path).expect("cached after pagination"),
-        cached_before
+        without_timestamps(cached_after),
+        without_timestamps(serde_json::from_slice(&cached_before).expect("cached inventory"))
     );
     let beyond = warrant_in(
         repository.path(),
@@ -399,22 +403,22 @@ fn human_format_contains_the_same_data() {
             let output = warrant_in(repository.path(), cache.path(), &args);
             assert!(output.status.success(), "{output:?}");
             assert!(!output.stdout.contains(&0x1b));
-            let mut document: serde_json::Value =
+            let document: serde_json::Value =
                 serde_json::from_slice(&output.stdout).expect("formatted document");
-            if command[0] == "snapshot" {
-                // Separate captures have different clocks; all other data must match.
-                let taken_at = document
-                    .as_object_mut()
-                    .expect("snapshot object")
-                    .remove("taken_at")
-                    .expect("capture timestamp");
+            // Separate captures have different clocks; all other data must match.
+            let taken_at = match command[0] {
+                "snapshot" => Some(&document["taken_at"]),
+                "inventory" => Some(&document["snapshot"]["taken_at"]),
+                _ => None,
+            };
+            if let Some(taken_at) = taken_at {
                 taken_at
                     .as_str()
-                    .expect("timestamp string")
+                    .expect("capture timestamp")
                     .parse::<jiff::Timestamp>()
                     .expect("valid timestamp");
             }
-            documents.push(document);
+            documents.push(without_timestamps(document));
         }
         assert_eq!(documents[0], documents[1], "{command:?}");
     }
@@ -981,5 +985,141 @@ fn inventory_does_not_read_through_an_external_symlink() {
             .any(|row| row.alias_table.as_deref() == Some("package.json")),
         "{:?}",
         inventory.summary.unit_aliases
+    );
+}
+
+/// Spec 4.5: every downstream artifact carries the snapshot manifest.
+#[test]
+fn inventory_carries_its_snapshot_manifest() {
+    let repository = repository();
+    let root = repository.path();
+    let cache = tempfile::tempdir().expect("temp cache");
+    let snapshot = without_timestamps(json(&warrant_in(root, cache.path(), &["snapshot"])));
+    let emitted = json(&warrant_in(root, cache.path(), &["inventory"]));
+    let cached_path = walk_files(cache.path())
+        .into_iter()
+        .find(|path| path.ends_with("inventory.json"))
+        .expect("cached inventory");
+    let cached: serde_json::Value =
+        serde_json::from_slice(&fs::read(&cached_path).expect("read cached inventory"))
+            .expect("cached inventory JSON");
+    for (label, document) in [("emitted", &emitted), ("cached", &cached)] {
+        let carried = without_timestamps(document["snapshot"].clone());
+        assert_eq!(carried["tree"], snapshot["tree"], "{label}");
+        assert_eq!(carried, snapshot, "{label}");
+        document["snapshot"]["taken_at"]
+            .as_str()
+            .expect("carried capture timestamp")
+            .parse::<jiff::Timestamp>()
+            .expect("valid timestamp");
+    }
+    assert_eq!(emitted, cached);
+    // The cache key identifies the analysis, not the capture time: a second run reuses it.
+    let again = json(&warrant_in(root, cache.path(), &["inventory"]));
+    assert_ne!(again["snapshot"]["taken_at"], serde_json::Value::Null);
+    let cached_files: Vec<_> = walk_files(cache.path())
+        .into_iter()
+        .filter(|path| path.ends_with("inventory.json"))
+        .collect();
+    assert_eq!(cached_files.len(), 1, "{cached_files:?}");
+}
+
+/// Runs `body` in a child copy of this test binary whose Git sees no system or global
+/// configuration, because in-process capture shells out to Git with this process's
+/// environment.
+fn in_neutral_git_child(test: &str, body: impl FnOnce()) {
+    const CHILD: &str = "WARRANT_TEST_NEUTRAL_GIT_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        body();
+        return;
+    }
+    let mut command = Command::new(std::env::current_exe().expect("test binary"));
+    command
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(CHILD, "1");
+    neutralize_git_environment(&mut command);
+    let output = command.output().expect("run neutral Git child");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{test} child failed:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "{test} child ran no test:\n{stdout}"
+    );
+}
+
+/// Spec 4.3: only a worktree capture can count ignored files. Index and commit
+/// inventories say the count is unknown (null) rather than claiming zero.
+#[test]
+fn object_snapshot_inventories_leave_ignored_files_unknown() {
+    in_neutral_git_child(
+        "object_snapshot_inventories_leave_ignored_files_unknown",
+        || {
+            let repository = repository();
+            let root = repository.path();
+            fs::write(root.join(".gitignore"), "ignored.txt\n").expect("write .gitignore");
+            git(root, &["add", ".gitignore"]);
+            commit(root, "ignore");
+            fs::write(root.join("ignored.txt"), "local only\n").expect("write ignored file");
+            assert_eq!(
+                git(
+                    root,
+                    &["ls-files", "--others", "--ignored", "--exclude-standard"]
+                ),
+                "ignored.txt"
+            );
+            let manifest = warrant_core::manifest::WarrantManifest::parse(
+                "schema_version: warrant.manifest/1\n",
+            )
+            .expect("default manifest");
+            for (kind, revision, expected) in [
+                (warrant_core::nouns::SnapshotKind::Worktree, None, Some(1)),
+                (warrant_core::nouns::SnapshotKind::Index, None, None),
+                (
+                    warrant_core::nouns::SnapshotKind::Commit,
+                    Some("HEAD"),
+                    None,
+                ),
+            ] {
+                let (captured, document) = warrant_snapshot::capture(
+                    root,
+                    kind.clone(),
+                    revision,
+                    &manifest.snapshot,
+                    |snapshot| {
+                        let read = |path: &str| {
+                            snapshot
+                                .read(path)
+                                .map_err(|error| warrant_inventory::ReadError {
+                                    code: error.document.code,
+                                    reason: error.document.reason,
+                                })
+                        };
+                        Ok(warrant_inventory::build(
+                            root,
+                            warrant_inventory::CapturedSnapshot {
+                                manifest: snapshot.manifest(),
+                                entries: snapshot.entries(),
+                                read: &read,
+                            },
+                            &manifest,
+                            &warrant_inventory::BuildConfig::default(),
+                        )
+                        .expect("inventory")
+                        .document)
+                    },
+                )
+                .unwrap_or_else(|error| panic!("{kind:?} capture: {error:?}"));
+                assert_eq!(document.summary.ignored_files, expected, "{kind:?}");
+                assert_eq!(
+                    document.summary.ignored_files, captured.excluded.ignored_files,
+                    "{kind:?} inventory and snapshot disagree on the ignored count"
+                );
+                assert_eq!(document.snapshot.as_ref(), Some(&captured), "{kind:?}");
+            }
+        },
     );
 }

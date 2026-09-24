@@ -558,6 +558,7 @@ fn run_inventory_api(repository: &Path, expectation: &Expectation) -> Observatio
             warrant_inventory::build(
                 repository,
                 warrant_inventory::CapturedSnapshot {
+                    manifest: snapshot.manifest(),
                     entries: snapshot.entries(),
                     read: &read,
                 },

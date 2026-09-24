@@ -22,6 +22,18 @@
     "schema_version": {
       "type": "string"
     },
+    "snapshot": {
+      "description": "The snapshot this inventory classifies (spec 4.5). Always emitted; optional only\nso documents written before it existed still deserialize.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SnapshotManifest"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "summary": {
       "$ref": "#/$defs/InventorySummary"
     },
@@ -43,6 +55,25 @@
     "summary"
   ],
   "$defs": {
+    "Capture": {
+      "description": "How snapshot bytes were captured.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "manifest_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ]
+    },
     "Entrypoint": {
       "description": "A runtime-visible entrypoint and the basis that established it.",
       "type": "object",
@@ -278,6 +309,98 @@
         "unowned_source",
         "unknown",
         "submodules"
+      ]
+    },
+    "SnapshotExclusions": {
+      "description": "Counts and limits deliberately excluded from a snapshot.",
+      "type": "object",
+      "properties": {
+        "ignored_count_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ignored_files": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "oversize": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "submodules": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "submodules",
+        "oversize"
+      ]
+    },
+    "SnapshotKind": {
+      "description": "The exact source kind represented by a snapshot.",
+      "type": "string",
+      "enum": [
+        "commit",
+        "index",
+        "worktree",
+        "tree"
+      ]
+    },
+    "SnapshotManifest": {
+      "description": "The exact source identity used by all downstream artifacts.",
+      "type": "object",
+      "properties": {
+        "capture": {
+          "$ref": "#/$defs/Capture"
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "excluded": {
+          "$ref": "#/$defs/SnapshotExclusions"
+        },
+        "kind": {
+          "$ref": "#/$defs/SnapshotKind"
+        },
+        "object_format": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "taken_at": {
+          "type": "string"
+        },
+        "tree": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "repo",
+        "kind",
+        "tree",
+        "object_format",
+        "capture",
+        "excluded",
+        "taken_at"
       ]
     },
     "Submodule": {

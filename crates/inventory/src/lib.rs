@@ -15,7 +15,8 @@ use sha2::{Digest, Sha256};
 use warrant_core::manifest::{ClassDeclaration, WarrantManifest};
 use warrant_core::nouns::{
     Entrypoint, GeneratedAbsent, GeneratedBy, InventoryClass, InventoryDocument, InventoryEntry,
-    InventorySummary, Submodule, UnitAliasTable, UnreadPath, VendoredFrom,
+    InventorySummary, SnapshotKind, SnapshotManifest, Submodule, UnitAliasTable, UnreadPath,
+    VendoredFrom,
 };
 
 /// A module selector assigns ownership without changing a path's class.
@@ -61,10 +62,11 @@ pub struct ReadError {
 /// Reads captured bytes for one snapshot path.
 pub type Reader<'a> = &'a dyn Fn(&str) -> Result<Vec<u8>, ReadError>;
 
-/// The captured snapshot inventory classifies: its path listing and its bytes. Discovery
-/// reads configuration only through `read`, never from the live filesystem.
+/// The captured snapshot inventory classifies: its identity, path listing and bytes.
+/// Discovery reads configuration only through `read`, never from the live filesystem.
 #[derive(Clone, Copy)]
 pub struct CapturedSnapshot<'a> {
+    pub manifest: &'a SnapshotManifest,
     pub entries: &'a [InventoryEntry],
     pub read: Reader<'a>,
 }
@@ -401,9 +403,15 @@ pub fn build(
     let generated_absent = add_absent_generated(&mut entries, &generated, &captured)?;
     entries.sort_by(|left, right| left.path.cmp(&right.path));
     let unit_aliases = alias_tables(read, &discovery_paths, &units)?;
-    let summary = summarize(&entries, unit_aliases, generated_absent);
+    let summary = summarize(
+        &entries,
+        &snapshot.manifest.kind,
+        unit_aliases,
+        generated_absent,
+    );
     let document = InventoryDocument {
         schema_version: "warrant.inventory/1".into(),
+        snapshot: Some(snapshot.manifest.clone()),
         total: entries.len() as u64,
         entries,
         summary,
@@ -540,10 +548,15 @@ pub fn verify_generated(
     Ok(issues)
 }
 
-/// Hash the deterministic inventory document, including completeness accounting.
+/// Hash the deterministic inventory document, including completeness accounting and the
+/// snapshot identity. The capture time is excluded: it names when, not what, was read.
 pub fn inventory_digest(document: &InventoryDocument) -> Result<String, InventoryError> {
+    let mut document = document.clone();
+    if let Some(snapshot) = &mut document.snapshot {
+        snapshot.taken_at.clear();
+    }
     let bytes =
-        serde_json::to_vec(document).map_err(|error| InventoryError::InvalidDeclaration {
+        serde_json::to_vec(&document).map_err(|error| InventoryError::InvalidDeclaration {
             reason: format!("inventory serialization failed: {error}"),
         })?;
     Ok(digest_bytes(&bytes))
@@ -1496,17 +1509,21 @@ fn add_absent_generated(
 
 fn summarize(
     entries: &[InventoryEntry],
+    kind: &SnapshotKind,
     unit_aliases: Vec<UnitAliasTable>,
     generated_absent: Vec<GeneratedAbsent>,
 ) -> InventorySummary {
+    // Spec 4.3: only a worktree capture sees ignored files; for an index, commit or tree
+    // the count is unknown (null), which is not the same claim as zero.
+    let ignored_files = (*kind == SnapshotKind::Worktree).then(|| {
+        entries
+            .iter()
+            .filter(|entry| entry.class == InventoryClass::Ignored)
+            .count() as u64
+    });
     let mut summary = InventorySummary {
         files: entries.len() as u64,
-        ignored_files: Some(
-            entries
-                .iter()
-                .filter(|entry| entry.class == InventoryClass::Ignored)
-                .count() as u64,
-        ),
+        ignored_files,
         unit_aliases,
         generated_absent,
         ..InventorySummary::default()

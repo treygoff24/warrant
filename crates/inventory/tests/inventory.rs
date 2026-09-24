@@ -6,7 +6,7 @@ use pretty_assertions::assert_eq;
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 use warrant_core::manifest::WarrantManifest;
-use warrant_core::nouns::{InventoryClass, InventoryEntry};
+use warrant_core::nouns::{InventoryClass, InventoryEntry, SnapshotKind, SnapshotManifest};
 use warrant_inventory::{
     BuildConfig, BuiltInventory, CapturedSnapshot, ClassRule, GeneratedIssueCode, InventoryError,
     ModuleSelector, ReadError, build, discover_units, verify_generated,
@@ -82,6 +82,16 @@ fn snapshot(root: &Path) -> Vec<InventoryEntry> {
     entries
 }
 
+/// The manifest of a worktree capture; fixture listings stand in for its entries.
+fn worktree_manifest() -> SnapshotManifest {
+    SnapshotManifest::new(
+        "sha1:0000000000000000000000000000000000000001".into(),
+        SnapshotKind::Worktree,
+        "sha1:0000000000000000000000000000000000000002".into(),
+        "2026-09-24T00:00:00Z".into(),
+    )
+}
+
 /// Build with a reader over the fixture directory, as a worktree snapshot reads it.
 fn build_on_disk(
     root: &Path,
@@ -98,6 +108,7 @@ fn build_on_disk(
     build(
         root,
         CapturedSnapshot {
+            manifest: &worktree_manifest(),
             entries: listing,
             read: &read,
         },
@@ -1483,6 +1494,7 @@ fn external_symlink_package_json_does_not_supply_units_or_entrypoints() {
     let built = build(
         root.path(),
         CapturedSnapshot {
+            manifest: &worktree_manifest(),
             entries: &listing,
             read: &read,
         },
@@ -1552,6 +1564,7 @@ fn oversize_tsconfig_is_unread_and_supplies_no_unit_or_alias_table() {
     let built = build(
         root.path(),
         CapturedSnapshot {
+            manifest: &worktree_manifest(),
             entries: &listing,
             read: &read,
         },
@@ -1609,6 +1622,7 @@ fn discovery_follows_captured_bytes_not_the_live_file() {
     let built = build(
         root.path(),
         CapturedSnapshot {
+            manifest: &worktree_manifest(),
             entries: &listing,
             read: &read,
         },
@@ -1647,6 +1661,7 @@ fn refused_snapshot_read_keeps_the_snapshot_code() {
     let error = build(
         root.path(),
         CapturedSnapshot {
+            manifest: &worktree_manifest(),
             entries: &listing,
             read: &read,
         },
@@ -1724,4 +1739,55 @@ fn generated_declarations_matched_only_by_ignored_files_are_absent() {
         .find(|entry| entry.path == "lib/tracked.ts")
         .expect("captured generated file");
     assert_eq!(tracked.class, InventoryClass::Generated);
+}
+
+/// Spec 4.3: the ignored count is known only for a worktree capture; an object snapshot
+/// reports it as unknown (null), which is a different claim from zero.
+#[test]
+fn ignored_count_is_unknown_outside_the_worktree() {
+    let temp = tempdir().expect("temp");
+    let root = temp.path();
+    write(root, "README.md", "readme\n");
+    let listing = vec![snapshot_entry(
+        "README.md",
+        InventoryClass::Unknown,
+        Some("0123456789012345678901234567890123456789"),
+    )];
+    let manifest =
+        WarrantManifest::parse("schema_version: warrant.manifest/1\n").expect("manifest");
+    let config = BuildConfig::default();
+    for (kind, expected) in [
+        (SnapshotKind::Worktree, Some(0)),
+        (SnapshotKind::Index, None),
+        (SnapshotKind::Commit, None),
+        (SnapshotKind::Tree, None),
+    ] {
+        let snapshot = SnapshotManifest {
+            kind: kind.clone(),
+            ..worktree_manifest()
+        };
+        let reader = |path: &str| {
+            fs::read(root.join(path)).map_err(|error| ReadError {
+                code: "io".into(),
+                reason: error.to_string(),
+            })
+        };
+        let built = build(
+            root,
+            CapturedSnapshot {
+                manifest: &snapshot,
+                entries: &listing,
+                read: &reader,
+            },
+            &manifest,
+            &config,
+        )
+        .expect("inventory");
+        assert_eq!(built.document.summary.ignored_files, expected, "{kind:?}");
+        assert_eq!(
+            built.document.snapshot.as_ref(),
+            Some(&snapshot),
+            "{kind:?}"
+        );
+    }
 }

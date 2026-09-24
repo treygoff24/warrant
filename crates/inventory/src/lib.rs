@@ -455,7 +455,19 @@ pub fn build(
         })
         .map(|entry| entry.path.clone())
         .collect();
-    let mut units = discover_units_from_paths(root, read, &discovery_paths)?;
+    // Cargo's inputs are every captured path, unread ones included: Cargo reads them
+    // from a copy of the snapshot, and a refused read is refused there.
+    let captured_paths: Vec<String> = snapshot_entries
+        .iter()
+        .filter(|entry| {
+            !matches!(
+                entry.class,
+                InventoryClass::Ignored | InventoryClass::Submodule
+            ) && paths.binary_search(&entry.path).is_ok()
+        })
+        .map(|entry| entry.path.clone())
+        .collect();
+    let mut units = discover_units_from_paths(read, &discovery_paths, &captured_paths)?;
     let package_entrypoints = discover_package_entrypoints(read, &discovery_paths)?;
     for entry in &mut entries {
         if matches!(
@@ -545,7 +557,7 @@ pub fn discover_units(root: &Path) -> Result<Vec<Unit>, InventoryError> {
             reason: error.to_string(),
         })
     };
-    discover_units_from_paths(root, &read, &paths)
+    discover_units_from_paths(&read, &paths, &paths)
 }
 
 /// A captured path's Git mode (`100644`, `100755`, `120000`), as the snapshot recorded it.
@@ -1125,9 +1137,9 @@ fn digest_bytes(bytes: &[u8]) -> String {
 }
 
 fn discover_units_from_paths(
-    root: &Path,
     read: Reader<'_>,
     paths: &[String],
+    captured: &[String],
 ) -> Result<Vec<Unit>, InventoryError> {
     let mut units = BTreeMap::<String, Unit>::new();
     for path in paths {
@@ -1144,7 +1156,7 @@ fn discover_units_from_paths(
     }
     discover_tsconfig_references(read, paths, &mut units)?;
     discover_javascript_units(read, paths, &mut units)?;
-    discover_cargo_units(root, paths, &mut units)?;
+    discover_cargo_units(read, paths, captured, &mut units)?;
     Ok(units.into_values().collect())
 }
 
@@ -1340,9 +1352,13 @@ fn add_workspace_packages(
     Ok(())
 }
 
+/// Cargo units from `cargo metadata` over a copy of the captured Cargo inputs, never the
+/// live tree. Rust sources are copied empty: target discovery needs them to exist and
+/// `--no-deps` never reads them.
 fn discover_cargo_units(
-    root: &Path,
+    read: Reader<'_>,
     paths: &[String],
+    captured: &[String],
     units: &mut BTreeMap<String, Unit>,
 ) -> Result<(), InventoryError> {
     for manifest in paths.iter().filter(|path| path.ends_with("Cargo.toml")) {
@@ -1353,20 +1369,39 @@ fn discover_cargo_units(
             by: "cargo-manifest".into(),
         });
     }
-    let Some(manifest) = paths.iter().find(|path| path.as_str() == "Cargo.toml") else {
+    if !captured.iter().any(|path| path == "Cargo.toml") {
         return Ok(());
-    };
+    }
+    let temporary = tempfile::tempdir().map_err(|error| io_error("temporary directory", error))?;
+    let copy = temporary
+        .path()
+        .canonicalize()
+        .map_err(|error| io_error("temporary directory", error))?;
+    for path in captured {
+        if matches!(path.as_str(), "Cargo.toml" | "Cargo.lock" | ".cargo/config.toml")
+            || path.ends_with("/Cargo.toml")
+        {
+            write_captured(&copy, path, &read_captured(read, path)?, None)?;
+        } else if path.ends_with(".rs") {
+            write_captured(&copy, path, &[], None)?;
+        }
+    }
     let mut command = MetadataCommand::new();
     command
-        .manifest_path(root.join(manifest))
+        .manifest_path(copy.join("Cargo.toml"))
+        .current_dir(&copy)
         .no_deps()
         .other_options(["--locked".into()]);
-    let has_lock = root.join("Cargo.lock").exists();
+    let has_lock = captured.iter().any(|path| path == "Cargo.lock");
     let metadata = match command.exec() {
         Ok(metadata) => metadata,
         Err(error) if has_lock => {
+            let prefix = format!("{}/", copy.display());
             return Err(InventoryError::InvalidDeclaration {
-                reason: format!("cargo metadata failed for `{manifest}`: {error}"),
+                reason: format!(
+                    "cargo metadata failed for `Cargo.toml`: {}",
+                    error.to_string().replace(&prefix, "")
+                ),
             });
         }
         // Do not let discovery create a lockfile in the source tree. Manifest
@@ -1375,7 +1410,7 @@ fn discover_cargo_units(
     };
     for package in metadata.packages {
         let manifest_path = PathBuf::from(package.manifest_path.as_std_path());
-        let relative = relative_path(root, &manifest_path)?;
+        let relative = relative_path(&copy, &manifest_path)?;
         if !paths.contains(&relative) {
             continue;
         }

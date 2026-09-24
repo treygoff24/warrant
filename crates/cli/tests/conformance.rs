@@ -103,6 +103,13 @@ struct ErrorExpect {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ModelExpect {
+    edges: Vec<(String, String, bool, String)>,
+    unsupported: Vec<(String, String, String)>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Expectation {
     driver: Driver,
     #[serde(default)]
@@ -118,6 +125,8 @@ struct Expectation {
     document: Option<Value>,
     #[serde(default)]
     inventory: Option<InventoryExpect>,
+    #[serde(default)]
+    model: Option<ModelExpect>,
     #[serde(default)]
     error: Option<ErrorExpect>,
     #[serde(default)]
@@ -174,6 +183,58 @@ fn snapshot_conformance() {
 #[test]
 fn model_conformance() {
     run_area("model");
+}
+
+#[test]
+fn model_cases_reject_empty_sources() {
+    for entry in fs::read_dir(fixture_root().join("model")).expect("model fixtures") {
+        let case = entry.expect("model case").path();
+        let (expected, original) = execute_case(&case);
+        assert_expectation(&case, &expected, &original);
+        let temporary = tempfile::tempdir().expect("mutated fixture");
+        let mutated = temporary.path().join("case");
+        copy_tree(&case, &mutated);
+        fs::write(mutated.join("repo/index.ts"), "export const nothing = 1;\n")
+            .expect("empty source mutation");
+        let (expected, observation) = execute_case(&mutated);
+        assert_eq!(observation.exit_code, 0, "mutation must still build");
+        assert!(
+            check_expectation(&expected, &observation).is_err(),
+            "{} accepts missing syntax",
+            case.display()
+        );
+    }
+}
+
+#[test]
+fn model_expectations_reject_changed_facts() {
+    let case = fixture_root().join("model/dynamic-nonliteral");
+    let (expected, mut observation) = execute_case(&case);
+    assert_expectation(&case, &expected, &observation);
+    let original = observation.document.clone().expect("model rows");
+    for (column, replacement) in [
+        (1, json!("require")),
+        (2, json!(1)),
+        (3, json!("resolution-pending")),
+        (4, json!(1)),
+        (5, json!(42)),
+        (6, json!(42)),
+        (7, json!("guessed-target")),
+    ] {
+        observation.document = Some(original.clone());
+        observation.document.as_mut().expect("model rows")["edges"]["rows"][0][column] =
+            replacement;
+        assert!(
+            check_expectation(&expected, &observation).is_err(),
+            "changed edge column {column} must fail"
+        );
+    }
+    observation.document = Some(original);
+    observation.document.as_mut().expect("model rows")["unsupported"]["rows"] = json!([]);
+    assert!(
+        check_expectation(&expected, &observation).is_err(),
+        "missing unsupported row must fail"
+    );
 }
 
 mod policy_conformance {
@@ -983,6 +1044,12 @@ fn check_expectation(expectation: &Expectation, observation: &Observation) -> Re
             observation.document.as_ref().ok_or("missing inventory")?,
         )?;
     }
+    if let Some(expected) = &expectation.model {
+        check_model(
+            expected,
+            observation.document.as_ref().ok_or("missing model rows")?,
+        )?;
+    }
     if let Some(expected) = &expectation.git_ignored {
         let actual = observation
             .git_ignored
@@ -1001,6 +1068,70 @@ fn check_expectation(expectation: &Expectation, observation: &Observation) -> Re
                 "snapshot tree {tree} match-index was {matches}, expected {should_match}"
             ));
         }
+    }
+    Ok(())
+}
+
+fn check_model(expected: &ModelExpect, actual: &Value) -> Result<(), String> {
+    for (name, columns) in [
+        (
+            "edges",
+            vec![
+                "path",
+                "kind",
+                "type_only",
+                "unresolved_reason",
+                "resolved",
+                "to_file",
+                "to_symbol",
+                "to_external",
+            ],
+        ),
+        ("unsupported", vec!["path", "construct", "reason"]),
+    ] {
+        if actual[name]["columns"] != json!(columns) || actual[name]["truncated"] != false {
+            return Err(format!("missing or truncated model {name}"));
+        }
+    }
+    let mut edges = Vec::new();
+    for row in actual["edges"]["rows"].as_array().ok_or("missing edges")? {
+        if row[4] != 0 || !row[5].is_null() || !row[6].is_null() || !row[7].is_null() {
+            return Err(format!(
+                "model edge must remain unresolved without a target: {row}"
+            ));
+        }
+        if row[2] != 0 && row[2] != 1 {
+            return Err(format!("invalid type_only flag: {row}"));
+        }
+        edges.push(json!([row[0], row[1], row[2] == 1, row[3]]));
+    }
+    let mut wanted_edges = serde_json::to_value(&expected.edges)
+        .map_err(|error| error.to_string())?
+        .as_array()
+        .expect("edge tuples")
+        .clone();
+    sort_json(&mut edges);
+    sort_json(&mut wanted_edges);
+    if edges != wanted_edges {
+        return Err(format!(
+            "model edges were {edges:?}, expected {wanted_edges:?}"
+        ));
+    }
+    let mut unsupported = actual["unsupported"]["rows"]
+        .as_array()
+        .ok_or("missing unsupported rows")?
+        .clone();
+    let mut wanted_unsupported = serde_json::to_value(&expected.unsupported)
+        .map_err(|error| error.to_string())?
+        .as_array()
+        .expect("unsupported tuples")
+        .clone();
+    sort_json(&mut unsupported);
+    sort_json(&mut wanted_unsupported);
+    if unsupported != wanted_unsupported {
+        return Err(format!(
+            "model unsupported rows were {unsupported:?}, expected {wanted_unsupported:?}"
+        ));
     }
     Ok(())
 }

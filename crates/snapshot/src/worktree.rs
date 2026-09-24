@@ -46,6 +46,11 @@ pub(crate) fn capture(repo: &Path, config: &SnapshotConfig) -> Result<Snapshot, 
         }
         crate::links::classify(&mut snapshot)?;
     }
+    for entry in &mut snapshot.entries {
+        if captured.undeclared.contains(&entry.path) {
+            entry.reason = "undeclared-nested-repository".into();
+        }
+    }
     snapshot.object_paths = captured.carried;
     snapshot.file_mode = file_mode;
     snapshot.manifest.kind = SnapshotKind::Worktree;
@@ -82,6 +87,7 @@ pub(crate) struct CapturedTree {
     pub id: String,
     carried: BTreeSet<String>,
     oversize: BTreeSet<String>,
+    undeclared: BTreeSet<String>,
     kind: &'static str,
 }
 
@@ -95,6 +101,7 @@ pub(crate) fn tree(
             id,
             carried: BTreeSet::new(),
             oversize: BTreeSet::new(),
+            undeclared: BTreeSet::new(),
             kind: "native-worktree",
         }),
         None => portable(repo, file_mode, config),
@@ -113,6 +120,7 @@ fn portable(
     let mut files = BTreeMap::new();
     let mut carried = BTreeSet::new();
     let mut oversize = BTreeSet::new();
+    let mut undeclared = BTreeSet::new();
     for record in tracked.split(|b| *b == 0).filter(|r| !r.is_empty()) {
         let record = std::str::from_utf8(record)
             .map_err(|_| SnapshotError::new("unsupported-path", "non-UTF-8 path"))?;
@@ -138,7 +146,9 @@ fn portable(
         None,
         None,
     )?)? {
-        files.entry(path).or_insert(None);
+        files
+            .entry(path.trim_end_matches('/').to_owned())
+            .or_insert(None);
     }
     let mut index_info = Vec::new();
     for (path, indexed) in files {
@@ -152,19 +162,28 @@ fn portable(
                 oversize.insert(path.clone());
             }
             (mode.clone(), oid.clone())
-        } else if let Some((mode, oid, _)) = &indexed
-            && mode == "160000"
-            && fs::symlink_metadata(repo.join(&path)).is_ok_and(|metadata| metadata.is_dir())
-        {
+        } else if fs::symlink_metadata(repo.join(&path)).is_ok_and(|metadata| metadata.is_dir()) {
             let submodule = repo.join(&path);
-            // An unpopulated directory retains the recorded gitlink. Only ask
-            // Git for HEAD with local repository metadata, avoiding parent discovery.
-            let oid = if submodule.join(".git").try_exists()? {
-                git::text(&submodule, &["rev-parse", "--verify", "HEAD"], None)?
-            } else {
-                oid.clone()
-            };
-            (mode.clone(), oid)
+            match &indexed {
+                Some((mode, oid, _)) if mode == "160000" => {
+                    // Empty directories retain the recorded gitlink. Local metadata
+                    // prevents rev-parse from discovering the parent repository.
+                    let oid = if submodule.join(".git").try_exists()? {
+                        git::text(&submodule, &["rev-parse", "--verify", "HEAD"], None)?
+                    } else {
+                        oid.clone()
+                    };
+                    (mode.clone(), oid)
+                }
+                None if submodule.join(".git").try_exists()? => {
+                    undeclared.insert(path.clone());
+                    (
+                        "160000".into(),
+                        git::text(&submodule, &["rev-parse", "--verify", "HEAD"], None)?,
+                    )
+                }
+                _ => continue,
+            }
         } else {
             // A tracked deletion is absent, not a read failure; all other errors fail closed.
             match fs::symlink_metadata(repo.join(&path)) {
@@ -218,6 +237,7 @@ fn portable(
         id: git::text(repo, &["write-tree"], Some(&index))?,
         carried,
         oversize,
+        undeclared,
         kind: "temporary-index",
     })
 }

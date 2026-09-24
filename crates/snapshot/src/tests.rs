@@ -1070,3 +1070,57 @@ fn group_execute_without_user_execute_matches_git_add() {
         "mode 0654 must match Git's user-execute-only rule"
     );
 }
+
+#[test]
+fn untracked_nested_repository_matches_git_and_has_an_exclusion_reason() {
+    let dir = repo();
+    let nested = dir.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+    git(&nested, &["init", "-q"]);
+    fs::write(nested.join("file"), "nested content\n").unwrap();
+    git(&nested, &["add", "file"]);
+    git(&nested, &["commit", "-qm", "nested root"]);
+    let temporary = tempfile::tempdir().unwrap();
+    let index = temporary.path().join("index");
+    git::run(dir.path(), &["read-tree", "HEAD"], Some(&index), None).unwrap();
+    git::run(dir.path(), &["add", "-A"], Some(&index), None).unwrap();
+    let tree = git::text(dir.path(), &["write-tree"], Some(&index)).unwrap();
+    let staged = git::text(dir.path(), &["ls-files", "--stage", "nested"], Some(&index)).unwrap();
+    let fields: Vec<_> = staged.split_whitespace().collect();
+    let (manifest, entry) = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |s| {
+            Ok(s.entries()
+                .iter()
+                .find(|entry| entry.path == "nested")
+                .map(|entry| {
+                    (
+                        s.mode("nested").unwrap().to_owned(),
+                        entry.blob.clone(),
+                        entry.class.clone(),
+                        entry.reason.clone(),
+                        entry.unread.clone(),
+                    )
+                }))
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        (manifest.tree, manifest.excluded.submodules, entry),
+        (
+            format!("sha1:{tree}"),
+            1,
+            Some((
+                fields[0].to_owned(),
+                Some(fields[1].to_owned()),
+                InventoryClass::Submodule,
+                "undeclared-nested-repository".into(),
+                Some("submodule-not-descended".into())
+            ))
+        ),
+        "nested repositories must match Git's gitlink and explicitly explain their exclusion"
+    );
+}

@@ -212,7 +212,8 @@ fn portable(
                     // Empty directories retain the recorded gitlink. Local metadata
                     // prevents rev-parse from discovering the parent repository.
                     let oid = if submodule.join(".git").try_exists()? {
-                        git::text(&submodule, &["rev-parse", "--verify", "HEAD"], None)?
+                        nested_head(&submodule)?
+                            .ok_or_else(|| SnapshotError::new("unborn-submodule", &path))?
                     } else {
                         oid.clone()
                     };
@@ -220,24 +221,9 @@ fn portable(
                 }
                 None if submodule.join(".git").try_exists()? => {
                     undeclared.insert(path.clone());
-                    let oid = match git::text(&submodule, &["rev-parse", "--verify", "HEAD"], None)
-                    {
-                        Ok(oid) => oid,
-                        Err(error) => {
-                            // Only a symbolic HEAD with no matching ref is unborn.
-                            // Other repository failures must still fail capture.
-                            let reference = git::text(&submodule, &["symbolic-ref", "HEAD"], None)?;
-                            let refs = git::text(
-                                &submodule,
-                                &["for-each-ref", "--format=%(refname)", &reference],
-                                None,
-                            )?;
-                            if refs.lines().any(|name| name == reference) {
-                                return Err(error);
-                            }
-                            unborn.insert(path.clone());
-                            continue;
-                        }
+                    let Some(oid) = nested_head(&submodule)? else {
+                        unborn.insert(path.clone());
+                        continue;
                     };
                     ("160000".into(), oid)
                 }
@@ -300,6 +286,26 @@ fn portable(
         unborn,
         kind: "temporary-index",
     })
+}
+
+// A symbolic HEAD without a matching ref is unborn; other failures propagate.
+fn nested_head(repo: &Path) -> Result<Option<String>, SnapshotError> {
+    match git::text(repo, &["rev-parse", "--verify", "HEAD"], None) {
+        Ok(oid) => Ok(Some(oid)),
+        Err(error) => {
+            let reference = git::text(repo, &["symbolic-ref", "HEAD"], None)?;
+            let refs = git::text(
+                repo,
+                &["for-each-ref", "--format=%(refname)", &reference],
+                None,
+            )?;
+            if refs.lines().any(|name| name == reference) {
+                Err(error)
+            } else {
+                Ok(None)
+            }
+        }
+    }
 }
 
 // Git does not apply clean filters to symlink payloads.

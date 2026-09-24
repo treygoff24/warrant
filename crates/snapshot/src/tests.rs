@@ -1341,3 +1341,33 @@ fn unborn_repositories_created_during_capture_force_retakes() {
         "unborn repository changes must retake once and refuse repeated changes"
     );
 }
+
+#[test]
+fn declared_unborn_submodule_matches_git_add() {
+    let dir = submodule_repo();
+    git(&dir.path().join("sub"), &["checkout", "--orphan", "unborn"]);
+    let temporary = tempfile::tempdir().unwrap();
+    let index = temporary.path().join("index");
+    git::run(dir.path(), &["read-tree", "HEAD"], Some(&index), None).unwrap();
+    let oracle = git::run(dir.path(), &["add", "-A"], Some(&index), None).unwrap_err();
+    let actual = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |_| Ok(()),
+    )
+    .map(|_| ())
+    .map_err(|error| (error.document.code, error.document.reason));
+    assert_eq!(
+        (
+            oracle
+                .document
+                .reason
+                .contains("'sub' does not have a commit checked out"),
+            actual
+        ),
+        (true, Err(("unborn-submodule".into(), "sub".into()))),
+        "declared unborn submodules must refuse like Git and name the path"
+    );
+}

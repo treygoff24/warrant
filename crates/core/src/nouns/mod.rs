@@ -127,8 +127,9 @@ pub struct Entrypoint {
 pub struct GeneratedBy {
     pub producer: String,
     pub reproducible: bool,
+    /// As declared: null when the manifest names no inputs, `[]` when it declares none.
     #[serde(default)]
-    pub inputs: Vec<String>,
+    pub inputs: Option<Vec<String>>,
 }
 
 /// Source provenance for vendored content.

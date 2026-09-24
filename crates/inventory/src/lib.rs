@@ -698,7 +698,7 @@ struct GeneratedPattern {
     matcher: GlobSet,
     pattern: String,
     producer: String,
-    inputs: Vec<String>,
+    inputs: Option<Vec<String>>,
     reproducible: bool,
 }
 struct VendoredPattern {

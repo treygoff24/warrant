@@ -130,8 +130,10 @@ pub struct ClassDeclaration {
 pub struct GeneratedDeclaration {
     pub files: Vec<String>,
     pub producer: String,
+    /// The files the producer reads. Absent (`None`) means undeclared; `[]` declares a
+    /// producer that reads nothing. The two are different claims about reproducibility.
     #[serde(default)]
-    pub inputs: Vec<String>,
+    pub inputs: Option<Vec<String>>,
     #[serde(default)]
     pub reproducible: bool,
 }

@@ -115,8 +115,12 @@
       "type": "object",
       "properties": {
         "inputs": {
-          "type": "array",
-          "default": [],
+          "description": "As declared: null when the manifest names no inputs, `[]` when it declares none.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
           "items": {
             "type": "string"
           }

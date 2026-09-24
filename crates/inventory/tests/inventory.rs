@@ -906,7 +906,7 @@ fn generated_provenance_distinguishes_same_producer_inputs() {
             .iter()
             .find(|entry| entry.path == path)
             .and_then(|entry| entry.generated_by.as_ref())
-            .map(|generated| generated.inputs.as_slice())
+            .and_then(|generated| generated.inputs.as_deref())
             .expect("generated provenance")
     };
     assert_eq!(inputs("generated/first.ts"), ["schema/first.yaml"]);
@@ -1576,4 +1576,41 @@ fn snapshot_blob_that_is_not_hexadecimal_is_rejected() {
         error.to_string(),
         format!("snapshot blob `{blob}` is not a hexadecimal object id")
     );
+}
+
+/// An entry's producer provenance keeps the manifest's distinction: no `inputs` is
+/// undeclared (null) and `inputs: []` is a producer declared to read nothing.
+#[test]
+fn generated_provenance_keeps_undeclared_and_empty_inputs_apart() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "gen/undeclared.ts", "export {};\n");
+    write(root.path(), "gen/none.ts", "export {};\n");
+    let manifest = manifest(
+        r#"  generated:
+    - files: ["gen/undeclared.ts"]
+      producer: first
+    - files: ["gen/none.ts"]
+      producer: second
+      inputs: []
+"#,
+    );
+    let built = build_on_disk(
+        root.path(),
+        &snapshot(root.path()),
+        &manifest,
+        &BuildConfig::default(),
+    )
+    .expect("generated declarations should build");
+    let inputs = |path: &str| {
+        built
+            .document
+            .entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .and_then(|entry| entry.generated_by.clone())
+            .expect("generated provenance")
+            .inputs
+    };
+    assert_eq!(inputs("gen/undeclared.ts"), None);
+    assert_eq!(inputs("gen/none.ts"), Some(Vec::new()));
 }

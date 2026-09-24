@@ -152,8 +152,12 @@
           }
         },
         "inputs": {
-          "type": "array",
-          "default": [],
+          "description": "The files the producer reads. Absent (`None`) means undeclared; `[]` declares a\nproducer that reads nothing. The two are different claims about reproducibility.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
           "items": {
             "type": "string"
           }

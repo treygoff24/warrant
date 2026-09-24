@@ -70,17 +70,23 @@ inventory:
         manifest.inventory.classes[0].replaces,
         Some(InventoryClass::Source)
     );
-    assert_eq!(manifest.inventory.generated[0].inputs, ["schema/api.yaml"]);
+    assert_eq!(
+        manifest.inventory.generated[0].inputs.as_deref(),
+        Some(&["schema/api.yaml".to_owned()][..])
+    );
 
     let generated: GeneratedBy = serde_json::from_str(
         r#"{"producer":"generate","reproducible":true,"inputs":["schema/api.yaml"]}"#,
     )
     .expect("generated provenance should deserialize");
-    assert_eq!(generated.inputs, ["schema/api.yaml"]);
+    assert_eq!(
+        generated.inputs.as_deref(),
+        Some(&["schema/api.yaml".to_owned()][..])
+    );
     let old_generated: GeneratedBy =
         serde_json::from_str(r#"{"producer":"generate","reproducible":false}"#)
             .expect("old generated provenance should keep deserializing");
-    assert!(old_generated.inputs.is_empty());
+    assert_eq!(old_generated.inputs, None);
 
     let summary: InventorySummary = serde_json::from_str(
         r#"{
@@ -136,6 +142,39 @@ inventory:
     let schema = serde_json::to_value(schema).expect("inventory schema should serialize");
     for field in ["truncated", "total", "next_cursor"] {
         assert!(schema["properties"].get(field).is_some(), "missing {field}");
+    }
+}
+
+/// An omitted `inputs` is undeclared and `inputs: []` declares an input-free producer;
+/// the manifest keeps them apart, and so does the provenance an entry carries.
+#[test]
+fn generated_inputs_distinguish_undeclared_from_declared_empty() {
+    let manifest = WarrantManifest::parse(
+        r#"
+schema_version: warrant.manifest/1
+inventory:
+  generated:
+    - files: ["gen/undeclared.ts"]
+      producer: first
+    - files: ["gen/none.ts"]
+      producer: second
+      inputs: []
+"#,
+    )
+    .expect("both spellings are valid");
+    assert_eq!(manifest.inventory.generated[0].inputs, None);
+    assert_eq!(manifest.inventory.generated[1].inputs, Some(Vec::new()));
+
+    for (inputs, json) in [(None, "null"), (Some(Vec::new()), "[]")] {
+        let provenance = GeneratedBy {
+            producer: "make".into(),
+            reproducible: true,
+            inputs,
+        };
+        let encoded = serde_json::to_value(&provenance).expect("encode provenance");
+        assert_eq!(encoded["inputs"].to_string(), json);
+        let decoded: GeneratedBy = serde_json::from_value(encoded).expect("decode provenance");
+        assert_eq!(decoded, provenance);
     }
 }
 

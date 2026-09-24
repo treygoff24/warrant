@@ -307,6 +307,116 @@ fn classification_defaults_and_snapshot_exclusions_preserve_classes() {
 }
 
 #[test]
+fn ignored_tsconfig_and_its_reference_do_not_create_units() {
+    let root = tempdir().expect("temporary repository");
+    write(
+        root.path(),
+        "tsconfig.json",
+        r#"{"references":[{"path":"node_modules/x"}]}"#,
+    );
+    write(
+        root.path(),
+        "node_modules/x/tsconfig.json",
+        "{\"compilerOptions\": {},}\n",
+    );
+    let mut listing = snapshot(root.path());
+    listing
+        .iter_mut()
+        .find(|entry| entry.path == "node_modules/x/tsconfig.json")
+        .expect("dependency tsconfig")
+        .class = InventoryClass::Ignored;
+
+    let built = build(
+        root.path(),
+        &listing,
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect("ignored dependency tsconfig is not parsed");
+    assert_eq!(built.units.len(), 1);
+    assert_eq!(built.units[0].root, ".");
+    assert_eq!(built.units[0].configuration, "tsconfig.json");
+    assert_eq!(built.document.summary.ignored_files, Some(1));
+}
+
+#[test]
+fn first_party_tsconfig_accepts_comments_and_trailing_commas() {
+    let root = tempdir().expect("temporary repository");
+    write(
+        root.path(),
+        "tsconfig.json",
+        "{\n  // compiler alias\n  \"compilerOptions\": {\"paths\": {\"@/*\": [\"src/*\",],},},\n}\n",
+    );
+    let built = build(
+        root.path(),
+        &snapshot(root.path()),
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect("TypeScript JSONC is accepted");
+    assert_eq!(built.units.len(), 1);
+    assert_eq!(built.units[0].configuration, "tsconfig.json");
+    assert_eq!(
+        built.document.summary.unit_aliases[0]
+            .alias_table
+            .as_deref(),
+        Some("tsconfig.json")
+    );
+}
+
+#[test]
+fn invalid_first_party_tsconfig_names_its_path() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "tsconfig.json", "{\"compilerOptions\": }\n");
+    let error = build(
+        root.path(),
+        &snapshot(root.path()),
+        &empty_manifest(),
+        &BuildConfig::default(),
+    )
+    .expect_err("invalid JSONC must fail");
+    assert!(matches!(
+        error,
+        InventoryError::InvalidDeclaration { reason }
+            if reason.starts_with("invalid `tsconfig.json`:")
+    ));
+}
+
+#[test]
+fn excluded_declarations_do_not_supply_units_or_entrypoints() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "package.json", r#"{"main":"src/index.ts"}"#);
+    write(root.path(), "src/index.ts", "export {};\n");
+    write(root.path(), "dist/tsconfig.json", "not JSON");
+    write(root.path(), "dist/package.json", "not JSON");
+    write(root.path(), "vendor/tsconfig.json", "not JSON");
+    write(root.path(), "vendor/package.json", "not JSON");
+    write(root.path(), "node_modules/x/package.json", "not JSON");
+    let mut listing = snapshot(root.path());
+    listing
+        .iter_mut()
+        .find(|entry| entry.path == "node_modules/x/package.json")
+        .expect("ignored dependency package")
+        .class = InventoryClass::Ignored;
+    let manifest = manifest(
+        "  vendored:\n    - files: ['vendor/**']\n      source: vendor\n      version: '1'\n",
+    );
+
+    let built = build(root.path(), &listing, &manifest, &BuildConfig::default())
+        .expect("excluded declarations are not parsed");
+    assert_eq!(built.units.len(), 1);
+    assert_eq!(built.units[0].configuration, "package.json");
+    let source = built
+        .document
+        .entries
+        .iter()
+        .find(|entry| entry.path == "src/index.ts")
+        .expect("package main target");
+    assert_eq!(source.entrypoints.len(), 1);
+    assert_eq!(source.entrypoints[0].kind, "package-main");
+}
+
+#[test]
 fn colocated_test_keeps_its_class_and_owner() {
     let root = tempdir().expect("temporary repository");
     write(root.path(), "src/service.test.ts", "export {};\n");

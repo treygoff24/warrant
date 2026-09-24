@@ -208,6 +208,7 @@ fn exclusions_preserve_object_identity_and_never_follow_external_links() {
         ],
     );
     let tree = git(dir.path(), &["write-tree"]);
+    fs::create_dir(dir.path().join("sub")).unwrap();
     let config = SnapshotConfig { max_file_bytes: 32 };
     for kind in [SnapshotKind::Index, SnapshotKind::Worktree] {
         let (manifest, ()) = capture(dir.path(), kind, None, &config, |s| {
@@ -642,6 +643,74 @@ fn deleted_files_and_file_to_directory_replacements_match_git_tree() {
         manifest.tree,
         format!("sha1:{}", git(dir.path(), &["write-tree"]))
     );
+}
+
+fn submodule_repo() -> TempDir {
+    let dir = repo();
+    let source = repo();
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            source.path().to_str().unwrap(),
+            "sub",
+        ],
+    );
+    git(dir.path(), &["commit", "-qam", "submodule"]);
+    dir
+}
+
+fn assert_submodule_tree_matches_git(repo: &Path) {
+    let (manifest, ()) = capture(
+        repo,
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |_| Ok(()),
+    )
+    .unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let index = temporary.path().join("index");
+    let original = git::run(repo, &["ls-files", "--stage", "-z"], None, None).unwrap();
+    git::run(repo, &["read-tree", "HEAD"], Some(&index), None).unwrap();
+    git::run(repo, &["add", "-A"], Some(&index), None).unwrap();
+    let expected = git::text(repo, &["write-tree"], Some(&index)).unwrap();
+    assert_eq!(
+        (
+            manifest.tree,
+            git::run(repo, &["ls-files", "--stage", "-z"], None, None).unwrap()
+        ),
+        (format!("sha1:{expected}"), original),
+        "worktree gitlinks must match git add -A without changing the real index"
+    );
+}
+
+#[test]
+fn advanced_submodule_checkout_matches_git_add() {
+    let dir = submodule_repo();
+    let sub = dir.path().join("sub");
+    fs::write(sub.join("file"), "advanced\n").unwrap();
+    git(&sub, &["commit", "-qam", "advance"]);
+    assert_submodule_tree_matches_git(dir.path());
+}
+
+#[test]
+fn removed_submodule_checkout_matches_git_add() {
+    let dir = submodule_repo();
+    fs::remove_dir_all(dir.path().join("sub")).unwrap();
+    assert_submodule_tree_matches_git(dir.path());
+}
+
+#[test]
+fn empty_submodule_directory_matches_git_add() {
+    let dir = submodule_repo();
+    fs::remove_dir_all(dir.path().join("sub")).unwrap();
+    fs::create_dir(dir.path().join("sub")).unwrap();
+    assert_submodule_tree_matches_git(dir.path());
 }
 
 #[test]

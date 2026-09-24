@@ -123,7 +123,7 @@ fn portable(
         if fields.len() != 4 {
             return Err(SnapshotError::new("invalid-index", "invalid entry"));
         }
-        let carry = fields[0] == "S" || fields[1] == "160000";
+        let carry = fields[0] == "S";
         if carry {
             carried.insert(path.to_owned());
         }
@@ -152,6 +152,19 @@ fn portable(
                 oversize.insert(path.clone());
             }
             (mode.clone(), oid.clone())
+        } else if let Some((mode, oid, _)) = &indexed
+            && mode == "160000"
+            && fs::symlink_metadata(repo.join(&path)).is_ok_and(|metadata| metadata.is_dir())
+        {
+            let submodule = repo.join(&path);
+            // An unpopulated directory retains the recorded gitlink. Only ask
+            // Git for HEAD with local repository metadata, avoiding parent discovery.
+            let oid = if submodule.join(".git").try_exists()? {
+                git::text(&submodule, &["rev-parse", "--verify", "HEAD"], None)?
+            } else {
+                oid.clone()
+            };
+            (mode.clone(), oid)
         } else {
             // A tracked deletion is absent, not a read failure; all other errors fail closed.
             match fs::symlink_metadata(repo.join(&path)) {

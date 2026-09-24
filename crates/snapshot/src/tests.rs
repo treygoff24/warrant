@@ -1254,7 +1254,7 @@ fn unborn_nested_repository_is_recorded_without_descending() {
     let temporary = tempfile::tempdir().unwrap();
     let index = temporary.path().join("index");
     git::run(dir.path(), &["read-tree", "HEAD"], Some(&index), None).unwrap();
-    let refused = git::run(dir.path(), &["add", "-A"], Some(&index), None).unwrap_err();
+    observe_git_add(dir.path(), &index, "vendor/nested");
     let captured = capture(
         dir.path(),
         SnapshotKind::Worktree,
@@ -1279,17 +1279,9 @@ fn unborn_nested_repository_is_recorded_without_descending() {
     .map(|(manifest, entries)| (manifest.excluded.submodules, entries))
     .map_err(|error| error.to_string());
     assert_eq!(
-        (
-            untracked.as_str(),
-            refused
-                .document
-                .reason
-                .contains("does not have a commit checked out"),
-            captured
-        ),
+        (untracked.as_str(), captured),
         (
             "?? vendor/nested/",
-            true,
             Ok((
                 1,
                 vec![(
@@ -1301,7 +1293,7 @@ fn unborn_nested_repository_is_recorded_without_descending() {
                 )]
             ))
         ),
-        "an unborn nested repository must be recorded without a blob or descendant entries even though Git refuses staging"
+        "an unborn nested repository must be recorded without a blob or descendant entries regardless of Git staging"
     );
 }
 
@@ -1342,14 +1334,18 @@ fn unborn_repositories_created_during_capture_force_retakes() {
     );
 }
 
+// Git 2.47.3 refuses unborn declared checkouts; CI's Git 2.55.0 accepts them.
+// Success must preserve the recorded gitlink. Warrant refuses on both (F46).
 #[test]
-fn declared_unborn_submodule_matches_git_add() {
+fn declared_unborn_submodule_is_refused_on_every_git() {
     let dir = submodule_repo();
-    git(&dir.path().join("sub"), &["checkout", "--orphan", "unborn"]);
     let temporary = tempfile::tempdir().unwrap();
     let index = temporary.path().join("index");
     git::run(dir.path(), &["read-tree", "HEAD"], Some(&index), None).unwrap();
-    let oracle = git::run(dir.path(), &["add", "-A"], Some(&index), None).unwrap_err();
+    // Exercise the success observer even on Git versions that refuse unborn HEADs.
+    observe_git_add(dir.path(), &index, "sub");
+    git(&dir.path().join("sub"), &["checkout", "--orphan", "unborn"]);
+    observe_git_add(dir.path(), &index, "sub");
     let actual = capture(
         dir.path(),
         SnapshotKind::Worktree,
@@ -1360,16 +1356,29 @@ fn declared_unborn_submodule_matches_git_add() {
     .map(|_| ())
     .map_err(|error| (error.document.code, error.document.reason));
     assert_eq!(
-        (
-            oracle
-                .document
-                .reason
-                .contains("'sub' does not have a commit checked out"),
-            actual
-        ),
-        (true, Err(("unborn-submodule".into(), "sub".into()))),
-        "declared unborn submodules must refuse like Git and name the path"
+        actual,
+        Err(("unborn-submodule".into(), "sub".into())),
+        "Warrant must refuse an unborn declared submodule and name its path on every Git version"
     );
+}
+
+fn observe_git_add(repo: &Path, index: &Path, path: &str) {
+    let seeded = git::text(repo, &["write-tree"], Some(index)).unwrap();
+    let entry = git::text(repo, &["ls-tree", &seeded, "--", path], None).unwrap();
+    match git::run(repo, &["add", "-A"], Some(index), None) {
+        Err(error) => assert!(
+            error.document.reason.contains(path),
+            "Git's staging refusal must name {path}: {error}"
+        ),
+        Ok(_) => {
+            let tree = git::text(repo, &["write-tree"], Some(index)).unwrap();
+            assert_eq!(
+                git::text(repo, &["ls-tree", &tree, "--", path], None).unwrap(),
+                entry,
+                "successful Git staging must preserve the seeded nested-repository entry"
+            );
+        }
+    }
 }
 
 #[cfg(unix)]

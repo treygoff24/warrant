@@ -1,0 +1,19 @@
+{
+  "schema_version": "warrant.inventory/1",
+  "entries": [],
+  "summary": {
+    "files": 0,
+    "by_class": {},
+    "unread": [],
+    "unowned_source": [],
+    "unknown": [],
+    "ignored_files": 0,
+    "submodules": [],
+    "unit_aliases": [],
+    "generated_absent": [],
+    "generated_drift": null
+  },
+  "truncated": false,
+  "total": 0,
+  "next_cursor": null
+}

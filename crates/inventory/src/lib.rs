@@ -527,7 +527,7 @@ pub fn build(
     );
     let document = InventoryDocument {
         schema_version: "warrant.inventory/1".into(),
-        snapshot: Some(snapshot.manifest.clone()),
+        snapshot: snapshot.manifest.clone(),
         total: entries.len() as u64,
         entries,
         summary,
@@ -729,9 +729,7 @@ pub fn record_verification(
 /// snapshot identity. The capture time is excluded: it names when, not what, was read.
 pub fn inventory_digest(document: &InventoryDocument) -> Result<String, InventoryError> {
     let mut document = document.clone();
-    if let Some(snapshot) = &mut document.snapshot {
-        snapshot.taken_at.clear();
-    }
+    document.snapshot.taken_at.clear();
     let bytes =
         serde_json::to_vec(&document).map_err(|error| InventoryError::InvalidDeclaration {
             reason: format!("inventory serialization failed: {error}"),

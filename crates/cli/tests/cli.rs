@@ -1793,7 +1793,7 @@ fn object_snapshot_inventories_leave_ignored_files_unknown() {
                     document.summary.ignored_files, captured.excluded.ignored_files,
                     "{kind:?} inventory and snapshot disagree on the ignored count"
                 );
-                assert_eq!(document.snapshot.as_ref(), Some(&captured), "{kind:?}");
+                assert_eq!(document.snapshot, captured, "{kind:?}");
             }
         },
     );

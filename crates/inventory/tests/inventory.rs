@@ -1574,11 +1574,7 @@ fn ignored_count_is_unknown_outside_the_worktree() {
         )
         .expect("inventory");
         assert_eq!(built.document.summary.ignored_files, expected, "{kind:?}");
-        assert_eq!(
-            built.document.snapshot.as_ref(),
-            Some(&snapshot),
-            "{kind:?}"
-        );
+        assert_eq!(built.document.snapshot, snapshot, "{kind:?}");
     }
 }
 

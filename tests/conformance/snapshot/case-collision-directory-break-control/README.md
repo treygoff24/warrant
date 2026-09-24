@@ -5,3 +5,6 @@ Control: two paths whose only case difference is a directory component fail.
 Whole-path-only case folding misses this pair and must fail this expectation.
 The case-collision-positive and case-collision-negative fixtures retain the
 successful distinct-path controls; case-collision-break-control covers filenames.
+
+`Src/one.ts` is not checked in: the runner writes it and stages its blob beside the
+checked-in `src/two.ts` (`setup.case_variant_files`).

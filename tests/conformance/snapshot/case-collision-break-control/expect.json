@@ -1,4 +1,5 @@
 {
   "driver":"cli","args":["snapshot","--worktree"],"exit_code":2,
+  "setup":{"case_variant_files":{"src/Case.ts":"export const upper = true;\n"}},
   "error":{"code":"case-collision","reason_contains":"Case.ts"}
 }

@@ -32,6 +32,12 @@ struct Setup {
     stage_files: BTreeMap<String, String>,
     #[serde(default)]
     worktree_files: BTreeMap<String, String>,
+    /// Paths that differ only by case from a checked-in fixture path. The runner writes
+    /// each one and stages its blob with `update-index --cacheinfo`, so the pair is never
+    /// checked in: a clone on a case-insensitive filesystem would drop one of them, and
+    /// Warrant's own snapshot would report the collision.
+    #[serde(default)]
+    case_variant_files: BTreeMap<String, String>,
     #[serde(default)]
     symlinks: BTreeMap<String, String>,
     #[serde(default)]
@@ -425,6 +431,19 @@ fn apply_setup(repository: &Path, temporary: &Path, setup: &Setup) {
     for (path, contents) in &setup.worktree_files {
         write_file(repository, path, contents.as_bytes());
     }
+    for (path, contents) in &setup.case_variant_files {
+        write_file(repository, path, contents.as_bytes());
+        let blob = hash_object(repository, contents.as_bytes());
+        git(
+            repository,
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("100644,{blob},{path}"),
+            ],
+        );
+    }
     for (path, target) in &setup.symlinks {
         let link = repository.join(path);
         if let Some(parent) = link.parent() {
@@ -464,6 +483,36 @@ fn apply_setup(repository: &Path, temporary: &Path, setup: &Setup) {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+/// Write `contents` as a blob without reading any worktree path.
+fn hash_object(repository: &Path, contents: &[u8]) -> String {
+    use std::io::Write as _;
+    let mut command = Command::new("git");
+    command
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(repository)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    neutralize_git_environment(&mut command);
+    let mut child = command.spawn().expect("run git hash-object");
+    child
+        .stdin
+        .take()
+        .expect("hash-object stdin")
+        .write_all(contents)
+        .expect("write blob contents");
+    let output = child.wait_with_output().expect("wait for git hash-object");
+    assert!(
+        output.status.success(),
+        "git hash-object: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("git UTF-8")
+        .trim()
+        .to_owned()
 }
 
 fn write_file(root: &Path, path: &str, contents: &[u8]) {

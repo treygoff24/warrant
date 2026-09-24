@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use warrant_core::{
     manifest::WarrantManifest,
     nouns::{GeneratedDrift, InventoryClass, InventoryDocument, SnapshotKind},
+    policy::EffectivePolicy,
 };
 use warrant_inventory::{BuildConfig, ClassRule, ModuleSelector};
 
@@ -126,6 +127,18 @@ struct Expectation {
     git_ignored: Option<Vec<String>>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyExpectation {
+    exit_code: i32,
+    #[serde(default)]
+    equal_policy_digest: Option<bool>,
+    #[serde(default)]
+    source_layout_differs: Option<bool>,
+    #[serde(default)]
+    error: Option<ErrorExpect>,
+}
+
 #[derive(Debug)]
 struct Observation {
     exit_code: i32,
@@ -143,6 +156,11 @@ fn inventory_conformance() {
 #[test]
 fn snapshot_conformance() {
     run_area("snapshot");
+}
+
+#[test]
+fn policy_conformance() {
+    run_policy_area();
 }
 
 #[test]
@@ -347,6 +365,143 @@ fn run_area(area: &str) {
     for case in cases {
         run_case(&case);
     }
+}
+
+fn run_policy_area() {
+    let root = fixture_root().join("policy");
+    let mut cases = fs::read_dir(&root)
+        .unwrap_or_else(|error| panic!("read {}: {error}", root.display()))
+        .map(|entry| entry.expect("policy fixture case").path())
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    cases.sort();
+    let actual = cases
+        .iter()
+        .map(|case| case.file_name().unwrap().to_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        actual,
+        [
+            "digest-stability",
+            "enforcement-unsupported",
+            "structural-conflict",
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>(),
+        "policy fixture census differs"
+    );
+    for case in cases {
+        run_policy_case(&case);
+    }
+}
+
+fn run_policy_case(case: &Path) {
+    assert!(
+        case.join("README.md").is_file(),
+        "{} lacks README.md",
+        case.display()
+    );
+    assert!(case.join("repo").is_dir(), "{} lacks repo/", case.display());
+    assert!(
+        case.join("warrant").is_dir(),
+        "{} lacks warrant/",
+        case.display()
+    );
+    let expectation: PolicyExpectation =
+        serde_json::from_slice(&fs::read(case.join("expect.json")).expect("read expect.json"))
+            .expect("parse policy expect.json");
+
+    if expectation.equal_policy_digest.is_some() || expectation.source_layout_differs.is_some() {
+        let original = run_policy_variant(case, "original");
+        let reformatted = run_policy_variant(case, "reformatted");
+        check_policy_observation(&expectation, &original)
+            .unwrap_or_else(|reason| panic!("{} original: {reason}", case.display()));
+        check_policy_observation(&expectation, &reformatted)
+            .unwrap_or_else(|reason| panic!("{} reformatted: {reason}", case.display()));
+        let original = effective_policy(&original);
+        let reformatted = effective_policy(&reformatted);
+        if let Some(expected) = expectation.equal_policy_digest {
+            assert_eq!(
+                original.policy_digest == reformatted.policy_digest,
+                expected,
+                "{} policy digest equality differs",
+                case.display()
+            );
+        }
+        if let Some(expected) = expectation.source_layout_differs {
+            assert_eq!(
+                original.sources != reformatted.sources,
+                expected,
+                "{} source layout comparison differs",
+                case.display()
+            );
+        }
+    } else {
+        let observation = run_policy_fixture(case, None);
+        check_policy_observation(&expectation, &observation)
+            .unwrap_or_else(|reason| panic!("{}: {reason}", case.display()));
+    }
+}
+
+fn run_policy_variant(case: &Path, variant: &str) -> Observation {
+    run_policy_fixture(case, Some(variant))
+}
+
+fn run_policy_fixture(case: &Path, variant: Option<&str>) -> Observation {
+    let temporary = tempfile::tempdir().expect("temporary policy conformance case");
+    let repository = temporary.path().join("repo");
+    copy_tree(&case.join("repo"), &repository);
+    let source = variant
+        .map(|variant| case.join("warrant").join(variant))
+        .unwrap_or_else(|| case.join("warrant"));
+    copy_tree(&source, &repository.join("warrant/policy"));
+    initialize_repository(&repository, &[]);
+    run_cli(
+        &repository,
+        temporary.path(),
+        &["policy".into(), "compile".into()],
+    )
+}
+
+fn check_policy_observation(
+    expectation: &PolicyExpectation,
+    observation: &Observation,
+) -> Result<(), String> {
+    if observation.exit_code != expectation.exit_code {
+        return Err(format!(
+            "exit code {}, expected {} (stderr: {})",
+            observation.exit_code, expectation.exit_code, observation.stderr
+        ));
+    }
+    if let Some(expected) = &expectation.error {
+        let document = observation
+            .document
+            .as_ref()
+            .ok_or("missing policy error document")?;
+        if document["code"] != expected.code {
+            return Err(format!(
+                "error code was {}, expected {}",
+                document["code"], expected.code
+            ));
+        }
+        if let Some(needle) = &expected.reason_contains {
+            let reason = document["reason"].as_str().unwrap_or_default();
+            if !reason.contains(needle) {
+                return Err(format!("error reason {reason:?} lacks {needle:?}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn effective_policy(observation: &Observation) -> EffectivePolicy {
+    serde_json::from_value(
+        observation
+            .document
+            .clone()
+            .expect("policy compile must print an effective policy"),
+    )
+    .expect("typed effective policy")
 }
 
 fn run_case(case: &Path) {

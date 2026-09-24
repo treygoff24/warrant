@@ -31,25 +31,24 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
     let cache_root = cache::root()?;
     let (kind, revision) = args.source();
     // A commit revision is resolved once, and the manifest and the capture both read that
-    // commit. An unresolvable revision goes to capture as given, which reports it.
+    // commit id; a revision that names no commit ends the run as `missing-commit`.
     let commit = match (&kind, &revision) {
-        (SnapshotKind::Commit, Some(revision)) => resolve_commit(&root, revision)?,
+        (SnapshotKind::Commit, Some(revision)) => Some(resolve_commit(&root, revision)?),
         _ => None,
     };
     let governing = load_snapshot_manifest(&root, &kind, revision.as_deref(), commit.as_deref())?;
-    let (manifest, ()) = warrant_snapshot::capture(
-        &root,
-        kind,
-        commit.as_deref().or(revision.as_deref()),
-        &governing.snapshot,
-        |_| {
+    let object = match kind {
+        SnapshotKind::Commit => commit.as_deref(),
+        _ => revision.as_deref(),
+    };
+    let (manifest, ()) =
+        warrant_snapshot::capture(&root, kind, object, &governing.snapshot, |_| {
             cancel::check().map_err(|error| warrant_snapshot::SnapshotError {
                 document: error.document.clone(),
             })?;
             Ok(())
-        },
-    )
-    .map_err(snapshot_error)?;
+        })
+        .map_err(snapshot_error)?;
     cancel::check()?;
     let bytes = serde_json::to_vec(&manifest)
         .map_err(|error| CommandError::internal(format!("could not encode snapshot: {error}")))?;

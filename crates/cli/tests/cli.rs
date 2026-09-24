@@ -2150,3 +2150,88 @@ fn verify_generated_reports_a_symlink_output_reproduced_as_a_regular_file() {
     assert_eq!(drift, ["gen/link"]);
     assert_eq!(code, Some(1));
 }
+
+/// B37: a `--commit` revision that names no commit when first resolved is terminal. A
+/// Git wrapper creates the ref just after the first lookup of the revision fails, so any
+/// later lookup (the manifest loader's or capture's) would find a commit.
+#[cfg(unix)]
+#[test]
+fn commit_snapshot_of_a_revision_created_mid_run_is_missing_commit() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repository = repository();
+    let root = repository.path();
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\nsnapshot:\n  max_file_bytes: 100\n",
+    )
+    .expect("manifest");
+    fs::write(root.join("big.txt"), "x".repeat(200)).expect("big file");
+    git(root, &["add", "warrant/warrant.yaml", "big.txt"]);
+    commit(root, "late commit");
+    let late = git(root, &["rev-parse", "HEAD"]);
+
+    let control = tempfile::tempdir().expect("git control");
+    let real_git = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .expect("locate real git");
+    assert!(real_git.status.success());
+    let wrapper = control.path().join("git");
+    fs::write(
+        &wrapper,
+        r#"#!/bin/sh
+case " $* " in
+  *" late^{"*)
+    if [ ! -e "$WARRANT_TEST_CONTROL/created" ]; then
+      "$WARRANT_TEST_GIT" "$@"
+      result=$?
+      "$WARRANT_TEST_GIT" -C "$WARRANT_TEST_ROOT" update-ref refs/heads/late "$WARRANT_TEST_LATE" || exit 97
+      : > "$WARRANT_TEST_CONTROL/created"
+      exit "$result"
+    fi ;;
+esac
+exec "$WARRANT_TEST_GIT" "$@"
+"#,
+    )
+    .expect("git wrapper");
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).expect("executable wrapper");
+    let mut paths = vec![control.path().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").expect("PATH"),
+    ));
+    let cache = tempfile::tempdir().expect("temp cache");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_warrant"));
+    neutralize_git_environment(&mut command);
+    let output = command
+        .args(["snapshot", "--commit", "late"])
+        .current_dir(root)
+        .env("XDG_CACHE_HOME", cache.path())
+        .env("PATH", std::env::join_paths(paths).expect("fixture PATH"))
+        .env("WARRANT_TEST_CONTROL", control.path())
+        .env("WARRANT_TEST_ROOT", root)
+        .env("WARRANT_TEST_LATE", &late)
+        .env(
+            "WARRANT_TEST_GIT",
+            String::from_utf8(real_git.stdout).expect("git path").trim(),
+        )
+        .output()
+        .expect("run warrant");
+    // Precondition: the ref appeared during the run.
+    assert!(
+        control.path().join("created").exists(),
+        "the ref was never created"
+    );
+    assert_eq!(git(root, &["rev-parse", "late"]), late);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{}{stderr}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("error document");
+    assert_eq!(error["code"], "missing-commit", "{error}");
+    assert_eq!(error["reason"], "late", "{error}");
+}

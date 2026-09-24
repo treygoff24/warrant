@@ -25,9 +25,10 @@ pub fn load_manifest(root: &Path) -> crate::error::Result<WarrantManifest> {
 }
 
 /// The commit `revision` names, resolved once so the governing manifest and the capture
-/// read the same commit even if a ref moves between them. `None` when it names no
-/// commit: capture then reports `missing-commit` for the revision as given.
-pub fn resolve_commit(root: &Path, revision: &str) -> crate::error::Result<Option<String>> {
+/// read the same commit even if a ref moves or appears between them. A revision that
+/// names no commit is `missing-commit`, naming the revision as given; nothing after this
+/// looks the revision up again.
+pub fn resolve_commit(root: &Path, revision: &str) -> crate::error::Result<String> {
     let peeled = format!("{revision}^{{commit}}");
     let output = repository::git_in(
         root,
@@ -39,10 +40,10 @@ pub fn resolve_commit(root: &Path, revision: &str) -> crate::error::Result<Optio
             &peeled,
         ],
     )?;
-    Ok(output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned()))
+    if !output.status.success() {
+        return Err(CommandError::evaluation("missing-commit", revision, None));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 /// The manifest a snapshot of `kind` is governed by. Object snapshots read it from the
@@ -60,8 +61,11 @@ pub fn load_snapshot_manifest(
         SnapshotKind::Index => (format!(":{MANIFEST_PATH}"), index_blob(root)?),
         SnapshotKind::Commit => {
             let revision = revision.unwrap_or("HEAD");
+            let commit = commit.ok_or_else(|| {
+                CommandError::internal("a commit snapshot's manifest needs its resolved commit")
+            })?;
             let location = format!("{revision}:{MANIFEST_PATH}");
-            let blob = tree_blob(root, commit.unwrap_or(revision), &location)?;
+            let blob = tree_blob(root, commit, &location)?;
             (location, blob)
         }
         SnapshotKind::Tree => match revision {

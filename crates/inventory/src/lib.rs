@@ -62,6 +62,11 @@ pub struct ReadError {
 /// Reads captured bytes for one snapshot path.
 pub type Reader<'a> = &'a dyn Fn(&str) -> Result<Vec<u8>, ReadError>;
 
+/// The captured path a snapshot path names once its symlinks are followed inside the
+/// snapshot: the path itself for a regular file, and the snapshot's refusal (for example
+/// `external-symlink`) when a link leaves the tree or its target is unread.
+pub type Resolver<'a> = &'a dyn Fn(&str) -> Result<String, ReadError>;
+
 /// The captured snapshot inventory classifies: its identity, path listing and bytes.
 /// Discovery reads configuration only through `read`, never from the live filesystem.
 #[derive(Clone, Copy)]
@@ -69,57 +74,12 @@ pub struct CapturedSnapshot<'a> {
     pub manifest: &'a SnapshotManifest,
     pub entries: &'a [InventoryEntry],
     pub read: Reader<'a>,
+    /// Follows a captured symlink to its captured target. Configuration is read through
+    /// it, so a linked `package.json` declares what its target declares.
+    pub resolve: Resolver<'a>,
     /// Captured paths Git does not track (untracked, non-ignored worktree files). Every
     /// entry of an index, commit or tree snapshot is tracked, so this is empty for them.
     pub untracked: &'a BTreeSet<String>,
-}
-
-/// The untracked, non-ignored paths a capture of `kind` includes: the worktree's
-/// `git ls-files --others --exclude-standard`, the same listing the capture adds to the
-/// index; nothing for an object snapshot, whose entries all come from Git objects.
-pub fn untracked_paths(
-    root: &Path,
-    kind: &SnapshotKind,
-) -> Result<BTreeSet<String>, InventoryError> {
-    if *kind != SnapshotKind::Worktree {
-        return Ok(BTreeSet::new());
-    }
-    let mut command = Command::new("git");
-    command
-        .arg("-C")
-        .arg(root)
-        .args(["ls-files", "--others", "--exclude-standard", "-z"])
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_NO_REPLACE_OBJECTS", "1");
-    for variable in [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_COMMON_DIR",
-        "GIT_INDEX_FILE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    ] {
-        command.env_remove(variable);
-    }
-    let output = command
-        .output()
-        .map_err(|error| io_error("git ls-files --others", error))?;
-    if !output.status.success() {
-        return Err(io_error(
-            "git ls-files --others",
-            String::from_utf8_lossy(&output.stderr).trim(),
-        ));
-    }
-    output
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter(|record| !record.is_empty())
-        .map(|record| {
-            std::str::from_utf8(record)
-                .map(str::to_owned)
-                .map_err(|_| io_error("git ls-files --others", "non-UTF-8 path"))
-        })
-        .collect()
 }
 
 /// Result of classifying a snapshot tree.
@@ -293,7 +253,9 @@ pub fn build(
     config: &BuildConfig,
 ) -> Result<BuiltInventory, InventoryError> {
     let snapshot_entries = snapshot.entries;
-    let read = snapshot.read;
+    // Configuration is read at its resolved path; units and errors keep the listed path.
+    let resolved_read = |path: &str| (snapshot.read)(&(snapshot.resolve)(path)?);
+    let read: Reader<'_> = &resolved_read;
     // Spec 5.6: the worktree snapshot records an untracked nested repository as the
     // gitlink Git would stage, with this reason. It is not a declared submodule.
     if let Some(path) = snapshot_entries
@@ -573,6 +535,11 @@ pub fn discover_units(root: &Path) -> Result<Vec<Unit>, InventoryError> {
 /// A captured path's Git mode (`100644`, `100755`, `120000`), as the snapshot recorded it.
 pub type ModeOf<'a> = &'a dyn Fn(&str) -> Option<String>;
 
+/// The prefixed blob id (`sha1:<oid>`) Git assigns `bytes` at a captured path, under the
+/// repository's attributes and the path's captured mode. The CLI supplies it, so this
+/// crate keeps no Git dependency.
+pub type HashOf<'a> = &'a dyn Fn(&str, &[u8]) -> Result<String, ReadError>;
+
 /// Spec 5.3: re-run each reproducible producer over a copy of the captured snapshot and
 /// compare what it writes with the captured bytes. The copy is the snapshot's readable,
 /// non-ignored entries in their captured bytes and modes, never the disk tree: ignored
@@ -581,6 +548,7 @@ pub type ModeOf<'a> = &'a dyn Fn(&str) -> Option<String>;
 pub fn verify_generated(
     snapshot: CapturedSnapshot<'_>,
     mode: ModeOf<'_>,
+    hash: HashOf<'_>,
     manifest: &WarrantManifest,
 ) -> Result<Vec<GeneratedIssue>, InventoryError> {
     let declarations = compile_generated(manifest)?;
@@ -660,9 +628,7 @@ pub fn verify_generated(
             let code = if !present.contains(path.as_str()) {
                 Some(GeneratedIssueCode::GeneratedAbsent)
             } else if !(reproduced.is_file() || reproduced.is_symlink())
-                // A refused read (an oversize or external-symlink output) is an error,
-                // never a silent pass.
-                || digest_bytes(&read_captured(snapshot.read, &path)?) != blob_id(&reproduced)?
+                || captured_blob(snapshot, &path)? != reproduced_blob(hash, &path, &reproduced)?
             {
                 Some(GeneratedIssueCode::GeneratedDrift)
             } else {
@@ -1165,14 +1131,34 @@ fn prefixed_git_oid(blob: &Option<String>) -> Result<Option<String>, InventoryEr
     Ok(Some(format!("{algorithm}:{oid}")))
 }
 
-fn blob_id(path: &Path) -> Result<String, InventoryError> {
-    let bytes = if path.is_symlink() {
-        fs::read_link(path).map(|target| target.to_string_lossy().into_owned().into_bytes())
+/// The captured output's Git blob id. A refused read (an oversize or external-symlink
+/// output) is an error, never a silent pass.
+fn captured_blob(snapshot: CapturedSnapshot<'_>, path: &str) -> Result<String, InventoryError> {
+    read_captured(snapshot.read, path)?;
+    let blob = snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.path == path)
+        .and_then(|entry| entry.blob.clone());
+    prefixed_git_oid(&blob)?.ok_or_else(|| InventoryError::InvalidDeclaration {
+        reason: format!("captured output `{path}` has no blob"),
+    })
+}
+
+/// The blob id Git would assign the reproduced output at `path`; a symlink hashes its
+/// target path, as Git stores it.
+fn reproduced_blob(hash: HashOf<'_>, path: &str, file: &Path) -> Result<String, InventoryError> {
+    let bytes = if file.is_symlink() {
+        fs::read_link(file).map(|target| target.to_string_lossy().into_owned().into_bytes())
     } else {
-        fs::read(path)
+        fs::read(file)
     }
     .map_err(|error| io_error(path, error))?;
-    Ok(digest_bytes(&bytes))
+    hash(path, &bytes).map_err(|error| InventoryError::Read {
+        path: path.into(),
+        code: error.code,
+        reason: error.reason,
+    })
 }
 
 fn digest_bytes(bytes: &[u8]) -> String {

@@ -39,6 +39,19 @@ fn snapshot_entry(path: &str, class: InventoryClass, blob: Option<&str>) -> Inve
     }
 }
 
+/// The Git-style SHA-256 blob id of `bytes`, as the fixture listing records it.
+fn git_sha256(bytes: &[u8]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(format!("blob {}\0", bytes.len()));
+    hash.update(bytes);
+    let digest: String = hash
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("sha256:{digest}")
+}
+
 fn snapshot(root: &Path) -> Vec<InventoryEntry> {
     fn collect(root: &Path, directory: &Path, entries: &mut Vec<InventoryEntry>) {
         for item in fs::read_dir(directory).expect("read fixture directory") {
@@ -54,21 +67,11 @@ fn snapshot(root: &Path) -> Vec<InventoryEntry> {
                     .replace('\\', "/");
                 // Inventory consumes captured blobs and read failures, not live file bytes.
                 let entry = match fs::read(&path) {
-                    Ok(bytes) => {
-                        let mut hash = Sha256::new();
-                        hash.update(format!("blob {}\0", bytes.len()));
-                        hash.update(bytes);
-                        let digest: String = hash
-                            .finalize()
-                            .iter()
-                            .map(|byte| format!("{byte:02x}"))
-                            .collect();
-                        snapshot_entry(
-                            &relative,
-                            InventoryClass::Unknown,
-                            Some(&format!("sha256:{digest}")),
-                        )
-                    }
+                    Ok(bytes) => snapshot_entry(
+                        &relative,
+                        InventoryClass::Unknown,
+                        Some(&git_sha256(&bytes)),
+                    ),
                     Err(error) => {
                         let mut entry = snapshot_entry(&relative, InventoryClass::Unread, None);
                         entry.unread = Some(error.to_string());
@@ -120,14 +123,18 @@ fn verify_on_disk(
         })
     };
     let mode = |_: &str| Some("100644".to_owned());
+    // The fixture listing's blob ids are Git-style SHA-256 ids; hash reproduced bytes alike.
+    let hash = |_: &str, bytes: &[u8]| Ok(git_sha256(bytes));
     verify_generated(
         CapturedSnapshot {
             manifest: &worktree_manifest(),
             entries: listing,
             read: &read,
+            resolve: &|path: &str| Ok(path.to_owned()),
             untracked: &BTreeSet::new(),
         },
         &mode,
+        &hash,
         manifest,
     )
 }
@@ -152,6 +159,7 @@ fn build_on_disk_with_untracked(
             manifest: &worktree_manifest(),
             entries: listing,
             read: &read,
+            resolve: &|path: &str| Ok(path.to_owned()),
             untracked,
         },
         manifest,
@@ -1584,6 +1592,7 @@ fn ignored_count_is_unknown_outside_the_worktree() {
                 manifest: &snapshot,
                 entries: &listing,
                 read: &reader,
+                resolve: &|path: &str| Ok(path.to_owned()),
                 untracked: &BTreeSet::new(),
             },
             &manifest,
@@ -1723,5 +1732,60 @@ fn verification_absences_join_discovery_rows_without_duplicates() {
             path: "gen/a.ts".into(),
             producer: "gen".into(),
         }])
+    );
+}
+
+/// B26: comparing blob identities still reads the captured output first, so an output the
+/// snapshot refuses (here oversize) is an error with the snapshot's code, never a pass.
+#[test]
+fn refused_generated_output_read_is_an_error() {
+    let root = tempdir().expect("temporary repository");
+    write(root.path(), "gen/big.txt", "big\n");
+    let mut listing = snapshot(root.path());
+    let output = listing
+        .iter_mut()
+        .find(|entry| entry.path == "gen/big.txt")
+        .expect("output entry");
+    output.class = InventoryClass::Unread;
+    output.unread = Some("oversize".into());
+    let manifest = manifest(
+        r#"  generated:
+    - files: ["gen/big.txt"]
+      producer: "mkdir -p gen && printf 'big\\n' > gen/big.txt"
+      reproducible: true"#,
+    );
+    let read = |path: &str| {
+        if path == "gen/big.txt" {
+            Err(ReadError {
+                code: "oversize".into(),
+                reason: path.into(),
+            })
+        } else {
+            fs::read(root.path().join(path)).map_err(|error| ReadError {
+                code: "io".into(),
+                reason: error.to_string(),
+            })
+        }
+    };
+    let mode = |_: &str| Some("100644".to_owned());
+    let hash = |_: &str, bytes: &[u8]| Ok(git_sha256(bytes));
+    let result = verify_generated(
+        CapturedSnapshot {
+            manifest: &worktree_manifest(),
+            entries: &listing,
+            read: &read,
+            resolve: &|path: &str| Ok(path.to_owned()),
+            untracked: &BTreeSet::new(),
+        },
+        &mode,
+        &hash,
+        &manifest,
+    );
+    assert!(
+        matches!(
+            &result,
+            Err(InventoryError::Read { path, code, .. }) if path == "gen/big.txt" && code == "oversize"
+        ),
+        "{result:?}"
     );
 }

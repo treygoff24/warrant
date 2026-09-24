@@ -24,26 +24,52 @@ pub fn load_manifest(root: &Path) -> crate::error::Result<WarrantManifest> {
     parse(&text, MANIFEST_PATH.into())
 }
 
+/// The commit `revision` names, resolved once so the governing manifest and the capture
+/// read the same commit even if a ref moves between them. `None` when it names no
+/// commit: capture then reports `missing-commit` for the revision as given.
+pub fn resolve_commit(root: &Path, revision: &str) -> crate::error::Result<Option<String>> {
+    let peeled = format!("{revision}^{{commit}}");
+    let output = repository::git_in(
+        root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            &peeled,
+        ],
+    )?;
+    Ok(output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned()))
+}
+
 /// The manifest a snapshot of `kind` is governed by. Object snapshots read it from the
 /// same object they capture, so worktree edits cannot change an index, commit or tree
-/// snapshot whose identity does not include those bytes.
+/// snapshot whose identity does not include those bytes. A commit snapshot reads it
+/// from `commit`, the id `resolve_commit` gave, and names it by `revision` as given.
 pub fn load_snapshot_manifest(
     root: &Path,
     kind: &SnapshotKind,
     revision: Option<&str>,
+    commit: Option<&str>,
 ) -> crate::error::Result<WarrantManifest> {
     let (location, blob) = match kind {
         SnapshotKind::Worktree => return load_manifest(root),
         SnapshotKind::Index => (format!(":{MANIFEST_PATH}"), index_blob(root)?),
         SnapshotKind::Commit => {
             let revision = revision.unwrap_or("HEAD");
-            (
-                format!("{revision}:{MANIFEST_PATH}"),
-                tree_blob(root, revision)?,
-            )
+            let location = format!("{revision}:{MANIFEST_PATH}");
+            let blob = tree_blob(root, commit.unwrap_or(revision), &location)?;
+            (location, blob)
         }
         SnapshotKind::Tree => match revision {
-            Some(tree) => (format!("{tree}:{MANIFEST_PATH}"), tree_blob(root, tree)?),
+            Some(tree) => {
+                let location = format!("{tree}:{MANIFEST_PATH}");
+                let blob = tree_blob(root, tree, &location)?;
+                (location, blob)
+            }
             // Capture reports the missing tree id; no object means no manifest to read.
             None => (String::new(), None),
         },
@@ -81,7 +107,7 @@ fn index_blob(root: &Path) -> crate::error::Result<Option<String>> {
 
 /// The manifest blob inside `treeish`. An unresolvable revision is left for capture to
 /// report with its own error (`missing-commit`, `missing-tree`).
-fn tree_blob(root: &Path, treeish: &str) -> crate::error::Result<Option<String>> {
+fn tree_blob(root: &Path, treeish: &str, location: &str) -> crate::error::Result<Option<String>> {
     let peeled = format!("{treeish}^{{tree}}");
     let resolved = repository::git_in(
         root,
@@ -97,18 +123,17 @@ fn tree_blob(root: &Path, treeish: &str) -> crate::error::Result<Option<String>>
         return Ok(None);
     }
     let tree = String::from_utf8_lossy(&resolved.stdout).trim().to_owned();
-    let location = format!("{treeish}:{MANIFEST_PATH}");
     let output = git_ok(
         root,
         &["ls-tree", "-z", "--full-tree", &tree, "--", MANIFEST_PATH],
-        &location,
+        location,
     )?;
     let mut blob = None;
     for record in records(&output) {
         let (meta, _) = record.split_once('\t').unwrap_or((record, ""));
         match meta.split_whitespace().collect::<Vec<_>>().as_slice() {
-            [mode, _, oid] => blob = Some(regular_blob(mode, oid, &location)?),
-            _ => return Err(unexpected(&location, record)),
+            [mode, _, oid] => blob = Some(regular_blob(mode, oid, location)?),
+            _ => return Err(unexpected(location, record)),
         }
     }
     Ok(blob)

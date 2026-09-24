@@ -5,8 +5,11 @@ use warrant_core::{
 };
 
 use crate::{
-    cache, cancel, cli::Format, error::CommandError, manifest::load_snapshot_manifest, output,
-    repository,
+    cache, cancel,
+    cli::Format,
+    error::CommandError,
+    manifest::{load_snapshot_manifest, resolve_commit},
+    output, repository,
 };
 
 // Spec 4.1: the worktree is the default when no kind is given; kinds stay exclusive.
@@ -27,11 +30,17 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
     let root = repository::root()?;
     let cache_root = cache::root()?;
     let (kind, revision) = args.source();
-    let governing = load_snapshot_manifest(&root, &kind, revision.as_deref())?;
+    // A commit revision is resolved once, and the manifest and the capture both read that
+    // commit. An unresolvable revision goes to capture as given, which reports it.
+    let commit = match (&kind, &revision) {
+        (SnapshotKind::Commit, Some(revision)) => resolve_commit(&root, revision)?,
+        _ => None,
+    };
+    let governing = load_snapshot_manifest(&root, &kind, revision.as_deref(), commit.as_deref())?;
     let (manifest, ()) = warrant_snapshot::capture(
         &root,
         kind,
-        revision.as_deref(),
+        commit.as_deref().or(revision.as_deref()),
         &governing.snapshot,
         |_| {
             cancel::check().map_err(|error| warrant_snapshot::SnapshotError {

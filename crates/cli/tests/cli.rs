@@ -1242,60 +1242,29 @@ fn inventory_error_code_invalid_declaration() {
     assert_inventory_error(&error, "invalid-declaration", "tsconfig.json");
 }
 
-/// Git failing after capture, when inventory lists untracked files, is an I/O failure
-/// of the inventory, not of the snapshot: the wrapper lets capture's own untracked
-/// listing through and fails the second one.
+/// A reproduced output inventory cannot read is an I/O failure of the inventory, not
+/// drift and not a snapshot error: the producer leaves its output unreadable.
 #[cfg(unix)]
 #[test]
 fn inventory_error_code_inventory_io() {
-    use std::os::unix::fs::PermissionsExt;
-
     let repository = repository();
-    let control = tempfile::tempdir().expect("git wrapper directory");
-    let real_git = Command::new("sh")
-        .args(["-c", "command -v git"])
-        .output()
-        .expect("locate real git");
-    let wrapper = control.path().join("git");
+    let root = repository.path();
+    fs::create_dir_all(root.join("gen")).expect("generated directory");
+    fs::write(root.join("gen/out.txt"), "out\n").expect("generated output");
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
     fs::write(
-        &wrapper,
-        format!(
-            r#"#!/bin/sh
-case " $* " in
-  *" ls-files --others --exclude-standard -z "*)
-    if [ -e "{marker}" ]; then echo "fatal: listing refused" >&2; exit 128; fi
-    : > "{marker}" ;;
-esac
-exec "{git}" "$@"
-"#,
-            marker = control.path().join("listed").display(),
-            git = String::from_utf8(real_git.stdout).expect("git path").trim(),
-        ),
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\ninventory:\n  generated:\n    - files: [\"gen/out.txt\"]\n      producer: \"mkdir -p gen && printf 'out\\\\n' > gen/out.txt && chmod 000 gen/out.txt\"\n      reproducible: true\n",
     )
-    .expect("git wrapper");
-    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).expect("executable");
-    let mut paths = vec![control.path().to_path_buf()];
-    paths.extend(std::env::split_paths(
-        &std::env::var_os("PATH").expect("PATH"),
-    ));
+    .expect("manifest");
+    git(root, &["add", "gen/out.txt", "warrant/warrant.yaml"]);
+    commit(root, "unreadable reproduced output");
     let cache = tempfile::tempdir().expect("temp cache");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_warrant"));
-    neutralize_git_environment(&mut command);
-    let output = command
-        .arg("inventory")
-        .current_dir(repository.path())
-        .env("XDG_CACHE_HOME", cache.path())
-        .env("PATH", std::env::join_paths(paths).expect("fixture PATH"))
-        .output()
-        .expect("run warrant");
+    let output = warrant_in(root, cache.path(), &["inventory", "--verify-generated"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(2), "{stderr}");
-    assert!(
-        control.path().join("listed").exists(),
-        "capture listed untracked files"
-    );
     let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("error document");
-    assert_inventory_error(&error, "inventory-io", "listing refused");
+    assert_inventory_error(&error, "inventory-io", "gen/out.txt");
 }
 
 /// With neither `XDG_CACHE_HOME` nor `HOME` usable there is no cache location; the run
@@ -1406,6 +1375,98 @@ fn verify_generated_reruns_producers_over_the_snapshot_only() {
         serde_json::json!([])
     );
     assert_eq!(document["summary"]["ignored_files"], 1);
+}
+
+/// B26 (spec 5.3): verification compares Git blob identities. Under a clean filter the
+/// captured blob holds the filtered bytes; a producer that writes the worktree's raw bytes
+/// reproduces the same blob, which is not drift.
+#[cfg(unix)]
+#[test]
+fn verify_generated_compares_blob_identities_under_a_clean_filter() {
+    let repository = repository();
+    let root = repository.path();
+    git(root, &["config", "filter.canonical.clean", "tr a-z A-Z"]);
+    fs::write(
+        root.join(".gitattributes"),
+        "gen/out.txt filter=canonical\n",
+    )
+    .expect("attributes");
+    fs::create_dir_all(root.join("gen")).expect("generated directory");
+    fs::write(root.join("gen/out.txt"), "lower\n").expect("generated output");
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\ninventory:\n  generated:\n    - files: [\"gen/out.txt\"]\n      producer: \"mkdir -p gen && printf 'lower\\\\n' > gen/out.txt\"\n      reproducible: true\n",
+    )
+    .expect("manifest");
+    git(
+        root,
+        &[
+            "add",
+            ".gitattributes",
+            "gen/out.txt",
+            "warrant/warrant.yaml",
+        ],
+    );
+    commit(root, "filtered generated output");
+    assert_eq!(
+        git(root, &["cat-file", "blob", "HEAD:gen/out.txt"]),
+        "LOWER",
+        "the captured blob must hold the clean-filtered bytes"
+    );
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(root, cache.path(), &["inventory", "--verify-generated"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("inventory document");
+    assert_eq!(
+        document["summary"]["generated_drift"],
+        serde_json::json!([])
+    );
+}
+
+/// B26: a symlink output is a blob of its target path, as Git stores it; a producer that
+/// recreates the link reproduces that blob.
+#[cfg(unix)]
+#[test]
+fn verify_generated_hashes_symlink_outputs_by_target_path() {
+    let repository = repository();
+    let root = repository.path();
+    fs::create_dir_all(root.join("gen")).expect("generated directory");
+    fs::write(root.join("gen/target.txt"), "target contents\n").expect("link target");
+    std::os::unix::fs::symlink("target.txt", root.join("gen/link")).expect("generated link");
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\ninventory:\n  generated:\n    - files: [\"gen/link\"]\n      producer: \"mkdir -p gen && ln -s target.txt gen/link\"\n      reproducible: true\n",
+    )
+    .expect("manifest");
+    git(
+        root,
+        &["add", "gen/target.txt", "gen/link", "warrant/warrant.yaml"],
+    );
+    commit(root, "generated link");
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(root, cache.path(), &["inventory", "--verify-generated"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("inventory document");
+    assert_eq!(
+        document["summary"]["generated_drift"],
+        serde_json::json!([])
+    );
 }
 
 /// Without `--verify-generated` no producer ran, so drift is unknown (null), not none.
@@ -1769,16 +1830,22 @@ fn object_snapshot_inventories_leave_ignored_files_unknown() {
                                     reason: error.document.reason,
                                 })
                         };
-                        let untracked =
-                            warrant_inventory::untracked_paths(root, &snapshot.manifest().kind)
-                                .expect("untracked paths");
+                        let resolve = |path: &str| {
+                            snapshot
+                                .resolve(path)
+                                .map_err(|error| warrant_inventory::ReadError {
+                                    code: error.document.code,
+                                    reason: error.document.reason,
+                                })
+                        };
                         Ok(warrant_inventory::build(
                             root,
                             warrant_inventory::CapturedSnapshot {
                                 manifest: snapshot.manifest(),
                                 entries: snapshot.entries(),
                                 read: &read,
-                                untracked: &untracked,
+                                resolve: &resolve,
+                                untracked: snapshot.untracked(),
                             },
                             &manifest,
                             &warrant_inventory::BuildConfig::default(),
@@ -1797,4 +1864,185 @@ fn object_snapshot_inventories_leave_ignored_files_unknown() {
             }
         },
     );
+}
+
+/// B29: inventory classifies against the untracked listing the capture itself took, not
+/// a second listing of the live index. Git's index briefly tracks `dist/bundle.js`
+/// during the second untracked listing and never again; the capture's own listing and
+/// its stability check agree the file is untracked, so it is build output.
+#[cfg(unix)]
+#[test]
+fn untracked_classification_uses_the_capture_listing() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repository = repository();
+    let root = repository.path();
+    fs::create_dir_all(root.join("dist")).expect("output directory");
+    fs::write(root.join("dist/bundle.js"), "built();\n").expect("untracked output");
+    let control = tempfile::tempdir().expect("git control");
+    let real_git = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .expect("locate real git");
+    assert!(real_git.status.success());
+    let wrapper = control.path().join("git");
+    fs::write(
+        &wrapper,
+        r#"#!/bin/sh
+case " $* " in
+  *" --ignored "*) exec "$WARRANT_TEST_GIT" "$@" ;;
+  *" ls-files --others "*) ;;
+  *) exec "$WARRANT_TEST_GIT" "$@" ;;
+esac
+: > "$WARRANT_TEST_CONTROL/listing.$$"
+count=$(ls "$WARRANT_TEST_CONTROL" | grep -c '^listing\.')
+if [ "$count" -ne 2 ]; then exec "$WARRANT_TEST_GIT" "$@"; fi
+env -u GIT_INDEX_FILE "$WARRANT_TEST_GIT" -C "$WARRANT_TEST_ROOT" add -- dist/bundle.js || exit 97
+"$WARRANT_TEST_GIT" "$@"
+result=$?
+env -u GIT_INDEX_FILE "$WARRANT_TEST_GIT" -C "$WARRANT_TEST_ROOT" rm -q --cached -- dist/bundle.js || exit 98
+: > "$WARRANT_TEST_CONTROL/flipped"
+exit "$result"
+"#,
+    )
+    .expect("git wrapper");
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).expect("executable wrapper");
+    let mut paths = vec![control.path().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").expect("PATH"),
+    ));
+    let cache = tempfile::tempdir().expect("temp cache");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_warrant"));
+    neutralize_git_environment(&mut command);
+    let output = command
+        .arg("inventory")
+        .current_dir(root)
+        .env("XDG_CACHE_HOME", cache.path())
+        .env("PATH", std::env::join_paths(paths).expect("fixture PATH"))
+        .env("WARRANT_TEST_CONTROL", control.path())
+        .env("WARRANT_TEST_ROOT", root)
+        .env(
+            "WARRANT_TEST_GIT",
+            String::from_utf8(real_git.stdout).expect("git path").trim(),
+        )
+        .output()
+        .expect("run warrant");
+    let document = json(&output);
+    // Precondition: the index flip happened, and the index is restored.
+    assert!(
+        control.path().join("flipped").exists(),
+        "the second untracked listing never ran"
+    );
+    assert_eq!(git(root, &["ls-files", "--", "dist"]), "");
+    let entry = document["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|entry| entry["path"] == "dist/bundle.js")
+        .expect("dist/bundle.js entry");
+    assert_eq!(entry["class"], "build-output", "{entry}");
+}
+
+/// B34: `--commit` resolves the revision once. A Git wrapper moves the branch to another
+/// commit when the manifest blob is read, after the manifest's revision was resolved;
+/// the snapshot still names the commit resolved first, under that commit's limit.
+#[cfg(unix)]
+#[test]
+fn commit_snapshot_resolves_the_revision_once() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repository = repository();
+    let root = repository.path();
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\nsnapshot:\n  max_file_bytes: 100\n",
+    )
+    .expect("small-limit manifest");
+    fs::write(root.join("big.txt"), "x".repeat(200)).expect("big file");
+    git(root, &["add", "warrant/warrant.yaml", "big.txt"]);
+    commit(root, "small limit");
+    let first = git(root, &["rev-parse", "HEAD"]);
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\nsnapshot:\n  max_file_bytes: 4096\n",
+    )
+    .expect("large-limit manifest");
+    git(root, &["add", "warrant/warrant.yaml"]);
+    commit(root, "large limit");
+    let second = git(root, &["rev-parse", "HEAD"]);
+    git(root, &["update-ref", "HEAD", &first]);
+
+    let control = tempfile::tempdir().expect("git control");
+    let real_git = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .expect("locate real git");
+    assert!(real_git.status.success());
+    let wrapper = control.path().join("git");
+    fs::write(
+        &wrapper,
+        r#"#!/bin/sh
+case " $* " in
+  *" cat-file blob "*)
+    if [ ! -e "$WARRANT_TEST_CONTROL/moved" ]; then
+      "$WARRANT_TEST_GIT" -C "$WARRANT_TEST_ROOT" update-ref HEAD "$WARRANT_TEST_MOVE_TO" || exit 97
+      : > "$WARRANT_TEST_CONTROL/moved"
+    fi ;;
+esac
+exec "$WARRANT_TEST_GIT" "$@"
+"#,
+    )
+    .expect("git wrapper");
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).expect("executable wrapper");
+    let mut paths = vec![control.path().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").expect("PATH"),
+    ));
+    let cache = tempfile::tempdir().expect("temp cache");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_warrant"));
+    neutralize_git_environment(&mut command);
+    let output = command
+        .args(["snapshot", "--commit", "HEAD"])
+        .current_dir(root)
+        .env("XDG_CACHE_HOME", cache.path())
+        .env("PATH", std::env::join_paths(paths).expect("fixture PATH"))
+        .env("WARRANT_TEST_CONTROL", control.path())
+        .env("WARRANT_TEST_ROOT", root)
+        .env("WARRANT_TEST_MOVE_TO", &second)
+        .env(
+            "WARRANT_TEST_GIT",
+            String::from_utf8(real_git.stdout).expect("git path").trim(),
+        )
+        .output()
+        .expect("run warrant");
+    let document = json(&output);
+    // Precondition: the branch moved during the run.
+    assert!(control.path().join("moved").exists(), "the ref never moved");
+    assert_eq!(git(root, &["rev-parse", "HEAD"]), second);
+    let commit = document["commit"].as_str().expect("commit id");
+    assert!(
+        commit.ends_with(&first),
+        "snapshot names {commit}, not the first-resolved {first}"
+    );
+    // The first commit's 100-byte limit governs its capture: only big.txt exceeds it.
+    assert_eq!(document["excluded"]["oversize"], 1, "{document}");
+}
+
+/// B34: a `--commit` revision that names no commit is still reported by capture as
+/// `missing-commit`, naming the revision as given.
+#[test]
+fn commit_snapshot_of_an_unknown_revision_is_missing_commit() {
+    let repository = repository();
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(
+        repository.path(),
+        cache.path(),
+        &["snapshot", "--commit", "no-such-revision"],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("error document");
+    assert_eq!(error["code"], "missing-commit", "{error}");
+    assert_eq!(error["reason"], "no-such-revision", "{error}");
 }

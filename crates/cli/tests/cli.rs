@@ -152,6 +152,54 @@ fn schema_prints_an_implemented_document_schema() {
 }
 
 #[test]
+fn snapshot_honors_warrant_yaml_limits() {
+    let repository = repository();
+    let cache = tempfile::tempdir().expect("temp cache");
+    fs::create_dir(repository.path().join("warrant")).expect("manifest directory");
+    fs::write(
+        repository.path().join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\nsnapshot:\n  max_file_bytes: 1024\n",
+    )
+    .expect("snapshot limits");
+    fs::write(repository.path().join("large.txt"), vec![b'x'; 4096]).expect("oversize file");
+    assert!(
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repository.path())
+            .status()
+            .expect("track fixture")
+            .success()
+    );
+
+    let snapshot = warrant_in(repository.path(), cache.path(), &["snapshot", "--worktree"]);
+    assert!(snapshot.status.success(), "{snapshot:?}");
+    let snapshot: warrant_core::nouns::SnapshotManifest =
+        serde_json::from_slice(&snapshot.stdout).expect("snapshot document");
+    assert_eq!(snapshot.excluded.oversize, 1);
+
+    let inventory = warrant_in(repository.path(), cache.path(), &["inventory"]);
+    assert!(inventory.status.success(), "{inventory:?}");
+    let inventory: InventoryDocument =
+        serde_json::from_slice(&inventory.stdout).expect("inventory document");
+    let oversize: Vec<_> = inventory
+        .summary
+        .unread
+        .iter()
+        .filter(|entry| entry.reason == "oversize")
+        .collect();
+    assert_eq!(oversize.len() as u64, snapshot.excluded.oversize);
+    assert_eq!(oversize[0].path, "large.txt");
+    assert_eq!(
+        inventory.summary.ignored_files,
+        snapshot.excluded.ignored_files
+    );
+    assert_eq!(
+        inventory.summary.submodules.len() as u64,
+        snapshot.excluded.submodules
+    );
+}
+
+#[test]
 fn snapshot_and_inventory_emit_typed_json_and_atomic_cache_files() {
     let repository = repository();
     let cache = tempfile::tempdir().expect("temp cache");

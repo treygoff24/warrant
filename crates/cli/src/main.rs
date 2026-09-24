@@ -3,6 +3,7 @@ mod cancel;
 mod cli;
 mod commands;
 mod error;
+mod manifest;
 mod output;
 
 use clap::{CommandFactory, Parser, error::ErrorKind};

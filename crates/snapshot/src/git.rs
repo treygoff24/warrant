@@ -54,16 +54,22 @@ pub(crate) fn run_stream(
         command.env("GIT_INDEX_FILE", index);
     }
     let mut child = command.spawn()?;
-    let written = if let Some(input) = input {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| SnapshotError::new("snapshot-io", "missing Git stdin"))?;
-        io::copy(input, &mut stdin).map(|_| ())
-    } else {
-        Ok(())
-    };
-    let output = child.wait_with_output()?;
+    let stdin = child.stdin.take();
+    // Read is not necessarily Send. Keep the borrowed input on this thread
+    // while a scoped worker drains both output pipes and waits for Git.
+    let (written, output) = std::thread::scope(|scope| {
+        let output = scope.spawn(move || child.wait_with_output());
+        let written = if let Some(input) = input {
+            match stdin {
+                Some(mut stdin) => io::copy(input, &mut stdin).map(|_| ()),
+                None => Err(io::Error::other("missing Git stdin")),
+            }
+        } else {
+            Ok(())
+        };
+        (written, output.join())
+    });
+    let output = output.map_err(|_| io::Error::other("Git output reader panicked"))??;
     if !output.status.success() {
         return Err(SnapshotError::new(
             "git-failed",

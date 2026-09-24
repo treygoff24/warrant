@@ -971,3 +971,38 @@ fn exclusions_include_untracked_oversize_and_external_symlinks() {
         );
     }
 }
+
+#[test]
+fn run_stream_stripspace_round_trips_two_mib() {
+    assert_stream_round_trip(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn run_stream_drains_output_while_writing_two_mib() {
+    assert_stream_round_trip(true);
+}
+
+fn assert_stream_round_trip(streaming: bool) {
+    let input = b"newline-terminated line content\n".repeat(65536);
+    let expected = input.clone();
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let dir = repo();
+        let args: &[&str] = if streaming {
+            &["-c", "alias.warrant-echo=!cat", "warrant-echo"]
+        } else {
+            &["stripspace"]
+        };
+        let result = git::run_stream(dir.path(), args, None, Some(&mut input.as_slice()));
+        let _ = send.send(result.map_err(|error| error.to_string()));
+    });
+    let actual = receive.recv_timeout(std::time::Duration::from_secs(5));
+    assert!(
+        actual
+            .as_ref()
+            .is_ok_and(|result| result.as_ref() == Ok(&expected)),
+        "Git must return all input bytes before the timeout: {:?}",
+        actual.as_ref().map(|result| result.as_ref().map(Vec::len))
+    );
+}

@@ -2,7 +2,8 @@ use clap::{ArgGroup, Args as ClapArgs};
 use warrant_core::nouns::SnapshotKind;
 
 use crate::{
-    cache, cancel, cli::Format, error::CommandError, manifest::load_manifest, output, repository,
+    cache, cancel, cli::Format, error::CommandError, manifest::load_snapshot_manifest, output,
+    repository,
 };
 
 // Spec 4.1: the worktree is the default when no kind is given; kinds stay exclusive.
@@ -21,8 +22,8 @@ pub struct Args {
 
 pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
     let root = repository::root()?;
-    let manifest = load_manifest(&root)?;
     let (kind, revision) = args.source();
+    let manifest = load_snapshot_manifest(&root, &kind, revision.as_deref())?;
     let (manifest, ()) =
         warrant_snapshot::capture(&root, kind, revision.as_deref(), &manifest.snapshot, |_| {
             cancel::check().map_err(|error| warrant_snapshot::SnapshotError {

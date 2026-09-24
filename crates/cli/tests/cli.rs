@@ -757,3 +757,173 @@ fn non_repository_is_an_input_error() {
         assert!(error.reason.contains("Git repository"), "{}", error.reason);
     }
 }
+
+/// A committed manifest with a 100-byte limit and one committed 128-byte file.
+fn limited_repository() -> tempfile::TempDir {
+    let repository = repository();
+    let root = repository.path();
+    fs::create_dir(root.join("warrant")).expect("manifest directory");
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\nsnapshot:\n  max_file_bytes: 100\n",
+    )
+    .expect("manifest");
+    fs::write(root.join("large.txt"), vec![b'x'; 128]).expect("large file");
+    git(root, &["add", "--", "warrant/warrant.yaml", "large.txt"]);
+    commit(root, "limits");
+    // Git's own view of the fixture: exactly one committed blob exceeds the limit.
+    assert_eq!(oversize_by_git(root, "HEAD^{tree}", 100), 1);
+    repository
+}
+
+/// Count blobs in a Git tree larger than `limit`, from `git ls-tree -r -l`.
+fn oversize_by_git(root: &Path, tree: &str, limit: u64) -> u64 {
+    git(root, &["ls-tree", "-r", "-l", "--full-tree", tree])
+        .lines()
+        .filter(|line| {
+            let size = line.split_whitespace().nth(3).expect("ls-tree size column");
+            size.parse::<u64>().is_ok_and(|size| size > limit)
+        })
+        .count() as u64
+}
+
+fn snapshot_document(root: &Path, cache: &Path, args: &[&str]) -> serde_json::Value {
+    without_timestamps(json(&warrant_in(root, cache, args)))
+}
+
+#[test]
+fn object_snapshots_ignore_the_worktree_manifest() {
+    let repository = limited_repository();
+    let root = repository.path();
+    let cache = tempfile::tempdir().expect("temp cache");
+    let head_tree = git(root, &["rev-parse", "HEAD^{tree}"]);
+    let index_tree = git(root, &["write-tree"]);
+    let commands: [&[&str]; 2] = [&["snapshot", "--index"], &["snapshot", "--commit", "HEAD"]];
+    let baseline: Vec<_> = commands
+        .iter()
+        .map(|command| snapshot_document(root, cache.path(), command))
+        .collect();
+    assert_eq!(baseline[0]["tree"], format!("sha1:{index_tree}"));
+    assert_eq!(baseline[1]["tree"], format!("sha1:{head_tree}"));
+    assert_eq!(
+        baseline[0]["excluded"]["oversize"],
+        oversize_by_git(root, &index_tree, 100)
+    );
+    assert_eq!(
+        baseline[1]["excluded"]["oversize"],
+        oversize_by_git(root, &head_tree, 100)
+    );
+
+    let manifest = root.join("warrant/warrant.yaml");
+    for (label, change) in [
+        (
+            "dirty",
+            Some("schema_version: warrant.manifest/1\nsnapshot:\n  max_file_bytes: 4096\n"),
+        ),
+        ("invalid", Some("schema_version: [not a manifest\n")),
+        ("deleted", None),
+    ] {
+        match change {
+            Some(text) => fs::write(&manifest, text).expect("change worktree manifest"),
+            None => fs::remove_file(&manifest).expect("delete worktree manifest"),
+        }
+        // The worktree manifest really changed: a worktree snapshot sees it.
+        let worktree = warrant_in(root, cache.path(), &["snapshot", "--worktree"]);
+        if label == "invalid" {
+            assert_eq!(worktree.status.code(), Some(2), "{label}");
+        } else {
+            assert_eq!(json(&worktree)["excluded"]["oversize"], 0, "{label}");
+        }
+        for (command, expected) in commands.iter().zip(&baseline) {
+            assert_eq!(
+                &snapshot_document(root, cache.path(), command),
+                expected,
+                "{label} worktree manifest changed {command:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn object_snapshots_read_the_manifest_from_their_own_object() {
+    let repository = limited_repository();
+    let root = repository.path();
+    let cache = tempfile::tempdir().expect("temp cache");
+    // The manifest exists only in the commit: removed from the index and the worktree.
+    git(
+        root,
+        &["rm", "-q", "--cached", "--", "warrant/warrant.yaml"],
+    );
+    fs::remove_file(root.join("warrant/warrant.yaml")).expect("delete worktree manifest");
+    assert_eq!(git(root, &["ls-files", "--", "warrant/warrant.yaml"]), "");
+    let head_tree = git(root, &["rev-parse", "HEAD^{tree}"]);
+
+    let commit = snapshot_document(root, cache.path(), &["snapshot", "--commit", "HEAD"]);
+    assert_eq!(commit["tree"], format!("sha1:{head_tree}"));
+    assert_eq!(
+        commit["excluded"]["oversize"],
+        oversize_by_git(root, &head_tree, 100)
+    );
+    let tree = snapshot_document(root, cache.path(), &["snapshot", "--tree", &head_tree]);
+    assert_eq!(tree["excluded"]["oversize"], commit["excluded"]["oversize"]);
+    // The index has no manifest, so it gets the default 8 MiB limit.
+    let index_tree = git(root, &["write-tree"]);
+    let index = snapshot_document(root, cache.path(), &["snapshot", "--index"]);
+    assert_eq!(index["tree"], format!("sha1:{index_tree}"));
+    assert_eq!(
+        index["excluded"]["oversize"],
+        oversize_by_git(root, &index_tree, 8 * 1024 * 1024)
+    );
+
+    // A staged manifest governs the index, not the commit or the dirty worktree file.
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\nsnapshot:\n  max_file_bytes: 16\n",
+    )
+    .expect("staged manifest");
+    git(root, &["add", "--", "warrant/warrant.yaml"]);
+    fs::write(root.join("warrant/warrant.yaml"), "not: [valid\n").expect("dirty manifest");
+    let staged_tree = git(root, &["write-tree"]);
+    assert_ne!(
+        oversize_by_git(root, &staged_tree, 16),
+        oversize_by_git(root, &staged_tree, 100),
+        "the staged limit must be distinguishable from the committed one"
+    );
+    let index = snapshot_document(root, cache.path(), &["snapshot", "--index"]);
+    assert_eq!(
+        index["excluded"]["oversize"],
+        oversize_by_git(root, &staged_tree, 16)
+    );
+    let commit_again = snapshot_document(root, cache.path(), &["snapshot", "--commit", "HEAD"]);
+    assert_eq!(commit_again, commit);
+
+    // An invalid manifest inside the object is still an invalid manifest.
+    git(root, &["add", "--", "warrant/warrant.yaml"]);
+    let invalid = warrant_in(root, cache.path(), &["snapshot", "--index"]);
+    assert_eq!(invalid.status.code(), Some(2));
+    let error: warrant_core::nouns::ErrorDocument =
+        serde_json::from_slice(&invalid.stderr).expect("error document");
+    assert_eq!(error.code, "invalid-manifest");
+}
+
+#[test]
+fn unreadable_object_manifest_is_a_manifest_io_error() {
+    let repository = limited_repository();
+    let root = repository.path();
+    let cache = tempfile::tempdir().expect("temp cache");
+    let blob = git(root, &["rev-parse", "HEAD:warrant/warrant.yaml"]);
+    fs::remove_file(root.join(".git/objects").join(&blob[..2]).join(&blob[2..]))
+        .expect("remove the loose manifest object");
+    // Git itself can no longer read the committed manifest.
+    let mut cat = Command::new("git");
+    cat.args(["cat-file", "blob", &blob]).current_dir(root);
+    neutralize_git_environment(&mut cat);
+    assert!(!cat.output().expect("run git").status.success());
+
+    let output = warrant_in(root, cache.path(), &["snapshot", "--commit", "HEAD"]);
+    assert_eq!(output.status.code(), Some(2));
+    let error: warrant_core::nouns::ErrorDocument =
+        serde_json::from_slice(&output.stderr).expect("error document");
+    assert_eq!(error.code, "manifest-io", "{}", error.reason);
+}

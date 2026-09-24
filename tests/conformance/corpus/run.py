@@ -8,15 +8,21 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def redact_paths(message, corpus_dir):
-    roots = [(Path(corpus_dir).resolve(), "<corpus>"), (Path(tempfile.gettempdir()).resolve(), "<tmp>")]
+def redact_paths(message, corpus_dir, shell_tmp):
+    roots = [
+        (Path(corpus_dir).resolve(), "<corpus>"),
+        (Path(tempfile.gettempdir()).resolve(), "<tmp>"),
+        (Path(shell_tmp).resolve(), "<tmp>"),
+    ]
     for root, replacement in sorted(roots, key=lambda entry: len(str(entry[0])), reverse=True):
-        pattern = re.escape(str(root)) + r"(?=/|$|[\s'\"<>:,;()\[\]])(?:/[^\s'\"<>:,;()\[\]]+)*"
+        pattern = r"(?<![\w/.-])" + re.escape(str(root)) + r"(?=/|$|[\s'\"<>:,;()\[\]])(?:/[^\s'\"<>:,;()\[\]]+)*"
         message = re.sub(pattern, replacement, message)
     return message
 
@@ -51,7 +57,7 @@ def run(args, cwd=ROOT, env=None, *, public=False, corpus_dir=None, index_file=N
         # Private members never expose child output; public errors keep bounded diagnostics.
         if public and result.stderr:
             lines = result.stderr.splitlines()[-20:]
-            message += "\n" + redact_paths("\n".join(lines), corpus_dir)
+            message += "\n" + redact_paths("\n".join(lines), corpus_dir, environment.get("TMPDIR") or "/var/tmp")
         raise RuntimeError(message)
     return result.stdout.strip()
 
@@ -202,6 +208,20 @@ def main():
             print(f"corpus: {name} FAILED: {error}", flush=True)
     if failures:
         raise RuntimeError(f"{len(failures)} member(s) failed")
+
+
+class CorpusRunnerTests(unittest.TestCase):
+    def test_public_fetch_redacts_shell_tmp_without_tmpdir(self):
+        failed = subprocess.CompletedProcess(
+            args=["corpus.sh", "fetch", "public"],
+            returncode=1,
+            stdout="",
+            stderr="fatal: open '/var/tmp/warrant-corpus.public.123/repository'",
+        )
+        with patch.dict(os.environ, {}, clear=True), patch.object(subprocess, "run", return_value=failed):
+            with self.assertRaises(RuntimeError) as captured:
+                run(["corpus.sh", "fetch", "public"], public=True, corpus_dir=Path("/tmp/corpus"))
+        self.assertEqual(str(captured.exception), "corpus.sh fetch exited 1\nfatal: open '<tmp>'")
 
 
 if __name__ == "__main__":

@@ -67,7 +67,7 @@ pub fn compile_at(
     now: Timestamp,
 ) -> Result<EffectivePolicy, PolicyError> {
     let (contracts, declarations, mut source_records) = parse_sources(sources)?;
-    let (mut contracts, mut issues) = expand(contracts);
+    let (mut contracts, mut issues) = expand(contracts)?;
     issues.extend(lint_effective(&contracts, &declarations, now));
     sort_issues(&mut issues);
     // Spec 7.6: an expired migration still present is reported and stops applying;
@@ -106,7 +106,7 @@ pub fn lint_at(
     now: Timestamp,
 ) -> Result<Vec<LintIssue>, PolicyError> {
     let (contracts, declarations, _) = parse_sources(sources)?;
-    let (contracts, mut issues) = expand(contracts);
+    let (contracts, mut issues) = expand(contracts)?;
     issues.extend(lint_effective(&contracts, &declarations, now));
     sort_issues(&mut issues);
     Ok(issues)
@@ -140,10 +140,24 @@ fn parse_sources(
     Ok((contracts, declarations, records))
 }
 
-fn expand(contracts: Vec<PolicyContract>) -> (Vec<EffectiveContract>, Vec<LintIssue>) {
+fn expand(
+    contracts: Vec<PolicyContract>,
+) -> Result<(Vec<EffectiveContract>, Vec<LintIssue>), PolicyError> {
     let mut effective = Vec::with_capacity(contracts.len());
     let mut issues = Vec::new();
-    for contract in contracts {
+    for mut contract in contracts {
+        match &mut contract.body {
+            ContractBody::Dependency(dependency) => dependency.declares.sort_by(|left, right| {
+                (&left.target, &left.reason, &left.authority).cmp(&(
+                    &right.target,
+                    &right.reason,
+                    &right.authority,
+                ))
+            }),
+            ContractBody::Effect(effect) => sort_canonical(&mut effect.evidence)?,
+            ContractBody::Capability(capability) => sort_canonical(&mut capability.requires)?,
+            _ => {}
+        }
         let kind = contract.body.kind();
         let fixed_claim = default_claim(kind);
         let claim = contract.claim.unwrap_or(fixed_claim);
@@ -204,7 +218,17 @@ fn expand(contracts: Vec<PolicyContract>) -> (Vec<EffectiveContract>, Vec<LintIs
             body: contract.body,
         });
     }
-    (effective, issues)
+    Ok((effective, issues))
+}
+
+fn sort_canonical<T: Serialize>(values: &mut Vec<T>) -> Result<(), serde_json::Error> {
+    let mut keyed = values
+        .drain(..)
+        .map(|value| Ok((serde_json_canonicalizer::to_vec(&value)?, value)))
+        .collect::<Result<Vec<_>, serde_json::Error>>()?;
+    keyed.sort_by(|left, right| left.0.cmp(&right.0));
+    *values = keyed.into_iter().map(|(_, value)| value).collect();
+    Ok(())
 }
 
 fn lint_effective(

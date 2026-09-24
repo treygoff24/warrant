@@ -614,3 +614,89 @@ fn policy_dependency_overlap_expands_typed_wildcards() {
         }
     }
 }
+
+fn assert_sequence_order_is_irrelevant(id: &str, field: &str, entries: serde_json::Value) {
+    let mut document: serde_json::Value = serde_saphyr::from_str(ALL_KINDS).expect("fixture");
+    let contract = document["contracts"]
+        .as_array_mut()
+        .expect("contracts")
+        .iter_mut()
+        .find(|contract| contract["id"] == id)
+        .expect("contract");
+    contract[field] = entries;
+    let original = compile_one(&document.to_string()).expect("original policy");
+    let contract = document["contracts"]
+        .as_array_mut()
+        .expect("contracts")
+        .iter_mut()
+        .find(|contract| contract["id"] == id)
+        .expect("contract");
+    contract[field].as_array_mut().expect("sequence").reverse();
+    let reordered = compile_one(&document.to_string()).expect("reordered policy");
+    assert_eq!(original.policy_digest, reordered.policy_digest);
+    assert_eq!(original.contracts, reordered.contracts);
+}
+
+#[test]
+fn policy_digest_ignores_declares_order() {
+    assert_sequence_order_is_irrelevant(
+        "dep.core",
+        "declares",
+        serde_json::json!([
+            {"target": "worker", "reason": "Worker loader", "authority": "ruling:worker"},
+            {"target": "web", "reason": "Web loader", "authority": "ruling:web"},
+            {"target": "worker", "reason": "Other loader", "authority": "ruling:other"}
+        ]),
+    );
+}
+
+#[test]
+fn policy_digest_ignores_evidence_order() {
+    assert_sequence_order_is_irrelevant(
+        "effect.send",
+        "evidence",
+        serde_json::json!([
+            {"kind": "test-receipt", "tag": "send", "evidence_kind": "integration"},
+            {"kind": "test-receipt", "tag": "denied", "evidence_kind": "integration"}
+        ]),
+    );
+}
+
+#[test]
+fn policy_digest_ignores_capability_requires_order() {
+    assert_sequence_order_is_irrelevant(
+        "capability.undo",
+        "requires",
+        serde_json::json!([
+            {"link": "entrypoint", "basis": "registry"},
+            {"link": "compensation-owner", "one_of_module": "core.actions.undo"}
+        ]),
+    );
+}
+
+fn assert_semantic_digest_changes(edited: &str) {
+    let original = compile_one(ALL_KINDS).expect("original policy");
+    let changed = compile_one(edited).expect("edited policy");
+    assert_ne!(original.policy_digest, changed.policy_digest);
+}
+
+#[test]
+fn policy_digest_changes_with_denied_package() {
+    assert_semantic_digest_changes(&ALL_KINDS.replace("packages: [react]", "packages: [next]"));
+}
+
+#[test]
+fn policy_digest_changes_with_consequence() {
+    assert_semantic_digest_changes(&ALL_KINDS.replace(
+        "class: preference",
+        "class: preference\n    on_violation: review",
+    ));
+}
+
+#[test]
+fn policy_digest_changes_with_removed_store() {
+    assert_semantic_digest_changes(&ALL_KINDS.replace(
+        "  stores:\n    - { id: approvals, kind: table, defined_in: src/schema.ts }",
+        "  stores: []",
+    ));
+}

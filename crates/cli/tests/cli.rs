@@ -516,6 +516,84 @@ fn process_group_interrupt_during_capture_exits_130() {
     }
 }
 
+/// B30 (spec 3.6): a signal recorded after the blocked document is on its way still
+/// exits 130. The document is larger than a pipe buffer, so once the first byte has been
+/// read, warrant is certainly still inside the document write when the group signal
+/// arrives; a signal during capture would not bind the post-write check.
+#[cfg(unix)]
+#[test]
+fn interrupt_during_blocked_document_write_exits_130() {
+    use std::{io::Read, os::unix::process::CommandExt, process::Stdio};
+    use wait_timeout::ChildExt;
+
+    let repository = repository();
+    let root = repository.path();
+    for index in 0..700 {
+        let path = root.join(format!("src/module_{index:04}.ts"));
+        fs::create_dir_all(path.parent().expect("parent")).expect("source directory");
+        fs::write(path, format!("export const value{index} = {index};\n")).expect("source");
+    }
+    fs::create_dir_all(root.join("gen")).expect("generated directory");
+    fs::write(root.join("gen/out.txt"), "committed\n").expect("generated output");
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\ninventory:\n  generated:\n    - files: [\"gen/out.txt\"]\n      producer: \"mkdir -p gen && echo drifted > gen/out.txt\"\n      reproducible: true\n",
+    )
+    .expect("manifest");
+    git(root, &["add", "--all"]);
+    commit(root, "drifting producer");
+
+    let cache = tempfile::tempdir().expect("temp cache");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_warrant"));
+    neutralize_git_environment(&mut command);
+    let mut child = command
+        .args(["inventory", "--verify-generated"])
+        .current_dir(root)
+        .env("XDG_CACHE_HOME", cache.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .expect("start warrant");
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let mut first = [0_u8; 1];
+    stdout.read_exact(&mut first).expect("document started");
+    let group = nix::unistd::Pid::from_raw(i32::try_from(child.id()).expect("pid fits i32"));
+    nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGINT)
+        .expect("signal the warrant process group");
+    let mut rest = Vec::new();
+    stdout.read_to_end(&mut rest).expect("read document");
+    let status = child
+        .wait_timeout(std::time::Duration::from_secs(30))
+        .expect("wait for warrant")
+        .expect("warrant exited");
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("piped stderr")
+        .read_to_string(&mut stderr)
+        .expect("read stderr");
+    // Precondition: the document outgrew the pipe, so the write was still in progress.
+    assert!(
+        rest.len() > 2 * 65_536,
+        "document too small: {}",
+        rest.len() + 1
+    );
+    let mut document = first.to_vec();
+    document.extend(rest);
+    let document: serde_json::Value =
+        serde_json::from_slice(&document).expect("inventory document");
+    assert_eq!(
+        document["summary"]["generated_drift"][0]["path"],
+        "gen/out.txt"
+    );
+    assert_eq!(status.code(), Some(130), "{stderr}");
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("cancellation");
+    assert_eq!(error["code"], "cancelled");
+}
+
 #[cfg(unix)]
 #[test]
 fn broken_pipe_is_not_an_internal_failure() {
@@ -1360,6 +1438,84 @@ fn inventory_error_code_producer_failed() {
     assert_inventory_error(&error, "producer-failed", "exit 3");
 }
 
+/// B27: a producer's output never reaches the CLI's streams; stdout stays exactly one
+/// JSON document.
+#[cfg(unix)]
+#[test]
+fn producer_output_stays_out_of_the_document_stream() {
+    let repository = producer_repository("echo progress; echo noise >&2; ./link.sh");
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(
+        repository.path(),
+        cache.path(),
+        &["inventory", "--verify-generated"],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    let documents = serde_json::Deserializer::from_slice(&output.stdout)
+        .into_iter::<serde_json::Value>()
+        .collect::<Result<Vec<_>, _>>();
+    assert!(
+        matches!(&documents, Ok(documents) if documents.len() == 1),
+        "stdout is not one JSON document: {stdout}"
+    );
+    assert!(!stderr.contains("noise"), "{stderr}");
+}
+
+/// B27: a failing producer's reason carries its stderr, one line, with the temporary
+/// copy's path replaced by `<tmp>`.
+#[cfg(unix)]
+#[test]
+fn producer_failure_reason_carries_stderr_without_the_temporary_path() {
+    let repository =
+        producer_repository("pwd >&2; echo first-marker >&2; echo last-marker >&2; exit 3");
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(
+        repository.path(),
+        cache.path(),
+        &["inventory", "--verify-generated"],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("error document");
+    let reason = error["reason"].as_str().expect("reason");
+    assert!(
+        reason.contains("<tmp>; first-marker; last-marker"),
+        "{reason}"
+    );
+    assert!(!reason.contains('\n'), "{reason}");
+    let temporary = std::env::temp_dir();
+    for form in [
+        temporary.clone(),
+        temporary.canonicalize().expect("temp dir"),
+    ] {
+        let form = form.to_string_lossy();
+        assert!(!reason.contains(form.as_ref()), "{reason} names {form}");
+    }
+}
+
+/// B27: only the producer's last 20 stderr lines reach the reason.
+#[cfg(unix)]
+#[test]
+fn producer_failure_reason_keeps_the_last_twenty_stderr_lines() {
+    let repository = producer_repository("seq 1 25 >&2; exit 3");
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(
+        repository.path(),
+        cache.path(),
+        &["inventory", "--verify-generated"],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("error document");
+    let reason = error["reason"].as_str().expect("reason");
+    let last: Vec<String> = (6..=25).map(|line| line.to_string()).collect();
+    assert!(
+        reason.ends_with(&format!("failed with status Some(3): {}", last.join("; "))),
+        "{reason}"
+    );
+}
+
 /// Error documents name repository files relative to the repository root, so a document
 /// is the same wherever the checkout lives and never discloses the machine's layout.
 #[test]
@@ -1387,6 +1543,100 @@ fn manifest_errors_carry_repository_relative_paths() {
     let error: serde_json::Value = serde_json::from_slice(&output.stderr).expect("error document");
     assert_eq!(error["code"], "invalid-manifest", "{error}");
     assert_eq!(error["next_diagnostic"], "warrant/warrant.yaml", "{error}");
+}
+
+/// B31: Git's stderr enters a reason relativised and on one line. In a linked worktree
+/// the object store is the main checkout's absolute `.git`, outside the root, and Git
+/// names it when the manifest blob is corrupt: it is reported as `<git-dir>`.
+#[cfg(unix)]
+#[test]
+fn object_manifest_git_errors_carry_no_absolute_paths() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repository = repository();
+    let main = repository.path();
+    fs::create_dir_all(main.join("warrant")).expect("manifest directory");
+    fs::write(
+        main.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\n",
+    )
+    .expect("manifest");
+    git(main, &["add", "warrant/warrant.yaml"]);
+    commit(main, "manifest");
+    let holder = tempfile::tempdir().expect("temp directory");
+    let linked = holder.path().join("linked");
+    let linked_text = linked.to_str().expect("UTF-8 temp path");
+    git(
+        main,
+        &["worktree", "add", "-q", "--detach", linked_text, "HEAD"],
+    );
+    let oid = git(main, &["rev-parse", "HEAD:warrant/warrant.yaml"]);
+    let object = main.join(".git/objects").join(&oid[..2]).join(&oid[2..]);
+    fs::set_permissions(&object, fs::Permissions::from_mode(0o644)).expect("writable object");
+    fs::write(&object, b"corrupt").expect("corrupt manifest blob");
+
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(&linked, cache.path(), &["snapshot", "--commit", "HEAD"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("error document");
+    assert_eq!(error["code"], "manifest-io", "{error}");
+    let reason = error["reason"].as_str().expect("reason");
+    assert!(
+        reason.starts_with("HEAD:warrant/warrant.yaml: "),
+        "{reason}"
+    );
+    assert!(reason.contains("<git-dir>/objects/"), "{reason}");
+    assert!(!reason.contains('\n'), "{reason}");
+    for path in [main, holder.path()] {
+        for form in [path.to_path_buf(), path.canonicalize().expect("temp path")] {
+            let form = form.to_string_lossy();
+            assert!(!reason.contains(form.as_ref()), "{reason} names {form}");
+        }
+    }
+}
+
+/// B31: a separate Git directory inside the root (`git init --separate-git-dir`) makes Git
+/// name its objects by absolute path; the reason names them relative to the root.
+#[cfg(unix)]
+#[test]
+fn object_manifest_git_errors_name_an_inner_git_dir_relatively() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let holder = tempfile::tempdir().expect("temp repository");
+    let root = holder.path().canonicalize().expect("temp path");
+    let meta = root.join("meta");
+    git(
+        &root,
+        &[
+            "init",
+            "-q",
+            "--separate-git-dir",
+            meta.to_str().expect("UTF-8"),
+            ".",
+        ],
+    );
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\n",
+    )
+    .expect("manifest");
+    git(&root, &["add", "warrant/warrant.yaml"]);
+    commit(&root, "manifest");
+    let oid = git(&root, &["rev-parse", "HEAD:warrant/warrant.yaml"]);
+    let object = meta.join("objects").join(&oid[..2]).join(&oid[2..]);
+    fs::set_permissions(&object, fs::Permissions::from_mode(0o644)).expect("writable object");
+    fs::write(&object, b"corrupt").expect("corrupt manifest blob");
+
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(&root, cache.path(), &["snapshot", "--commit", "HEAD"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("error document");
+    let reason = error["reason"].as_str().expect("reason");
+    assert!(reason.contains("(stored in meta/objects/"), "{reason}");
+    assert!(!reason.contains(root.to_str().expect("UTF-8")), "{reason}");
 }
 
 /// Cache failures name the artifact relative to the cache root.
@@ -1543,7 +1793,7 @@ fn object_snapshot_inventories_leave_ignored_files_unknown() {
                     document.summary.ignored_files, captured.excluded.ignored_files,
                     "{kind:?} inventory and snapshot disagree on the ignored count"
                 );
-                assert_eq!(document.snapshot.as_ref(), Some(&captured), "{kind:?}");
+                assert_eq!(document.snapshot, captured, "{kind:?}");
             }
         },
     );

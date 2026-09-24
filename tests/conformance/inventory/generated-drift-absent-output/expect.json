@@ -1,0 +1,1 @@
+{"driver":"cli","args":["inventory","--verify-generated"],"exit_code":0,"inventory":{"generated_drift":[],"generated_absent":["gen/b.ts"],"generated_absent_producers":{"gen/b.ts":"mkdir -p gen && printf 'a\\n' > gen/a.ts && printf 'b\\n' > gen/b.ts"}}}

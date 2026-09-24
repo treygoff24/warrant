@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use cargo_metadata::MetadataCommand;
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -14,9 +14,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use warrant_core::manifest::{ClassDeclaration, WarrantManifest};
 use warrant_core::nouns::{
-    Entrypoint, GeneratedAbsent, GeneratedBy, InventoryClass, InventoryDocument, InventoryEntry,
-    InventorySummary, SnapshotKind, SnapshotManifest, Submodule, UnitAliasTable, UnreadPath,
-    VendoredFrom,
+    Entrypoint, GeneratedAbsent, GeneratedBy, GeneratedDrift, InventoryClass, InventoryDocument,
+    InventoryEntry, InventorySummary, SnapshotKind, SnapshotManifest, Submodule, UnitAliasTable,
+    UnreadPath, VendoredFrom,
 };
 
 /// A module selector assigns ownership without changing a path's class.
@@ -190,6 +190,8 @@ pub enum InventoryError {
     ProducerFailed {
         producer: String,
         status: Option<i32>,
+        /// The producer's last stderr lines, one line, the temporary copy named `<tmp>`.
+        stderr: String,
     },
 }
 
@@ -263,11 +265,19 @@ impl fmt::Display for InventoryError {
                 "`{path}` is a nested repository and not a declared submodule"
             ),
             Self::InvalidDeclaration { reason } => formatter.write_str(reason),
-            Self::ProducerFailed { producer, status } => {
+            Self::ProducerFailed {
+                producer,
+                status,
+                stderr,
+            } => {
                 write!(
                     formatter,
                     "generated producer `{producer}` failed with status {status:?}"
-                )
+                )?;
+                if !stderr.is_empty() {
+                    write!(formatter, ": {stderr}")?;
+                }
+                Ok(())
             }
         }
     }
@@ -455,7 +465,19 @@ pub fn build(
         })
         .map(|entry| entry.path.clone())
         .collect();
-    let mut units = discover_units_from_paths(root, read, &discovery_paths)?;
+    // Cargo's inputs are every captured path, unread ones included: Cargo reads them
+    // from a copy of the snapshot, and a refused read is refused there.
+    let captured_paths: Vec<String> = snapshot_entries
+        .iter()
+        .filter(|entry| {
+            !matches!(
+                entry.class,
+                InventoryClass::Ignored | InventoryClass::Submodule
+            ) && paths.binary_search(&entry.path).is_ok()
+        })
+        .map(|entry| entry.path.clone())
+        .collect();
+    let mut units = discover_units_from_paths(read, &discovery_paths, &captured_paths)?;
     let package_entrypoints = discover_package_entrypoints(read, &discovery_paths)?;
     for entry in &mut entries {
         if matches!(
@@ -505,7 +527,7 @@ pub fn build(
     );
     let document = InventoryDocument {
         schema_version: "warrant.inventory/1".into(),
-        snapshot: Some(snapshot.manifest.clone()),
+        snapshot: snapshot.manifest.clone(),
         total: entries.len() as u64,
         entries,
         summary,
@@ -545,7 +567,7 @@ pub fn discover_units(root: &Path) -> Result<Vec<Unit>, InventoryError> {
             reason: error.to_string(),
         })
     };
-    discover_units_from_paths(root, &read, &paths)
+    discover_units_from_paths(&read, &paths, &paths)
 }
 
 /// A captured path's Git mode (`100644`, `100755`, `120000`), as the snapshot recorded it.
@@ -604,16 +626,19 @@ pub fn verify_generated(
         .map(|item| item.producer.as_str())
         .collect();
     for producer in producers {
-        let status = Command::new("sh")
+        // The CLI's streams carry its own documents: producer output is captured.
+        let output = Command::new("sh")
             .arg("-c")
             .arg(producer)
             .current_dir(temporary.path())
-            .status()
+            .stdin(Stdio::null())
+            .output()
             .map_err(|error| io_error(producer, error))?;
-        if !status.success() {
+        if !output.status.success() {
             return Err(InventoryError::ProducerFailed {
                 producer: producer.into(),
-                status: status.code(),
+                status: output.status.code(),
+                stderr: producer_stderr(&output.stderr, temporary.path()),
             });
         }
     }
@@ -661,13 +686,50 @@ pub fn verify_generated(
     Ok(issues)
 }
 
+/// Fold one `verify_generated` run into the summary. Drift rows are the verified result
+/// (an empty list means the producers ran and matched). Discovery records absence only
+/// for declarations with no captured match; an output a producer wrote that the
+/// snapshot lacks is added unless a discovery row for the same producer already covers
+/// it. Discovery's rows keep their order; added rows follow in path order.
+pub fn record_verification(
+    summary: &mut InventorySummary,
+    issues: Vec<GeneratedIssue>,
+) -> Result<(), InventoryError> {
+    let discovered = summary
+        .generated_absent
+        .iter()
+        .map(|row| Ok((compile_glob(&row.declaration)?, row.producer.clone())))
+        .collect::<Result<Vec<_>, InventoryError>>()?;
+    let mut drift = Vec::new();
+    for issue in issues {
+        match issue.code {
+            GeneratedIssueCode::GeneratedDrift => drift.push(GeneratedDrift {
+                path: issue.path,
+                producer: issue.producer,
+            }),
+            GeneratedIssueCode::GeneratedAbsent => {
+                let covered = discovered.iter().any(|(declaration, producer)| {
+                    *producer == issue.producer && declaration.is_match(&issue.path)
+                });
+                let row = GeneratedAbsent {
+                    declaration: issue.path,
+                    producer: issue.producer,
+                };
+                if !covered && !summary.generated_absent.contains(&row) {
+                    summary.generated_absent.push(row);
+                }
+            }
+        }
+    }
+    summary.generated_drift = Some(drift);
+    Ok(())
+}
+
 /// Hash the deterministic inventory document, including completeness accounting and the
 /// snapshot identity. The capture time is excluded: it names when, not what, was read.
 pub fn inventory_digest(document: &InventoryDocument) -> Result<String, InventoryError> {
     let mut document = document.clone();
-    if let Some(snapshot) = &mut document.snapshot {
-        snapshot.taken_at.clear();
-    }
+    document.snapshot.taken_at.clear();
     let bytes =
         serde_json::to_vec(&document).map_err(|error| InventoryError::InvalidDeclaration {
             reason: format!("inventory serialization failed: {error}"),
@@ -1125,9 +1187,9 @@ fn digest_bytes(bytes: &[u8]) -> String {
 }
 
 fn discover_units_from_paths(
-    root: &Path,
     read: Reader<'_>,
     paths: &[String],
+    captured: &[String],
 ) -> Result<Vec<Unit>, InventoryError> {
     let mut units = BTreeMap::<String, Unit>::new();
     for path in paths {
@@ -1144,7 +1206,7 @@ fn discover_units_from_paths(
     }
     discover_tsconfig_references(read, paths, &mut units)?;
     discover_javascript_units(read, paths, &mut units)?;
-    discover_cargo_units(root, paths, &mut units)?;
+    discover_cargo_units(read, paths, captured, &mut units)?;
     Ok(units.into_values().collect())
 }
 
@@ -1340,9 +1402,13 @@ fn add_workspace_packages(
     Ok(())
 }
 
+/// Cargo units from `cargo metadata` over a copy of the captured Cargo inputs, never the
+/// live tree. Rust sources are copied empty: target discovery needs them to exist and
+/// `--no-deps` never reads them.
 fn discover_cargo_units(
-    root: &Path,
+    read: Reader<'_>,
     paths: &[String],
+    captured: &[String],
     units: &mut BTreeMap<String, Unit>,
 ) -> Result<(), InventoryError> {
     for manifest in paths.iter().filter(|path| path.ends_with("Cargo.toml")) {
@@ -1353,20 +1419,41 @@ fn discover_cargo_units(
             by: "cargo-manifest".into(),
         });
     }
-    let Some(manifest) = paths.iter().find(|path| path.as_str() == "Cargo.toml") else {
+    if !captured.iter().any(|path| path == "Cargo.toml") {
         return Ok(());
-    };
+    }
+    let temporary = tempfile::tempdir().map_err(|error| io_error("temporary directory", error))?;
+    let copy = temporary
+        .path()
+        .canonicalize()
+        .map_err(|error| io_error("temporary directory", error))?;
+    for path in captured {
+        if matches!(
+            path.as_str(),
+            "Cargo.toml" | "Cargo.lock" | ".cargo/config.toml"
+        ) || path.ends_with("/Cargo.toml")
+        {
+            write_captured(&copy, path, &read_captured(read, path)?, None)?;
+        } else if path.ends_with(".rs") {
+            write_captured(&copy, path, &[], None)?;
+        }
+    }
     let mut command = MetadataCommand::new();
     command
-        .manifest_path(root.join(manifest))
+        .manifest_path(copy.join("Cargo.toml"))
+        .current_dir(&copy)
         .no_deps()
         .other_options(["--locked".into()]);
-    let has_lock = root.join("Cargo.lock").exists();
+    let has_lock = captured.iter().any(|path| path == "Cargo.lock");
     let metadata = match command.exec() {
         Ok(metadata) => metadata,
         Err(error) if has_lock => {
+            let prefix = format!("{}/", copy.display());
             return Err(InventoryError::InvalidDeclaration {
-                reason: format!("cargo metadata failed for `{manifest}`: {error}"),
+                reason: format!(
+                    "cargo metadata failed for `Cargo.toml`: {}",
+                    error.to_string().replace(&prefix, "")
+                ),
             });
         }
         // Do not let discovery create a lockfile in the source tree. Manifest
@@ -1375,7 +1462,7 @@ fn discover_cargo_units(
     };
     for package in metadata.packages {
         let manifest_path = PathBuf::from(package.manifest_path.as_std_path());
-        let relative = relative_path(root, &manifest_path)?;
+        let relative = relative_path(&copy, &manifest_path)?;
         if !paths.contains(&relative) {
             continue;
         }
@@ -1662,10 +1749,11 @@ fn summarize(
     });
     // `files` counts what the snapshot holds: an ignored path is outside it, and a
     // declared generated file that is absent is listed for its producer, not present.
-    let files = entries
-        .iter()
-        .filter(|entry| entry.class != InventoryClass::Ignored && entry.reason != GENERATED_ABSENT)
-        .count() as u64;
+    // `by_class` breaks down the same files, so it sums to `files` (spec 5.5).
+    let held = |entry: &&InventoryEntry| {
+        entry.class != InventoryClass::Ignored && entry.reason != GENERATED_ABSENT
+    };
+    let files = entries.iter().filter(held).count() as u64;
     let mut summary = InventorySummary {
         files,
         ignored_files,
@@ -1673,11 +1761,13 @@ fn summarize(
         generated_absent,
         ..InventorySummary::default()
     };
-    for entry in entries {
+    for entry in entries.iter().filter(held) {
         *summary
             .by_class
             .entry(entry.class.as_str().into())
             .or_default() += 1;
+    }
+    for entry in entries {
         match entry.class {
             InventoryClass::Unread => summary.unread.push(UnreadPath {
                 path: entry.path.clone(),
@@ -1695,6 +1785,27 @@ fn summarize(
         }
     }
     summary
+}
+
+/// The last 20 non-empty stderr lines joined with `; ` (spec 12.1: a reason is one line),
+/// with the temporary copy's path, as given and as resolved, replaced by `<tmp>`.
+fn producer_stderr(stderr: &[u8], temporary: &Path) -> String {
+    let mut text = String::from_utf8_lossy(stderr).into_owned();
+    let mut forms = vec![temporary.to_string_lossy().into_owned()];
+    if let Ok(resolved) = temporary.canonicalize() {
+        forms.push(resolved.to_string_lossy().into_owned());
+    }
+    // Longest first, so a resolved form containing the given one is replaced whole.
+    forms.sort_by_key(|form| std::cmp::Reverse(form.len()));
+    for form in forms {
+        text = text.replace(&form, "<tmp>");
+    }
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    lines[lines.len().saturating_sub(20)..].join("; ")
 }
 
 /// Write one captured path into the verification copy with its recorded mode.

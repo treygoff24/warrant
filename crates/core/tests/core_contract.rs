@@ -127,16 +127,6 @@ inventory:
     assert!(old_summary.unit_aliases.is_empty());
     assert!(old_summary.generated_absent.is_empty());
 
-    let old_document: InventoryDocument = serde_json::from_value(serde_json::json!({
-        "schema_version": "warrant.inventory/1",
-        "entries": [],
-        "summary": old_summary
-    }))
-    .expect("old inventory documents should keep deserializing");
-    assert!(!old_document.truncated);
-    assert_eq!(old_document.total, 0);
-    assert_eq!(old_document.next_cursor, None);
-
     let schema = warrant_core::schema::generate("warrant.inventory")
         .expect("inventory schema should generate");
     let schema = serde_json::to_value(schema).expect("inventory schema should serialize");
@@ -279,4 +269,50 @@ fn implemented_document_schemas_are_stable_and_require_schema_version() {
             assert_eq!(schema["additionalProperties"], false);
         }
     }
+}
+
+/// B32 (spec 4.5): the snapshot is part of every inventory document. A document without
+/// one is rejected by serde, where documents are checked, and the schema requires it.
+#[test]
+fn inventory_document_without_snapshot_is_rejected() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/inventory-without-snapshot.json");
+    let document: serde_json::Value =
+        serde_json::from_slice(&fs::read(fixture).expect("negative fixture"))
+            .expect("fixture is JSON");
+    assert!(
+        document.get("snapshot").is_none(),
+        "the fixture must lack a snapshot"
+    );
+    let error = serde_json::from_value::<InventoryDocument>(document.clone())
+        .expect_err("an inventory without its snapshot is rejected");
+    assert!(
+        error.to_string().contains("missing field `snapshot`"),
+        "{error}"
+    );
+
+    // Control: the same document with its snapshot is accepted.
+    let mut complete = document;
+    complete["snapshot"] = serde_json::to_value(SnapshotManifest::new(
+        "sha1:repo".into(),
+        SnapshotKind::Tree,
+        "sha1:tree".into(),
+        "2026-09-24T00:00:00Z".into(),
+    ))
+    .expect("encode snapshot");
+    serde_json::from_value::<InventoryDocument>(complete).expect("complete document");
+
+    let schema = serde_json::to_value(
+        warrant_core::schema::generate("warrant.inventory").expect("inventory schema"),
+    )
+    .expect("encode schema");
+    assert!(
+        schema["required"]
+            .as_array()
+            .expect("required fields")
+            .iter()
+            .any(|field| field == "snapshot"),
+        "{}",
+        schema["required"]
+    );
 }

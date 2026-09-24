@@ -1,29 +1,235 @@
 {
-  "schema_version": 1,
-  "members": {
-    "atlas": {
-      "snapshot": {"exit_code": 0, "kind": "worktree", "object_format": "sha1"},
-      "inventory": {"exit_code": 0, "files": 1754, "by_class": {"config": 16, "doc": 492, "migration": 9, "script": 3, "source": 308, "test": 132, "unknown": 794}}
+  "atlas": {
+    "snapshot": {
+      "index": {
+        "schema_version": "warrant.snapshot/1",
+        "kind": "index",
+        "excluded": {
+          "ignored_files": null,
+          "ignored_count_reason": "not recoverable from tree",
+          "submodules": 0,
+          "oversize": 0
+        }
+      },
+      "commit": {
+        "schema_version": "warrant.snapshot/1",
+        "kind": "commit",
+        "excluded": {
+          "ignored_files": null,
+          "ignored_count_reason": "not recoverable from tree",
+          "submodules": 0,
+          "oversize": 0
+        }
+      }
     },
-    "nextjs-app": {
-      "snapshot": {"exit_code": 0, "kind": "worktree", "object_format": "sha1"},
-      "inventory": {"exit_code": 0, "files": 25, "by_class": {"asset": 1, "config": 4, "doc": 1, "schema": 1, "source": 14, "unknown": 4}}
+    "inventory": {
+      "schema_version": "warrant.inventory/1",
+      "files": 55358,
+      "by_class": {
+        "config": 16,
+        "doc": 492,
+        "ignored": 53604,
+        "migration": 9,
+        "script": 3,
+        "source": 308,
+        "test": 132,
+        "unknown": 794
+      },
+      "unowned_source_count": 308,
+      "unread_count": 0
+    }
+  },
+  "nextjs-app": {
+    "snapshot": {
+      "index": {
+        "schema_version": "warrant.snapshot/1",
+        "kind": "index",
+        "excluded": {
+          "ignored_files": null,
+          "ignored_count_reason": "not recoverable from tree",
+          "submodules": 0,
+          "oversize": 0
+        }
+      },
+      "commit": {
+        "schema_version": "warrant.snapshot/1",
+        "kind": "commit",
+        "excluded": {
+          "ignored_files": null,
+          "ignored_count_reason": "not recoverable from tree",
+          "submodules": 0,
+          "oversize": 0
+        }
+      }
     },
-    "pnpm-project-references": {
-      "snapshot": {"exit_code": 0, "kind": "worktree", "object_format": "sha1"},
-      "inventory": {"exit_code": 0, "files": 21, "by_class": {"config": 13, "doc": 1, "source": 4, "unknown": 3}}
+    "inventory": {
+      "schema_version": "warrant.inventory/1",
+      "files": 31891,
+      "by_class": {
+        "asset": 1,
+        "config": 4,
+        "doc": 1,
+        "ignored": 31866,
+        "schema": 1,
+        "source": 14,
+        "unknown": 4
+      },
+      "unowned_source_count": 14,
+      "unread_count": 0
+    }
+  },
+  "pnpm-project-references": {
+    "snapshot": {
+      "index": {
+        "schema_version": "warrant.snapshot/1",
+        "kind": "index",
+        "excluded": {
+          "ignored_files": null,
+          "ignored_count_reason": "not recoverable from tree",
+          "submodules": 0,
+          "oversize": 0
+        }
+      },
+      "commit": {
+        "schema_version": "warrant.snapshot/1",
+        "kind": "commit",
+        "excluded": {
+          "ignored_files": null,
+          "ignored_count_reason": "not recoverable from tree",
+          "submodules": 0,
+          "oversize": 0
+        }
+      }
     },
-    "commonjs-library": {
-      "snapshot": {"exit_code": 0, "kind": "worktree", "object_format": "sha1"},
-      "inventory": {"exit_code": 0, "files": 15, "by_class": {"asset": 1, "config": 2, "doc": 1, "source": 4, "unknown": 7}}
+    "inventory": {
+      "schema_version": "warrant.inventory/1",
+      "files": 199,
+      "by_class": {
+        "config": 13,
+        "doc": 1,
+        "ignored": 178,
+        "source": 4,
+        "unknown": 3
+      },
+      "unowned_source_count": 4,
+      "unread_count": 0
+    }
+  },
+  "commonjs-library": {
+    "snapshot": {
+      "index": {
+        "schema_version": "warrant.snapshot/1",
+        "kind": "index",
+        "excluded": {
+          "ignored_files": null,
+          "ignored_count_reason": "not recoverable from tree",
+          "submodules": 0,
+          "oversize": 0
+        }
+      },
+      "commit": {
+        "schema_version": "warrant.snapshot/1",
+        "kind": "commit",
+        "excluded": {
+          "ignored_files": null,
+          "ignored_count_reason": "not recoverable from tree",
+          "submodules": 0,
+          "oversize": 0
+        }
+      }
     },
-    "vite-library": {
-      "snapshot": {"exit_code": 0, "kind": "worktree", "object_format": "sha1"},
-      "inventory": {"exit_code": 0, "files": 13, "by_class": {"asset": 1, "config": 3, "doc": 1, "source": 3, "unknown": 5}}
+    "inventory": {
+      "schema_version": "warrant.inventory/1",
+      "files": 10037,
+      "by_class": {
+        "asset": 1,
+        "config": 2,
+        "doc": 1,
+        "ignored": 10022,
+        "source": 4,
+        "unknown": 7
+      },
+      "unowned_source_count": 4,
+      "unread_count": 0
+    }
+  },
+  "vite-library": {
+    "snapshot": {
+      "index": {
+        "schema_version": "warrant.snapshot/1",
+        "kind": "index",
+        "excluded": {
+          "ignored_files": null,
+          "ignored_count_reason": "not recoverable from tree",
+          "submodules": 0,
+          "oversize": 0
+        }
+      },
+      "commit": {
+        "schema_version": "warrant.snapshot/1",
+        "kind": "commit",
+        "excluded": {
+          "ignored_files": null,
+          "ignored_count_reason": "not recoverable from tree",
+          "submodules": 0,
+          "oversize": 0
+        }
+      }
     },
-    "path-aliases-exports": {
-      "snapshot": {"exit_code": 0, "kind": "worktree", "object_format": "sha1"},
-      "inventory": {"exit_code": 2, "error_code": "inventory", "reason_contains": "invalid `tsconfig.json`"}
+    "inventory": {
+      "schema_version": "warrant.inventory/1",
+      "files": 7880,
+      "by_class": {
+        "asset": 1,
+        "config": 3,
+        "doc": 1,
+        "ignored": 7867,
+        "source": 3,
+        "unknown": 5
+      },
+      "unowned_source_count": 3,
+      "unread_count": 0
+    }
+  },
+  "path-aliases-exports": {
+    "snapshot": {
+      "index": {
+        "schema_version": "warrant.snapshot/1",
+        "kind": "index",
+        "excluded": {
+          "ignored_files": null,
+          "ignored_count_reason": "not recoverable from tree",
+          "submodules": 0,
+          "oversize": 0
+        }
+      },
+      "commit": {
+        "schema_version": "warrant.snapshot/1",
+        "kind": "commit",
+        "excluded": {
+          "ignored_files": null,
+          "ignored_count_reason": "not recoverable from tree",
+          "submodules": 0,
+          "oversize": 0
+        }
+      }
+    },
+    "inventory": {
+      "schema_version": "warrant.inventory/1",
+      "files": 16862,
+      "by_class": {
+        "asset": 14,
+        "config": 20,
+        "doc": 46,
+        "ignored": 16717,
+        "migration": 2,
+        "schema": 2,
+        "source": 34,
+        "test": 13,
+        "unknown": 14
+      },
+      "unowned_source_count": 34,
+      "unread_count": 0
     }
   }
 }

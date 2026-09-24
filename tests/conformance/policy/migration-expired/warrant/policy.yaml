@@ -1,0 +1,13 @@
+schema_version: warrant.policy/1
+contracts:
+  - id: module.one
+    kind: module
+    intent: First owner.
+    owner: trey
+    authority: draft
+    files: ["src/shared/**"]
+    interface: { entry: src/shared/index.ts, exports: [run] }
+    class: migration
+    expires: 2000-01-01T00:00:00Z
+    enforcement: static
+    limits: Declared ownership.

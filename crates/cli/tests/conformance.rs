@@ -158,9 +158,28 @@ fn snapshot_conformance() {
     run_area("snapshot");
 }
 
-#[test]
-fn policy_conformance() {
-    run_policy_area();
+mod policy_conformance {
+    macro_rules! cases {
+        ($($test:ident => $case:literal),+ $(,)?) => {
+            const CASES: &[&str] = &[$($case),+];
+            $(#[test]
+            fn $test() {
+                super::run_policy_area($case, CASES);
+            })+
+        };
+    }
+
+    cases! {
+        digest_stability => "digest-stability",
+        enforcement_unsupported => "enforcement-unsupported",
+        structural_conflict => "structural-conflict",
+        dependency_conflict => "dependency-conflict",
+        state_conflict => "state-conflict",
+        interface_conflict => "interface-conflict",
+        migration_missing_expiry => "migration-missing-expiry",
+        migration_expired => "migration-expired",
+        override_without_authority => "override-without-authority",
+    }
 }
 
 #[test]
@@ -367,7 +386,7 @@ fn run_area(area: &str) {
     }
 }
 
-fn run_policy_area() {
+fn run_policy_area(selected: &str, expected: &[&str]) {
     let root = fixture_root().join("policy");
     let mut cases = fs::read_dir(&root)
         .unwrap_or_else(|error| panic!("read {}: {error}", root.display()))
@@ -381,18 +400,10 @@ fn run_policy_area() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         actual,
-        [
-            "digest-stability",
-            "enforcement-unsupported",
-            "structural-conflict",
-        ]
-        .into_iter()
-        .collect::<BTreeSet<_>>(),
+        expected.iter().copied().collect::<BTreeSet<_>>(),
         "policy fixture census differs"
     );
-    for case in cases {
-        run_policy_case(&case);
-    }
+    run_policy_case(&root.join(selected));
 }
 
 fn run_policy_case(case: &Path) {
@@ -456,11 +467,22 @@ fn run_policy_fixture(case: &Path, variant: Option<&str>) -> Observation {
         .unwrap_or_else(|| case.join("warrant"));
     copy_tree(&source, &repository.join("warrant/policy"));
     initialize_repository(&repository, &[]);
-    run_cli(
+    let compiled = run_cli(
         &repository,
         temporary.path(),
         &["policy".into(), "compile".into()],
-    )
+    );
+    let linted = run_cli(
+        &repository,
+        temporary.path(),
+        &["policy".into(), "lint".into()],
+    );
+    assert_eq!(compiled.exit_code, linted.exit_code, "structural lint exit");
+    assert_eq!(
+        compiled.document, linted.document,
+        "structural lint document"
+    );
+    compiled
 }
 
 fn check_policy_observation(

@@ -1,0 +1,25 @@
+schema_version: warrant.policy/1
+declarations:
+  stores:
+    - { id: approvals, kind: table, defined_in: src/schema.ts }
+contracts:
+  - id: state.one
+    kind: state
+    intent: First writer set.
+    owner: trey
+    authority: draft
+    store: approvals
+    writers: { modules: [module.one] }
+    write_sites: { pattern: { rule: { pattern: "insert($X)" } } }
+    enforcement: pattern
+    limits: Recognized writes.
+  - id: state.two
+    kind: state
+    intent: Second writer set.
+    owner: trey
+    authority: draft
+    store: approvals
+    writers: { modules: [module.two] }
+    write_sites: { pattern: { rule: { pattern: "insert($X)" } } }
+    enforcement: pattern
+    limits: Recognized writes.

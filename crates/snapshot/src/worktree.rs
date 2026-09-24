@@ -306,7 +306,7 @@ fn read<T>(
     #[cfg(unix)]
     let executable = {
         use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
+        metadata.permissions().mode() & 0o100 != 0
     };
     #[cfg(not(unix))]
     let executable = false;

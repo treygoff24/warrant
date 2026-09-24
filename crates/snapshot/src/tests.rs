@@ -1039,3 +1039,34 @@ fn commit_tree_resolution_uses_the_resolved_commit_id() {
         "commit tree resolution must use the already resolved commit id"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn group_execute_without_user_execute_matches_git_add() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = repo();
+    git(dir.path(), &["config", "core.fileMode", "true"]);
+    fs::set_permissions(dir.path().join("file"), fs::Permissions::from_mode(0o654)).unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let index = temporary.path().join("index");
+    git::run(dir.path(), &["read-tree", "HEAD"], Some(&index), None).unwrap();
+    git::run(dir.path(), &["add", "-A"], Some(&index), None).unwrap();
+    let expected = git::text(dir.path(), &["write-tree"], Some(&index)).unwrap();
+    let (manifest, mode) = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |s| Ok(s.mode("file").unwrap().to_owned()),
+    )
+    .unwrap();
+    let staged = git::text(dir.path(), &["ls-files", "--stage", "file"], Some(&index)).unwrap();
+    assert_eq!(
+        (manifest.tree, mode.as_str()),
+        (
+            format!("sha1:{expected}"),
+            staged.split_whitespace().next().unwrap()
+        ),
+        "mode 0654 must match Git's user-execute-only rule"
+    );
+}

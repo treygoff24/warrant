@@ -168,6 +168,69 @@ fn snapshot_expectation_rejects_a_disabled_exclusion_control() {
     );
 }
 
+#[test]
+fn snapshot_expectation_rejects_missing_exclusion_counts_and_submodules() {
+    let case = fixture_root().join("snapshot/exclusions-break-control");
+    let (expectation, mut observation) = execute_case(&case);
+    assert_expectation(&case, &expectation, &observation);
+    let original = observation.document.clone().expect("inventory document");
+    for (pointer, value, diagnostic) in [
+        ("/summary/ignored_files", json!(0), "ignored_files"),
+        ("/summary/submodules", json!([]), "submodules"),
+    ] {
+        let mut document = original.clone();
+        let field = document.pointer_mut(pointer).expect("observed facet");
+        assert_ne!(*field, value, "mutation must change {pointer}");
+        *field = value;
+        observation.document = Some(document);
+        let error = check_expectation(&expectation, &observation)
+            .expect_err("missing exclusion facet must fail");
+        assert!(error.contains(diagnostic), "{error}");
+    }
+}
+
+#[test]
+fn inventory_expectation_rejects_changed_class_module_and_count() {
+    let case = fixture_root().join("inventory/colocated-test-break-control");
+    let (expectation, mut observation) = execute_case(&case);
+    assert_expectation(&case, &expectation, &observation);
+    let original = observation.document.clone().expect("inventory document");
+    let index = original["entries"]
+        .as_array()
+        .expect("inventory entries")
+        .iter()
+        .position(|entry| entry["path"] == "src/__tests__/helpers.ts")
+        .expect("colocated test entry");
+    for (pointer, value, diagnostic) in [
+        (format!("/entries/{index}/class"), json!("source"), "class"),
+        (format!("/entries/{index}/module"), Value::Null, "module"),
+        ("/summary/by_class/test".into(), json!(0), "count"),
+    ] {
+        let mut document = original.clone();
+        let field = document.pointer_mut(&pointer).expect("observed facet");
+        assert_ne!(*field, value, "mutation must change {pointer}");
+        *field = value;
+        observation.document = Some(document);
+        let error = check_expectation(&expectation, &observation)
+            .expect_err("changed inventory facet must fail");
+        assert!(error.contains(diagnostic), "{error}");
+    }
+}
+
+#[test]
+fn inventory_expectation_rejects_missing_unknown_files() {
+    let case = fixture_root().join("inventory/unowned-source-negative");
+    let (expectation, mut observation) = execute_case(&case);
+    assert_expectation(&case, &expectation, &observation);
+    let unknown =
+        &mut observation.document.as_mut().expect("inventory document")["summary"]["unknown"];
+    assert_ne!(*unknown, json!([]), "unknown fixture must be nonempty");
+    *unknown = json!([]);
+    let error =
+        check_expectation(&expectation, &observation).expect_err("missing unknown files must fail");
+    assert!(error.contains("unknown"), "{error}");
+}
+
 fn run_area(area: &str) {
     let root = fixture_root().join(area);
     let mut cases = fs::read_dir(&root)

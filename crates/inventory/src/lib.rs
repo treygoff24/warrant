@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use cargo_metadata::MetadataCommand;
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -190,6 +190,8 @@ pub enum InventoryError {
     ProducerFailed {
         producer: String,
         status: Option<i32>,
+        /// The producer's last stderr lines, one line, the temporary copy named `<tmp>`.
+        stderr: String,
     },
 }
 
@@ -263,11 +265,19 @@ impl fmt::Display for InventoryError {
                 "`{path}` is a nested repository and not a declared submodule"
             ),
             Self::InvalidDeclaration { reason } => formatter.write_str(reason),
-            Self::ProducerFailed { producer, status } => {
+            Self::ProducerFailed {
+                producer,
+                status,
+                stderr,
+            } => {
                 write!(
                     formatter,
                     "generated producer `{producer}` failed with status {status:?}"
-                )
+                )?;
+                if !stderr.is_empty() {
+                    write!(formatter, ": {stderr}")?;
+                }
+                Ok(())
             }
         }
     }
@@ -616,16 +626,19 @@ pub fn verify_generated(
         .map(|item| item.producer.as_str())
         .collect();
     for producer in producers {
-        let status = Command::new("sh")
+        // The CLI's streams carry its own documents: producer output is captured.
+        let output = Command::new("sh")
             .arg("-c")
             .arg(producer)
             .current_dir(temporary.path())
-            .status()
+            .stdin(Stdio::null())
+            .output()
             .map_err(|error| io_error(producer, error))?;
-        if !status.success() {
+        if !output.status.success() {
             return Err(InventoryError::ProducerFailed {
                 producer: producer.into(),
-                status: status.code(),
+                status: output.status.code(),
+                stderr: producer_stderr(&output.stderr, temporary.path()),
             });
         }
     }
@@ -1771,6 +1784,27 @@ fn summarize(
         }
     }
     summary
+}
+
+/// The last 20 non-empty stderr lines joined with `; ` (spec 12.1: a reason is one line),
+/// with the temporary copy's path, as given and as resolved, replaced by `<tmp>`.
+fn producer_stderr(stderr: &[u8], temporary: &Path) -> String {
+    let mut text = String::from_utf8_lossy(stderr).into_owned();
+    let mut forms = vec![temporary.to_string_lossy().into_owned()];
+    if let Ok(resolved) = temporary.canonicalize() {
+        forms.push(resolved.to_string_lossy().into_owned());
+    }
+    // Longest first, so a resolved form containing the given one is replaced whole.
+    forms.sort_by_key(|form| std::cmp::Reverse(form.len()));
+    for form in forms {
+        text = text.replace(&form, "<tmp>");
+    }
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    lines[lines.len().saturating_sub(20)..].join("; ")
 }
 
 /// Write one captured path into the verification copy with its recorded mode.

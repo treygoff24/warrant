@@ -1360,6 +1360,84 @@ fn inventory_error_code_producer_failed() {
     assert_inventory_error(&error, "producer-failed", "exit 3");
 }
 
+/// B27: a producer's output never reaches the CLI's streams; stdout stays exactly one
+/// JSON document.
+#[cfg(unix)]
+#[test]
+fn producer_output_stays_out_of_the_document_stream() {
+    let repository = producer_repository("echo progress; echo noise >&2; ./link.sh");
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(
+        repository.path(),
+        cache.path(),
+        &["inventory", "--verify-generated"],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    let documents = serde_json::Deserializer::from_slice(&output.stdout)
+        .into_iter::<serde_json::Value>()
+        .collect::<Result<Vec<_>, _>>();
+    assert!(
+        matches!(&documents, Ok(documents) if documents.len() == 1),
+        "stdout is not one JSON document: {stdout}"
+    );
+    assert!(!stderr.contains("noise"), "{stderr}");
+}
+
+/// B27: a failing producer's reason carries its stderr, one line, with the temporary
+/// copy's path replaced by `<tmp>`.
+#[cfg(unix)]
+#[test]
+fn producer_failure_reason_carries_stderr_without_the_temporary_path() {
+    let repository =
+        producer_repository("pwd >&2; echo first-marker >&2; echo last-marker >&2; exit 3");
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(
+        repository.path(),
+        cache.path(),
+        &["inventory", "--verify-generated"],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("error document");
+    let reason = error["reason"].as_str().expect("reason");
+    assert!(
+        reason.contains("<tmp>; first-marker; last-marker"),
+        "{reason}"
+    );
+    assert!(!reason.contains('\n'), "{reason}");
+    let temporary = std::env::temp_dir();
+    for form in [
+        temporary.clone(),
+        temporary.canonicalize().expect("temp dir"),
+    ] {
+        let form = form.to_string_lossy();
+        assert!(!reason.contains(form.as_ref()), "{reason} names {form}");
+    }
+}
+
+/// B27: only the producer's last 20 stderr lines reach the reason.
+#[cfg(unix)]
+#[test]
+fn producer_failure_reason_keeps_the_last_twenty_stderr_lines() {
+    let repository = producer_repository("seq 1 25 >&2; exit 3");
+    let cache = tempfile::tempdir().expect("temp cache");
+    let output = warrant_in(
+        repository.path(),
+        cache.path(),
+        &["inventory", "--verify-generated"],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("error document");
+    let reason = error["reason"].as_str().expect("reason");
+    let last: Vec<String> = (6..=25).map(|line| line.to_string()).collect();
+    assert!(
+        reason.ends_with(&format!("failed with status Some(3): {}", last.join("; "))),
+        "{reason}"
+    );
+}
+
 /// Error documents name repository files relative to the repository root, so a document
 /// is the same wherever the checkout lives and never discloses the machine's layout.
 #[test]

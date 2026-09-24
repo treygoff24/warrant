@@ -1098,12 +1098,16 @@ fn object_snapshot_inventories_leave_ignored_files_unknown() {
                                     reason: error.document.reason,
                                 })
                         };
+                        let untracked =
+                            warrant_inventory::untracked_paths(root, &snapshot.manifest().kind)
+                                .expect("untracked paths");
                         Ok(warrant_inventory::build(
                             root,
                             warrant_inventory::CapturedSnapshot {
                                 manifest: snapshot.manifest(),
                                 entries: snapshot.entries(),
                                 read: &read,
+                                untracked: &untracked,
                             },
                             &manifest,
                             &warrant_inventory::BuildConfig::default(),

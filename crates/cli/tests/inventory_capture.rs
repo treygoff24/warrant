@@ -151,12 +151,15 @@ fn capture(
                 reason: error.document.reason,
             })
         };
+        let untracked = warrant_inventory::untracked_paths(root, &snapshot.manifest().kind)
+            .expect("untracked paths");
         let built = warrant_inventory::build(
             root,
             CapturedSnapshot {
                 manifest: snapshot.manifest(),
                 entries: snapshot.entries(),
                 read: &read,
+                untracked: &untracked,
             },
             manifest,
             config,
@@ -419,6 +422,7 @@ fn refused_snapshot_read_keeps_the_snapshot_code() {
                         manifest: snapshot.manifest(),
                         entries: snapshot.entries(),
                         read: &read,
+                        untracked: &std::collections::BTreeSet::new(),
                     },
                     &manifest,
                     &BuildConfig::default(),
@@ -506,6 +510,62 @@ fn generated_declarations_matched_only_by_ignored_files_are_absent() {
             assert_eq!(
                 captured.entry("lib/tracked.ts").class,
                 InventoryClass::Generated
+            );
+        },
+    );
+}
+
+/// B8, spec 5.2: "A file whose extension belongs to an enabled integration and that no
+/// rule classifies is `source` with `module: null`". The build-output directory names
+/// apply only to files Git does not track.
+#[test]
+fn build_output_default_never_reclassifies_a_tracked_file() {
+    in_neutral_git_child(
+        "build_output_default_never_reclassifies_a_tracked_file",
+        || {
+            let repository = Repository::new();
+            repository.write("src/build/index.ts", "export const build = 1;\n");
+            repository.write("scripts/build/x.ts", "export const x = 1;\n");
+            repository.commit_all("tracked sources under build directories");
+            // Untracked, non-ignored output a local build left behind.
+            repository.write("dist/bundle.js", "bundle();\n");
+            repository.write("node_modules/pkg/index.js", "module.exports = 1;\n");
+            assert_eq!(
+                repository.git(&["ls-files", "--others", "--exclude-standard"]),
+                "dist/bundle.js\nnode_modules/pkg/index.js\n"
+            );
+
+            let captured = worktree(&repository, &manifest(""));
+            for path in ["src/build/index.ts", "scripts/build/x.ts"] {
+                let entry = captured.entry(path);
+                assert_eq!(entry.class, InventoryClass::Source, "{path}");
+                assert_eq!(entry.module, None, "{path}");
+            }
+            assert_eq!(
+                captured.built.document.summary.unowned_source,
+                ["scripts/build/x.ts", "src/build/index.ts"]
+            );
+            for path in ["dist/bundle.js", "node_modules/pkg/index.js"] {
+                assert_eq!(
+                    captured.entry(path).class,
+                    InventoryClass::BuildOutput,
+                    "{path}"
+                );
+            }
+
+            // A commit has no untracked files: every entry is classified by extension.
+            repository.commit_all("commit the output too");
+            let committed = capture(
+                &repository,
+                SnapshotKind::Commit,
+                Some("HEAD"),
+                &manifest(""),
+                &BuildConfig::default(),
+            )
+            .unwrap_or_else(|error| panic!("commit capture: {error}"));
+            assert_eq!(
+                committed.entry("dist/bundle.js").class,
+                InventoryClass::Source
             );
         },
     );

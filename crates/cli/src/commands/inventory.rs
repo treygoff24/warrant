@@ -37,12 +37,15 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
                         reason: error.document.reason,
                     })
             };
+            let untracked = warrant_inventory::untracked_paths(&root, &captured.manifest().kind)
+                .map_err(inventory_error)?;
             warrant_inventory::build(
                 &root,
                 warrant_inventory::CapturedSnapshot {
                     manifest: captured.manifest(),
                     entries: captured.entries(),
                     read: &read,
+                    untracked: &untracked,
                 },
                 &manifest,
                 &warrant_inventory::BuildConfig::default(),

@@ -69,6 +69,57 @@ pub struct CapturedSnapshot<'a> {
     pub manifest: &'a SnapshotManifest,
     pub entries: &'a [InventoryEntry],
     pub read: Reader<'a>,
+    /// Captured paths Git does not track (untracked, non-ignored worktree files). Every
+    /// entry of an index, commit or tree snapshot is tracked, so this is empty for them.
+    pub untracked: &'a BTreeSet<String>,
+}
+
+/// The untracked, non-ignored paths a capture of `kind` includes: the worktree's
+/// `git ls-files --others --exclude-standard`, the same listing the capture adds to the
+/// index; nothing for an object snapshot, whose entries all come from Git objects.
+pub fn untracked_paths(
+    root: &Path,
+    kind: &SnapshotKind,
+) -> Result<BTreeSet<String>, InventoryError> {
+    if *kind != SnapshotKind::Worktree {
+        return Ok(BTreeSet::new());
+    }
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "--others", "--exclude-standard", "-z"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_NO_REPLACE_OBJECTS", "1");
+    for variable in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ] {
+        command.env_remove(variable);
+    }
+    let output = command
+        .output()
+        .map_err(|error| io_error("git ls-files --others", error))?;
+    if !output.status.success() {
+        return Err(io_error(
+            "git ls-files --others",
+            String::from_utf8_lossy(&output.stderr).trim(),
+        ));
+    }
+    output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+        .map(|record| {
+            std::str::from_utf8(record)
+                .map(str::to_owned)
+                .map_err(|_| io_error("git ls-files --others", "non-UTF-8 path"))
+        })
+        .collect()
 }
 
 /// Result of classifying a snapshot tree.
@@ -258,7 +309,11 @@ pub fn build(
             entries.push(entry);
             continue;
         }
-        let default = default_class(relative, enabled);
+        let default = default_class(
+            relative,
+            enabled,
+            snapshot.untracked.contains(relative.as_str()),
+        );
         let explicit = matching_rules(relative, &class_rules);
         let generated_match = matching_generated(relative, &generated);
         let vendored_match = matching_vendored(relative, &vendored);
@@ -867,15 +922,24 @@ fn matching_modules(path: &str, modules: &[CompiledModule]) -> Vec<String> {
     owners
 }
 
-fn default_class(path: &str, enabled: EnabledIntegrations) -> (InventoryClass, String, String) {
+/// Integration defaults (spec 5.2). The build-output directory names are a built-in
+/// only for files Git does not track: a tracked file under `build/` or `dist/` is
+/// classified by its extension like any other, and a repository that commits build
+/// output declares it in its manifest.
+fn default_class(
+    path: &str,
+    enabled: EnabledIntegrations,
+    untracked: bool,
+) -> (InventoryClass, String, String) {
     let lower = path.to_ascii_lowercase();
     let name = lower.rsplit('/').next().unwrap_or(&lower);
     let segments: Vec<&str> = lower.split('/').collect();
     let in_dir =
         |candidate: &str| segments[..segments.len().saturating_sub(1)].contains(&candidate);
-    let known_output = ["target", "dist", "build", "node_modules", ".next"]
-        .iter()
-        .any(|part| in_dir(part));
+    let known_output = untracked
+        && ["target", "dist", "build", "node_modules", ".next"]
+            .iter()
+            .any(|part| in_dir(part));
     let class = if known_output {
         InventoryClass::BuildOutput
     } else if enabled.typescript && lower.ends_with(".d.ts") {

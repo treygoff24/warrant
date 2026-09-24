@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -93,9 +93,21 @@ fn worktree_manifest() -> SnapshotManifest {
 }
 
 /// Build with a reader over the fixture directory, as a worktree snapshot reads it.
+/// Fixture listings have no Git, so every entry is treated as tracked.
 fn build_on_disk(
     root: &Path,
     listing: &[InventoryEntry],
+    manifest: &WarrantManifest,
+    config: &BuildConfig,
+) -> Result<BuiltInventory, InventoryError> {
+    build_on_disk_with_untracked(root, listing, &BTreeSet::new(), manifest, config)
+}
+
+/// As `build_on_disk`, with the named paths untracked in the worktree.
+fn build_on_disk_with_untracked(
+    root: &Path,
+    listing: &[InventoryEntry],
+    untracked: &BTreeSet<String>,
     manifest: &WarrantManifest,
     config: &BuildConfig,
 ) -> Result<BuiltInventory, InventoryError> {
@@ -111,6 +123,7 @@ fn build_on_disk(
             manifest: &worktree_manifest(),
             entries: listing,
             read: &read,
+            untracked,
         },
         manifest,
         config,
@@ -305,7 +318,8 @@ fn classification_defaults_and_snapshot_exclusions_preserve_classes() {
     assert_eq!(classes["vendor/library.ts"], InventoryClass::Vendored);
     assert_eq!(classes["public/logo.png"], InventoryClass::Asset);
     assert_eq!(classes["README.md"], InventoryClass::Doc);
-    assert_eq!(classes["dist/app.js"], InventoryClass::BuildOutput);
+    // Spec 5.2: a tracked file under dist/ is classified by its extension.
+    assert_eq!(classes["dist/app.js"], InventoryClass::Source);
     assert_eq!(classes["third-party/old"], InventoryClass::Submodule);
     assert_eq!(classes["ignored/cache.bin"], InventoryClass::Ignored);
     assert_eq!(classes["legacy.pl"], InventoryClass::Unknown);
@@ -437,8 +451,18 @@ fn excluded_declarations_do_not_supply_units_or_entrypoints() {
         "  vendored:\n    - files: ['vendor/**']\n      source: vendor\n      version: '1'\n",
     );
 
-    let built = build_on_disk(root.path(), &listing, &manifest, &BuildConfig::default())
-        .expect("excluded declarations are not parsed");
+    // Untracked build output is excluded from discovery, so its declarations are not parsed.
+    let untracked: BTreeSet<String> = ["dist/tsconfig.json", "dist/package.json"]
+        .map(String::from)
+        .into();
+    let built = build_on_disk_with_untracked(
+        root.path(),
+        &listing,
+        &untracked,
+        &manifest,
+        &BuildConfig::default(),
+    )
+    .expect("excluded declarations are not parsed");
     assert_eq!(built.units.len(), 1);
     assert_eq!(built.units[0].configuration, "package.json");
     let source = built
@@ -449,6 +473,15 @@ fn excluded_declarations_do_not_supply_units_or_entrypoints() {
         .expect("package main target");
     assert_eq!(source.entrypoints.len(), 1);
     assert_eq!(source.entrypoints[0].kind, "package-main");
+
+    // Tracked, the same files are first-party configuration (spec 5.2) and are parsed.
+    let error = build_on_disk(root.path(), &listing, &manifest, &BuildConfig::default())
+        .expect_err("a tracked malformed tsconfig is a first-party declaration");
+    assert!(
+        matches!(&error, InventoryError::InvalidDeclaration { reason }
+            if reason.contains("dist/tsconfig.json")),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -1450,6 +1483,7 @@ fn ignored_count_is_unknown_outside_the_worktree() {
                 manifest: &snapshot,
                 entries: &listing,
                 read: &reader,
+                untracked: &BTreeSet::new(),
             },
             &manifest,
             &config,

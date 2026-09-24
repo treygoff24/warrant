@@ -1,9 +1,9 @@
-use std::env;
-
 use clap::Args as ClapArgs;
 use warrant_core::nouns::SnapshotKind;
 
-use crate::{cache, cancel, cli::Format, error::CommandError, manifest::load_manifest, output};
+use crate::{
+    cache, cancel, cli::Format, error::CommandError, manifest::load_manifest, output, repository,
+};
 
 use super::page;
 
@@ -18,8 +18,7 @@ pub struct Args {
 }
 
 pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
-    let root = env::current_dir()
-        .map_err(|error| CommandError::evaluation("repository-io", error.to_string(), None))?;
+    let root = repository::root()?;
     let manifest = load_manifest(&root)?;
     let (snapshot, built) = warrant_snapshot::capture(
         &root,

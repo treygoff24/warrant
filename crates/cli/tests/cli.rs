@@ -651,3 +651,109 @@ fn bare_snapshot_defaults_to_the_worktree() {
         serde_json::from_slice(&both.stderr).expect("usage error document");
     assert_eq!(error.code, "invalid-invocation");
 }
+
+/// A repository whose manifest changes classification, units and limits, with a
+/// nested directory to run from.
+fn configured_repository() -> tempfile::TempDir {
+    let directory = tempfile::tempdir().expect("temp repository");
+    let root = directory.path();
+    for (path, contents) in [
+        (
+            "warrant/warrant.yaml",
+            "schema_version: warrant.manifest/1\nsnapshot:\n  max_file_bytes: 64\nintegrations:\n  lang-ts:\n    enabled: true\ninventory:\n  classes:\n    - class: doc\n      files: [\"notes/**\"]\n",
+        ),
+        ("package.json", "{\"workspaces\":[\"packages/*\"]}\n"),
+        (
+            "packages/app/package.json",
+            "{\"main\":\"./src/index.ts\"}\n",
+        ),
+        ("packages/app/tsconfig.json", "{\"compilerOptions\":{}}\n"),
+        ("packages/app/src/index.ts", "export const app = 1;\n"),
+        ("packages/app/src/deep/leaf.ts", "export const leaf = 1;\n"),
+        ("notes/plan.bin", "plan\n"),
+    ] {
+        let target = root.join(path);
+        fs::create_dir_all(target.parent().expect("parent")).expect("fixture directory");
+        fs::write(target, contents).expect("fixture file");
+    }
+    fs::write(root.join("large.txt"), vec![b'x'; 128]).expect("oversize file");
+    git(root, &["init", "-q"]);
+    git(root, &["add", "."]);
+    commit(root, "fixture");
+    directory
+}
+
+fn without_timestamps(mut document: serde_json::Value) -> serde_json::Value {
+    if let Some(object) = document.as_object_mut() {
+        object.remove("taken_at");
+        if let Some(snapshot) = object
+            .get_mut("snapshot")
+            .and_then(|value| value.as_object_mut())
+        {
+            snapshot.remove("taken_at");
+        }
+    }
+    document
+}
+
+#[test]
+fn documents_do_not_depend_on_the_working_directory() {
+    let repository = configured_repository();
+    let nested = repository.path().join("packages/app/src/deep");
+    let cache = tempfile::tempdir().expect("temp cache");
+    for command in [&["inventory"][..], &["snapshot", "--worktree"]] {
+        let from_root =
+            without_timestamps(json(&warrant_in(repository.path(), cache.path(), command)));
+        let from_nested = without_timestamps(json(&warrant_in(&nested, cache.path(), command)));
+        assert_eq!(from_root, from_nested, "{command:?}");
+    }
+    // The root document really used the manifest: limits, classes, units and entrypoints.
+    let inventory: InventoryDocument =
+        serde_json::from_value(json(&warrant_in(&nested, cache.path(), &["inventory"])))
+            .expect("inventory document");
+    let entry = |path: &str| {
+        inventory
+            .entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .unwrap_or_else(|| panic!("missing {path}"))
+            .clone()
+    };
+    assert_eq!(entry("large.txt").unread.as_deref(), Some("oversize"));
+    assert_eq!(
+        entry("notes/plan.bin").class,
+        warrant_core::nouns::InventoryClass::Doc
+    );
+    let leaf = entry("packages/app/src/deep/leaf.ts");
+    assert_eq!(leaf.class, warrant_core::nouns::InventoryClass::Source);
+    assert_eq!(leaf.unit.as_deref(), Some("packages/app"));
+    assert_eq!(leaf.module, None);
+    assert_eq!(entry("packages/app/src/index.ts").entrypoints.len(), 1);
+}
+
+#[test]
+fn non_repository_is_an_input_error() {
+    let outside = tempfile::tempdir().expect("temp directory");
+    let directory = outside.path().join("plain");
+    fs::create_dir(&directory).expect("plain directory");
+    let cache = tempfile::tempdir().expect("temp cache");
+    for command in [
+        &["snapshot"][..],
+        &["snapshot", "--commit", "HEAD"],
+        &["inventory"],
+    ] {
+        let mut process = Command::new(env!("CARGO_BIN_EXE_warrant"));
+        process
+            .args(command)
+            .current_dir(&directory)
+            .env("XDG_CACHE_HOME", cache.path())
+            .env("GIT_CEILING_DIRECTORIES", outside.path());
+        neutralize_git_environment(&mut process);
+        let output = process.output().expect("run warrant");
+        assert_eq!(output.status.code(), Some(2), "{command:?}");
+        let error: warrant_core::nouns::ErrorDocument =
+            serde_json::from_slice(&output.stderr).expect("error document");
+        assert_eq!(error.code, "non-repository", "{command:?}");
+        assert!(error.reason.contains("Git repository"), "{}", error.reason);
+    }
+}

@@ -1,9 +1,9 @@
-use std::{env, path::PathBuf};
-
 use clap::{ArgGroup, Args as ClapArgs};
 use warrant_core::nouns::SnapshotKind;
 
-use crate::{cache, cancel, cli::Format, error::CommandError, manifest::load_manifest, output};
+use crate::{
+    cache, cancel, cli::Format, error::CommandError, manifest::load_manifest, output, repository,
+};
 
 // Spec 4.1: the worktree is the default when no kind is given; kinds stay exclusive.
 #[derive(Debug, ClapArgs)]
@@ -20,7 +20,7 @@ pub struct Args {
 }
 
 pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
-    let root = current_dir()?;
+    let root = repository::root()?;
     let manifest = load_manifest(&root)?;
     let (kind, revision) = args.source();
     let (manifest, ()) =
@@ -63,11 +63,6 @@ impl Args {
             (SnapshotKind::Worktree, None)
         }
     }
-}
-
-fn current_dir() -> crate::error::Result<PathBuf> {
-    env::current_dir()
-        .map_err(|error| CommandError::evaluation("repository-io", error.to_string(), None))
 }
 
 fn snapshot_error(error: warrant_snapshot::SnapshotError) -> Box<CommandError> {

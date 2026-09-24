@@ -5,6 +5,7 @@ mod commands;
 mod error;
 mod manifest;
 mod output;
+mod repository;
 
 use clap::{CommandFactory, Parser, error::ErrorKind};
 use cli::Cli;

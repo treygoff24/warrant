@@ -214,6 +214,7 @@ fn portable(
                 Some((mode, oid, _)) if mode == "160000" => {
                     // Empty directories retain the recorded gitlink. Local metadata
                     // prevents rev-parse from discovering the parent repository.
+                    // Git's unborn staging varies by version; Warrant always refuses.
                     let oid = if submodule.join(".git").try_exists()? {
                         nested_head(&submodule)?
                             .ok_or_else(|| SnapshotError::new("unborn-submodule", &path))?

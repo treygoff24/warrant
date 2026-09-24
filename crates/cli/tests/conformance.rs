@@ -625,9 +625,6 @@ fn run_inventory_api(repository: &Path, expectation: &Expectation) -> Observatio
                         reason: error.document.reason,
                     })
             };
-            let untracked =
-                warrant_inventory::untracked_paths(repository, &snapshot.manifest().kind)
-                    .expect("untracked paths");
             warrant_inventory::build(
                 repository,
                 warrant_inventory::CapturedSnapshot {
@@ -635,7 +632,7 @@ fn run_inventory_api(repository: &Path, expectation: &Expectation) -> Observatio
                     entries: snapshot.entries(),
                     read: &read,
                     resolve: &resolve,
-                    untracked: &untracked,
+                    untracked: snapshot.untracked(),
                 },
                 &manifest,
                 &config,

@@ -1242,60 +1242,29 @@ fn inventory_error_code_invalid_declaration() {
     assert_inventory_error(&error, "invalid-declaration", "tsconfig.json");
 }
 
-/// Git failing after capture, when inventory lists untracked files, is an I/O failure
-/// of the inventory, not of the snapshot: the wrapper lets capture's own untracked
-/// listing through and fails the second one.
+/// A reproduced output inventory cannot read is an I/O failure of the inventory, not
+/// drift and not a snapshot error: the producer leaves its output unreadable.
 #[cfg(unix)]
 #[test]
 fn inventory_error_code_inventory_io() {
-    use std::os::unix::fs::PermissionsExt;
-
     let repository = repository();
-    let control = tempfile::tempdir().expect("git wrapper directory");
-    let real_git = Command::new("sh")
-        .args(["-c", "command -v git"])
-        .output()
-        .expect("locate real git");
-    let wrapper = control.path().join("git");
+    let root = repository.path();
+    fs::create_dir_all(root.join("gen")).expect("generated directory");
+    fs::write(root.join("gen/out.txt"), "out\n").expect("generated output");
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
     fs::write(
-        &wrapper,
-        format!(
-            r#"#!/bin/sh
-case " $* " in
-  *" ls-files --others --exclude-standard -z "*)
-    if [ -e "{marker}" ]; then echo "fatal: listing refused" >&2; exit 128; fi
-    : > "{marker}" ;;
-esac
-exec "{git}" "$@"
-"#,
-            marker = control.path().join("listed").display(),
-            git = String::from_utf8(real_git.stdout).expect("git path").trim(),
-        ),
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\ninventory:\n  generated:\n    - files: [\"gen/out.txt\"]\n      producer: \"mkdir -p gen && printf 'out\\\\n' > gen/out.txt && chmod 000 gen/out.txt\"\n      reproducible: true\n",
     )
-    .expect("git wrapper");
-    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).expect("executable");
-    let mut paths = vec![control.path().to_path_buf()];
-    paths.extend(std::env::split_paths(
-        &std::env::var_os("PATH").expect("PATH"),
-    ));
+    .expect("manifest");
+    git(root, &["add", "gen/out.txt", "warrant/warrant.yaml"]);
+    commit(root, "unreadable reproduced output");
     let cache = tempfile::tempdir().expect("temp cache");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_warrant"));
-    neutralize_git_environment(&mut command);
-    let output = command
-        .arg("inventory")
-        .current_dir(repository.path())
-        .env("XDG_CACHE_HOME", cache.path())
-        .env("PATH", std::env::join_paths(paths).expect("fixture PATH"))
-        .output()
-        .expect("run warrant");
+    let output = warrant_in(root, cache.path(), &["inventory", "--verify-generated"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(2), "{stderr}");
-    assert!(
-        control.path().join("listed").exists(),
-        "capture listed untracked files"
-    );
     let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("error document");
-    assert_inventory_error(&error, "inventory-io", "listing refused");
+    assert_inventory_error(&error, "inventory-io", "gen/out.txt");
 }
 
 /// With neither `XDG_CACHE_HOME` nor `HOME` usable there is no cache location; the run
@@ -1869,9 +1838,6 @@ fn object_snapshot_inventories_leave_ignored_files_unknown() {
                                     reason: error.document.reason,
                                 })
                         };
-                        let untracked =
-                            warrant_inventory::untracked_paths(root, &snapshot.manifest().kind)
-                                .expect("untracked paths");
                         Ok(warrant_inventory::build(
                             root,
                             warrant_inventory::CapturedSnapshot {
@@ -1879,7 +1845,7 @@ fn object_snapshot_inventories_leave_ignored_files_unknown() {
                                 entries: snapshot.entries(),
                                 read: &read,
                                 resolve: &resolve,
-                                untracked: &untracked,
+                                untracked: snapshot.untracked(),
                             },
                             &manifest,
                             &warrant_inventory::BuildConfig::default(),
@@ -1898,4 +1864,81 @@ fn object_snapshot_inventories_leave_ignored_files_unknown() {
             }
         },
     );
+}
+
+/// B29: inventory classifies against the untracked listing the capture itself took, not
+/// a second listing of the live index. Git's index briefly tracks `dist/bundle.js`
+/// during the second untracked listing and never again; the capture's own listing and
+/// its stability check agree the file is untracked, so it is build output.
+#[cfg(unix)]
+#[test]
+fn untracked_classification_uses_the_capture_listing() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repository = repository();
+    let root = repository.path();
+    fs::create_dir_all(root.join("dist")).expect("output directory");
+    fs::write(root.join("dist/bundle.js"), "built();\n").expect("untracked output");
+    let control = tempfile::tempdir().expect("git control");
+    let real_git = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .expect("locate real git");
+    assert!(real_git.status.success());
+    let wrapper = control.path().join("git");
+    fs::write(
+        &wrapper,
+        r#"#!/bin/sh
+case " $* " in
+  *" --ignored "*) exec "$WARRANT_TEST_GIT" "$@" ;;
+  *" ls-files --others "*) ;;
+  *) exec "$WARRANT_TEST_GIT" "$@" ;;
+esac
+: > "$WARRANT_TEST_CONTROL/listing.$$"
+count=$(ls "$WARRANT_TEST_CONTROL" | grep -c '^listing\.')
+if [ "$count" -ne 2 ]; then exec "$WARRANT_TEST_GIT" "$@"; fi
+env -u GIT_INDEX_FILE "$WARRANT_TEST_GIT" -C "$WARRANT_TEST_ROOT" add -- dist/bundle.js || exit 97
+"$WARRANT_TEST_GIT" "$@"
+result=$?
+env -u GIT_INDEX_FILE "$WARRANT_TEST_GIT" -C "$WARRANT_TEST_ROOT" rm -q --cached -- dist/bundle.js || exit 98
+: > "$WARRANT_TEST_CONTROL/flipped"
+exit "$result"
+"#,
+    )
+    .expect("git wrapper");
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).expect("executable wrapper");
+    let mut paths = vec![control.path().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").expect("PATH"),
+    ));
+    let cache = tempfile::tempdir().expect("temp cache");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_warrant"));
+    neutralize_git_environment(&mut command);
+    let output = command
+        .arg("inventory")
+        .current_dir(root)
+        .env("XDG_CACHE_HOME", cache.path())
+        .env("PATH", std::env::join_paths(paths).expect("fixture PATH"))
+        .env("WARRANT_TEST_CONTROL", control.path())
+        .env("WARRANT_TEST_ROOT", root)
+        .env(
+            "WARRANT_TEST_GIT",
+            String::from_utf8(real_git.stdout).expect("git path").trim(),
+        )
+        .output()
+        .expect("run warrant");
+    let document = json(&output);
+    // Precondition: the index flip happened, and the index is restored.
+    assert!(
+        control.path().join("flipped").exists(),
+        "the second untracked listing never ran"
+    );
+    assert_eq!(git(root, &["ls-files", "--", "dist"]), "");
+    let entry = document["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|entry| entry["path"] == "dist/bundle.js")
+        .expect("dist/bundle.js entry");
+    assert_eq!(entry["class"], "build-output", "{entry}");
 }

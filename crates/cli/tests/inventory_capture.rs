@@ -169,8 +169,6 @@ fn try_capture(
                 reason: error.document.reason,
             })
         };
-        let untracked = warrant_inventory::untracked_paths(root, &snapshot.manifest().kind)
-            .expect("untracked paths");
         let built = warrant_inventory::build(
             root,
             CapturedSnapshot {
@@ -178,7 +176,7 @@ fn try_capture(
                 entries: snapshot.entries(),
                 read: &read,
                 resolve: &resolve,
-                untracked: &untracked,
+                untracked: snapshot.untracked(),
             },
             manifest,
             config,

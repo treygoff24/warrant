@@ -1,0 +1,8 @@
+{
+  "supports": [],
+  "edges": [],
+  "unsupported": [
+    ["index.ts", "ts-import-equals", "not-observed", "import Legacy = require('./dep');"],
+    ["index.ts", "ts-export-assignment", "not-observed", "export = Legacy;"]
+  ]
+}

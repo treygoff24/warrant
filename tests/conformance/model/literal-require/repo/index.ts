@@ -1,0 +1,1 @@
+const loaded = require('./dep');

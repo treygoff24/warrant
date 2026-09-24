@@ -1,0 +1,11 @@
+{
+  "driver": "cli",
+  "args": ["model"],
+  "exit_code": 0,
+  "document": {
+    "integration": "lang-ts",
+    "symbol_level": "binding",
+    "resolution_authority": "unqualified",
+    "resolution_modes_qualified": []
+  }
+}

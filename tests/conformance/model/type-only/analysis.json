@@ -1,0 +1,9 @@
+{
+  "supports": ["esm-import"],
+  "edges": [
+    ["index.ts", "import", true, "resolution-pending", "Shape"],
+    ["index.ts", "import", true, "resolution-pending", "type Other"],
+    ["index.ts", "import", false, "resolution-pending", "foo"]
+  ],
+  "unsupported": []
+}

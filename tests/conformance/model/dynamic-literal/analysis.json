@@ -1,0 +1,5 @@
+{
+  "supports": ["dynamic-import-literal"],
+  "edges": [["index.ts", "dynamic_import", false, "resolution-pending", "import('./dep')"]],
+  "unsupported": []
+}

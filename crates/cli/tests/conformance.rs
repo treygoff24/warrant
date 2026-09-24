@@ -171,6 +171,11 @@ fn snapshot_conformance() {
     run_area("snapshot");
 }
 
+#[test]
+fn model_conformance() {
+    run_area("model");
+}
+
 mod policy_conformance {
     macro_rules! cases {
         ($($test:ident => $case:literal),+ $(,)?) => {
@@ -386,6 +391,15 @@ fn run_area(area: &str) {
             "unowned-source-break-control",
             "unowned-source-negative",
             "unowned-source-positive",
+        ],
+        "model" => &[
+            "dynamic-literal",
+            "dynamic-nonliteral",
+            "esm-import",
+            "literal-require",
+            "reexport-chain",
+            "type-only",
+            "unsupported",
         ],
         _ => panic!("unknown conformance area {area}"),
     };

@@ -1177,3 +1177,31 @@ fn assert_symlinked_ancestor(during_read: bool) {
         "a symlinked ancestor must be unsupported-path on the first attempt"
     );
 }
+
+#[test]
+fn index_capture_succeeds_with_a_locked_unchanged_real_index() {
+    let dir = repo();
+    fs::write(dir.path().join("file"), "new staged content\n").unwrap();
+    git(dir.path(), &["add", "file"]);
+    let real_index = dir.path().join(".git/index");
+    let original = fs::read(&real_index).unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let scratch = temporary.path().join("index");
+    fs::copy(&real_index, &scratch).unwrap();
+    let tree = git::text(dir.path(), &["write-tree"], Some(&scratch)).unwrap();
+    let _lock = fs::File::create_new(dir.path().join(".git/index.lock")).unwrap();
+    let result = capture(
+        dir.path(),
+        SnapshotKind::Index,
+        None,
+        &SnapshotConfig::default(),
+        |_| Ok(()),
+    )
+    .map(|(manifest, ())| manifest.tree)
+    .map_err(|error| error.to_string());
+    assert_eq!(
+        (result, fs::read(&real_index).unwrap()),
+        (Ok(format!("sha1:{tree}")), original),
+        "index capture must succeed under index.lock without changing real index bytes"
+    );
+}

@@ -91,6 +91,26 @@ pub(crate) struct CapturedTree {
     kind: &'static str,
 }
 
+pub(crate) fn index_tree(repo: &Path) -> Result<String, SnapshotError> {
+    let temporary = TemporaryIndex::new()?;
+    let index = temporary.0.join("index");
+    let source = git::text(
+        repo,
+        &["rev-parse", "--path-format=absolute", "--git-path", "index"],
+        None,
+    )?;
+    match fs::copy(source, &index) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            git::run(repo, &["read-tree", "--empty"], Some(&index), None)?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    // write-tree may lock and refresh the cache-tree extension even with
+    // GIT_OPTIONAL_LOCKS=0. Only the private copy may be changed.
+    git::text(repo, &["write-tree"], Some(&index))
+}
+
 pub(crate) fn tree(
     repo: &Path,
     file_mode: bool,

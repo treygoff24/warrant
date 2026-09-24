@@ -217,7 +217,7 @@ fn capture_once(
             git::check_index(repo)?;
             match native::capture(repo, SnapshotKind::Index)? {
                 Some(tree) => (tree, "native-index"),
-                None => (git::text(repo, &["write-tree"], None)?, "index"),
+                None => (worktree::index_tree(repo)?, "index"),
             }
         }
         SnapshotKind::Tree => {

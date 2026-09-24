@@ -197,6 +197,9 @@ PY
 }
 
 fetch_one() (
+  # Recorded dependency digests were taken under umask 002.
+  # Pin it here so the caller's umask cannot decide archive modes.
+  umask 002
   name=$1
   source=$(member_field "$name" source)
   public=$(member_field "$name" public_fetch)

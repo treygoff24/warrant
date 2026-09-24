@@ -231,6 +231,52 @@ fn inventory_expectation_rejects_missing_unknown_files() {
     assert!(error.contains("unknown"), "{error}");
 }
 
+/// W0.6: the runner compares expect.json semantically and never byte-for-byte.
+#[test]
+fn semantic_comparison_ignores_key_order_at_every_depth() {
+    let case = fixture_root().join("inventory/unowned-source-break-control");
+    let original: Value =
+        serde_json::from_slice(&fs::read(case.join("expect.json")).expect("read expect.json"))
+            .expect("parse expect.json");
+    let reordered = reverse_keys(&original);
+    let reordered_bytes = serde_json::to_vec(&reordered).expect("encode reordered expectation");
+    assert_ne!(
+        serde_json::to_vec(&original).expect("encode expectation"),
+        reordered_bytes,
+        "reordering must change the serialized bytes, or this test proves nothing"
+    );
+    semantic_subset(&reordered, &original, "$").expect("reordered expectation still matches");
+
+    // The same reordered file, parsed and compared through the runner's entry point.
+    let (_, observation) = execute_case(&case);
+    let expectation: Expectation =
+        serde_json::from_slice(&reordered_bytes).expect("parse reordered expectation");
+    check_expectation(&expectation, &observation).expect("reordered expectation passes");
+
+    // A nested product document, reordered at every depth, is still the same document.
+    let document = observation.document.expect("inventory document");
+    let reordered_document = reverse_keys(&document);
+    assert_ne!(
+        serde_json::to_vec(&document).expect("encode document"),
+        serde_json::to_vec(&reordered_document).expect("encode reordered document"),
+        "reordering must change the serialized document bytes"
+    );
+    semantic_subset(&reordered_document, &document, "$").expect("reordered document still matches");
+}
+
+fn reverse_keys(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .rev()
+                .map(|(key, value)| (key.clone(), reverse_keys(value)))
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(values.iter().map(reverse_keys).collect()),
+        other => other.clone(),
+    }
+}
+
 fn run_area(area: &str) {
     let root = fixture_root().join(area);
     let mut cases = fs::read_dir(&root)
@@ -748,8 +794,14 @@ fn semantic_subset(expected: &Value, actual: &Value, path: &str) -> Result<(), S
     }
 }
 
+/// Sort array elements by a key-order-independent rendering: `Value::to_string` keeps
+/// object insertion order, so the same objects with reordered keys would sort apart.
 fn sort_json(values: &mut [Value]) {
-    values.sort_by_key(Value::to_string);
+    values.sort_by_cached_key(|value| {
+        let mut canonical = value.clone();
+        canonical.sort_all_objects();
+        canonical.to_string()
+    });
 }
 
 fn git(repository: &Path, args: &[&str]) -> String {

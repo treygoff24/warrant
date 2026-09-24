@@ -35,7 +35,12 @@ impl FileSystem for CapturedFiles {
         if self.0.contains_key(path) {
             return Ok(FileMetadata::new(true, false, false));
         }
-        if self.0.keys().any(|file| file.starts_with(path)) {
+        if self
+            .0
+            .range(path.to_path_buf()..)
+            .next()
+            .is_some_and(|(file, _)| file.starts_with(path))
+        {
             return Ok(FileMetadata::new(false, true, false));
         }
         Err(io::ErrorKind::NotFound.into())

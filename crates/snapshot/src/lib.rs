@@ -101,15 +101,20 @@ impl Snapshot {
                     self.mode(path)
                 },
             )
-            .map_err(|_| SnapshotError::new("snapshot-changed", path))?;
+            .map_err(|error| {
+                if error.document.code == "unsupported-path" {
+                    error
+                } else {
+                    SnapshotError::new("snapshot-changed", path)
+                }
+            })?;
             let actual = worktree::hash(&self.repo, path, &mode, &bytes)?;
             if actual != oid || self.mode(path) != Some(mode.as_str()) {
                 return Err(SnapshotError::new("snapshot-changed", path));
             }
-            Ok(bytes)
-        } else {
-            git::run(&self.repo, &["cat-file", "blob", oid], None, None)
         }
+        // The identity names clean-filtered blob bytes, not raw worktree bytes.
+        git::run(&self.repo, &["cat-file", "blob", oid], None, None)
     }
 }
 
@@ -182,19 +187,18 @@ fn capture_once(
     let (tree, capture_kind) = match kind {
         SnapshotKind::Commit => {
             let revision = revision.unwrap_or("HEAD");
-            commit = Some(
-                git::text(
-                    repo,
-                    &[
-                        "rev-parse",
-                        "--verify",
-                        "--end-of-options",
-                        &format!("{revision}^{{commit}}"),
-                    ],
-                    None,
-                )
-                .map_err(|_| SnapshotError::new("missing-commit", revision))?,
-            );
+            let resolved = git::text(
+                repo,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--end-of-options",
+                    &format!("{revision}^{{commit}}"),
+                ],
+                None,
+            )
+            .map_err(|_| SnapshotError::new("missing-commit", revision))?;
+            commit = Some(resolved.clone());
             (
                 git::text(
                     repo,
@@ -202,7 +206,7 @@ fn capture_once(
                         "rev-parse",
                         "--verify",
                         "--end-of-options",
-                        &format!("{revision}^{{tree}}"),
+                        &format!("{resolved}^{{tree}}"),
                     ],
                     None,
                 )?,
@@ -213,7 +217,7 @@ fn capture_once(
             git::check_index(repo)?;
             match native::capture(repo, SnapshotKind::Index)? {
                 Some(tree) => (tree, "native-index"),
-                None => (git::text(repo, &["write-tree"], None)?, "index"),
+                None => (worktree::index_tree(repo)?, "index"),
             }
         }
         SnapshotKind::Tree => {

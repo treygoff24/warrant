@@ -4,7 +4,9 @@ use tempfile::TempDir;
 use warrant_core::{manifest::SnapshotConfig, nouns::SnapshotKind};
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    neutralize_git_environment(&mut command);
+    let output = command
         .arg("-C")
         .arg(repo)
         .args([
@@ -23,6 +25,26 @@ fn git(repo: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+pub(crate) fn neutralize_git_environment(command: &mut Command) {
+    static EMPTY_CONFIG: std::sync::OnceLock<tempfile::NamedTempFile> = std::sync::OnceLock::new();
+    let config = EMPTY_CONFIG.get_or_init(|| tempfile::NamedTempFile::new().unwrap());
+    command
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", config.path());
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_COUNT",
+    ] {
+        command.env_remove(name);
+    }
 }
 
 fn repo() -> TempDir {
@@ -208,6 +230,7 @@ fn exclusions_preserve_object_identity_and_never_follow_external_links() {
         ],
     );
     let tree = git(dir.path(), &["write-tree"]);
+    fs::create_dir(dir.path().join("sub")).unwrap();
     let config = SnapshotConfig { max_file_bytes: 32 };
     for kind in [SnapshotKind::Index, SnapshotKind::Worktree] {
         let (manifest, ()) = capture(dir.path(), kind, None, &config, |s| {
@@ -518,6 +541,72 @@ fn ignore_configuration_digest_changes_even_when_tree_and_exclusions_do_not() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn null_excludes_file_matches_absent_configuration() {
+    let dir = repo();
+    let manifest = || {
+        capture(
+            dir.path(),
+            SnapshotKind::Worktree,
+            None,
+            &SnapshotConfig::default(),
+            |_| Ok(()),
+        )
+        .map(|(m, ())| {
+            (
+                m.schema_version,
+                m.repo,
+                m.kind,
+                m.tree,
+                m.object_format,
+                m.commit,
+                m.capture,
+                m.excluded,
+            )
+        })
+        .map_err(|error| error.to_string())
+    };
+    let absent = manifest().unwrap();
+    git(dir.path(), &["config", "core.excludesFile", "/dev/null"]);
+    assert_eq!(
+        manifest(),
+        Ok(absent),
+        "null excludes must match the absent manifest except taken_at"
+    );
+}
+
+#[test]
+fn directory_excludes_file_names_configuration_and_path() {
+    let dir = repo();
+    let excludes = tempfile::tempdir().unwrap();
+    git(
+        dir.path(),
+        &[
+            "config",
+            "core.excludesFile",
+            excludes.path().to_str().unwrap(),
+        ],
+    );
+    let error = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |_| Ok(()),
+    )
+    .unwrap_err();
+    assert!(
+        error.document.code == "snapshot-io"
+            && error.document.reason.contains("core.excludesFile")
+            && error
+                .document
+                .reason
+                .contains(excludes.path().to_str().unwrap()),
+        "unreadable excludes must name core.excludesFile and its path: {error}"
+    );
+}
+
 #[test]
 fn shallow_history_cannot_claim_a_repository_root_identity() {
     let dir = repo();
@@ -578,6 +667,74 @@ fn deleted_files_and_file_to_directory_replacements_match_git_tree() {
     );
 }
 
+fn submodule_repo() -> TempDir {
+    let dir = repo();
+    let source = repo();
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            source.path().to_str().unwrap(),
+            "sub",
+        ],
+    );
+    git(dir.path(), &["commit", "-qam", "submodule"]);
+    dir
+}
+
+fn assert_submodule_tree_matches_git(repo: &Path) {
+    let (manifest, ()) = capture(
+        repo,
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |_| Ok(()),
+    )
+    .unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let index = temporary.path().join("index");
+    let original = git::run(repo, &["ls-files", "--stage", "-z"], None, None).unwrap();
+    git::run(repo, &["read-tree", "HEAD"], Some(&index), None).unwrap();
+    git::run(repo, &["add", "-A"], Some(&index), None).unwrap();
+    let expected = git::text(repo, &["write-tree"], Some(&index)).unwrap();
+    assert_eq!(
+        (
+            manifest.tree,
+            git::run(repo, &["ls-files", "--stage", "-z"], None, None).unwrap()
+        ),
+        (format!("sha1:{expected}"), original),
+        "worktree gitlinks must match git add -A without changing the real index"
+    );
+}
+
+#[test]
+fn advanced_submodule_checkout_matches_git_add() {
+    let dir = submodule_repo();
+    let sub = dir.path().join("sub");
+    fs::write(sub.join("file"), "advanced\n").unwrap();
+    git(&sub, &["commit", "-qam", "advance"]);
+    assert_submodule_tree_matches_git(dir.path());
+}
+
+#[test]
+fn removed_submodule_checkout_matches_git_add() {
+    let dir = submodule_repo();
+    fs::remove_dir_all(dir.path().join("sub")).unwrap();
+    assert_submodule_tree_matches_git(dir.path());
+}
+
+#[test]
+fn empty_submodule_directory_matches_git_add() {
+    let dir = submodule_repo();
+    fs::remove_dir_all(dir.path().join("sub")).unwrap();
+    fs::create_dir(dir.path().join("sub")).unwrap();
+    assert_submodule_tree_matches_git(dir.path());
+}
+
 #[test]
 fn sparse_checkout_entries_carry_index_ids() {
     let dir = repo();
@@ -608,21 +765,57 @@ fn clean_filter_files_hash_like_git_add() {
     let dir = repo();
     fs::write(dir.path().join(".gitattributes"), "* text=auto\n").unwrap();
     fs::write(dir.path().join("crlf"), b"first\r\nsecond\r\n").unwrap();
-    git(dir.path(), &["add", "-A"]);
-    let tree = git(dir.path(), &["write-tree"]);
-    let (manifest, ()) = capture(
+    assert_canonical_reads(dir.path(), "crlf");
+}
+
+#[cfg(unix)]
+#[test]
+fn clean_driver_reads_return_filtered_blob_bytes() {
+    let dir = repo();
+    git(
         dir.path(),
-        SnapshotKind::Worktree,
-        None,
-        &SnapshotConfig::default(),
-        |s| {
-            assert_eq!(s.manifest().tree, format!("sha1:{tree}"));
-            assert_eq!(s.read("crlf")?, b"first\r\nsecond\r\n");
-            Ok(())
-        },
+        &["config", "filter.canonical.clean", "tr a-z A-Z"],
+    );
+    fs::write(
+        dir.path().join(".gitattributes"),
+        "filtered filter=canonical\n",
     )
     .unwrap();
-    assert_eq!(manifest.tree, format!("sha1:{tree}"));
+    fs::write(dir.path().join("filtered"), b"raw lowercase\n").unwrap();
+    assert_canonical_reads(dir.path(), "filtered");
+}
+
+fn assert_canonical_reads(repo: &Path, path: &str) {
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-qm", "canonical bytes"]);
+    let tree = format!("sha1:{}", git(repo, &["write-tree"]));
+    let blob = git::run(
+        repo,
+        &["cat-file", "blob", &format!("HEAD:{path}")],
+        None,
+        None,
+    )
+    .unwrap();
+    let raw = fs::read(repo.join(path)).unwrap();
+    let reads: Vec<_> = [
+        SnapshotKind::Worktree,
+        SnapshotKind::Index,
+        SnapshotKind::Commit,
+    ]
+    .into_iter()
+    .map(|kind| {
+        let (manifest, bytes) = capture(repo, kind, None, &SnapshotConfig::default(), |s| {
+            s.read(path)
+        })
+        .unwrap();
+        (manifest.tree, bytes)
+    })
+    .collect();
+    assert_eq!(
+        (raw != blob, reads),
+        (true, vec![(tree, blob); 3]),
+        "all snapshot kinds must read Git's canonical blob while the raw file differs"
+    );
 }
 
 #[cfg(unix)]
@@ -799,4 +992,250 @@ fn exclusions_include_untracked_oversize_and_external_symlinks() {
             Some(reason)
         );
     }
+}
+
+#[test]
+fn run_stream_stripspace_round_trips_two_mib() {
+    assert_stream_round_trip(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn run_stream_drains_output_while_writing_two_mib() {
+    assert_stream_round_trip(true);
+}
+
+fn assert_stream_round_trip(streaming: bool) {
+    let input = b"newline-terminated line content\n".repeat(65536);
+    let expected = input.clone();
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let dir = repo();
+        let args: &[&str] = if streaming {
+            &["-c", "alias.warrant-echo=!cat", "warrant-echo"]
+        } else {
+            &["stripspace"]
+        };
+        let result = git::run_stream(dir.path(), args, None, Some(&mut input.as_slice()));
+        let _ = send.send(result.map_err(|error| error.to_string()));
+    });
+    let actual = receive.recv_timeout(std::time::Duration::from_secs(5));
+    assert!(
+        actual
+            .as_ref()
+            .is_ok_and(|result| result.as_ref() == Ok(&expected)),
+        "Git must return all input bytes before the timeout: {:?}",
+        actual.as_ref().map(|result| result.as_ref().map(Vec::len))
+    );
+}
+
+#[test]
+fn commit_tree_resolution_uses_the_resolved_commit_id() {
+    let dir = repo();
+    let id = git(dir.path(), &["rev-parse", "HEAD"]);
+    git::CALLS.with_borrow_mut(|calls| *calls = Some(Vec::new()));
+    let (manifest, ()) = capture(
+        dir.path(),
+        SnapshotKind::Commit,
+        Some("HEAD"),
+        &SnapshotConfig::default(),
+        |_| Ok(()),
+    )
+    .unwrap();
+    let calls = git::CALLS.take().unwrap();
+    let tree_call = calls
+        .into_iter()
+        .find(|args| args.last().is_some_and(|arg| arg.ends_with("^{tree}")))
+        .unwrap();
+    assert_eq!(
+        (manifest.commit, tree_call),
+        (
+            Some(id.clone()),
+            vec![
+                "rev-parse".into(),
+                "--verify".into(),
+                "--end-of-options".into(),
+                format!("{id}^{{tree}}")
+            ]
+        ),
+        "commit tree resolution must use the already resolved commit id"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn group_execute_without_user_execute_matches_git_add() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = repo();
+    git(dir.path(), &["config", "core.fileMode", "true"]);
+    fs::set_permissions(dir.path().join("file"), fs::Permissions::from_mode(0o654)).unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let index = temporary.path().join("index");
+    git::run(dir.path(), &["read-tree", "HEAD"], Some(&index), None).unwrap();
+    git::run(dir.path(), &["add", "-A"], Some(&index), None).unwrap();
+    let expected = git::text(dir.path(), &["write-tree"], Some(&index)).unwrap();
+    let (manifest, mode) = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |s| Ok(s.mode("file").unwrap().to_owned()),
+    )
+    .unwrap();
+    let staged = git::text(dir.path(), &["ls-files", "--stage", "file"], Some(&index)).unwrap();
+    assert_eq!(
+        (manifest.tree, mode.as_str()),
+        (
+            format!("sha1:{expected}"),
+            staged.split_whitespace().next().unwrap()
+        ),
+        "mode 0654 must match Git's user-execute-only rule"
+    );
+}
+
+#[test]
+fn untracked_nested_repository_matches_git_and_has_an_exclusion_reason() {
+    let dir = repo();
+    let nested = dir.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+    git(&nested, &["init", "-q"]);
+    fs::write(nested.join("file"), "nested content\n").unwrap();
+    git(&nested, &["add", "file"]);
+    git(&nested, &["commit", "-qm", "nested root"]);
+    let temporary = tempfile::tempdir().unwrap();
+    let index = temporary.path().join("index");
+    git::run(dir.path(), &["read-tree", "HEAD"], Some(&index), None).unwrap();
+    git::run(dir.path(), &["add", "-A"], Some(&index), None).unwrap();
+    let tree = git::text(dir.path(), &["write-tree"], Some(&index)).unwrap();
+    let staged = git::text(dir.path(), &["ls-files", "--stage", "nested"], Some(&index)).unwrap();
+    let fields: Vec<_> = staged.split_whitespace().collect();
+    let (manifest, entry) = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |s| {
+            Ok(s.entries()
+                .iter()
+                .find(|entry| entry.path == "nested")
+                .map(|entry| {
+                    (
+                        s.mode("nested").unwrap().to_owned(),
+                        entry.blob.clone(),
+                        entry.class,
+                        entry.reason.clone(),
+                        entry.unread.clone(),
+                    )
+                }))
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        (manifest.tree, manifest.excluded.submodules, entry),
+        (
+            format!("sha1:{tree}"),
+            1,
+            Some((
+                fields[0].to_owned(),
+                Some(fields[1].to_owned()),
+                InventoryClass::Submodule,
+                "undeclared-nested-repository".into(),
+                Some("submodule-not-descended".into())
+            ))
+        ),
+        "nested repositories must match Git's gitlink and explicitly explain their exclusion"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_ancestor_is_unsupported_without_retaking_capture() {
+    assert_symlinked_ancestor(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn read_rejects_a_new_symlinked_ancestor_without_retaking_capture() {
+    assert_symlinked_ancestor(true);
+}
+
+#[cfg(unix)]
+fn assert_symlinked_ancestor(during_read: bool) {
+    let dir = repo();
+    for name in ["tracked", "sibling"] {
+        fs::create_dir(dir.path().join(name)).unwrap();
+        fs::write(dir.path().join(name).join("file"), "same bytes\n").unwrap();
+    }
+    git(dir.path(), &["add", "-A"]);
+    let replace = || {
+        fs::remove_dir_all(dir.path().join("tracked")).unwrap();
+        std::os::unix::fs::symlink("sibling", dir.path().join("tracked")).unwrap();
+    };
+    if !during_read {
+        replace();
+    }
+    git::CALLS.with_borrow_mut(|calls| *calls = Some(Vec::new()));
+    let error = capture(
+        dir.path(),
+        SnapshotKind::Worktree,
+        None,
+        &SnapshotConfig::default(),
+        |s| {
+            if during_read {
+                replace();
+            }
+            s.read("tracked/file")
+        },
+    )
+    .unwrap_err();
+    let calls = git::CALLS.take().unwrap();
+    let attempts = calls
+        .iter()
+        .filter(|args| args.as_slice() == ["rev-parse", "--show-toplevel"])
+        .count();
+    assert_eq!(
+        (error.document.code.as_str(), attempts),
+        ("unsupported-path", 1),
+        "a symlinked ancestor must be unsupported-path on the first attempt"
+    );
+}
+
+#[test]
+fn index_capture_succeeds_with_a_locked_unchanged_real_index() {
+    let dir = repo();
+    fs::write(dir.path().join("file"), "new staged content\n").unwrap();
+    git(dir.path(), &["add", "file"]);
+    let real_index = dir.path().join(".git/index");
+    let original = fs::read(&real_index).unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let scratch = temporary.path().join("index");
+    fs::copy(&real_index, &scratch).unwrap();
+    let tree = git::text(dir.path(), &["write-tree"], Some(&scratch)).unwrap();
+    let _lock = fs::File::create_new(dir.path().join(".git/index.lock")).unwrap();
+    let result = capture(
+        dir.path(),
+        SnapshotKind::Index,
+        None,
+        &SnapshotConfig::default(),
+        |_| Ok(()),
+    )
+    .map(|(manifest, ())| manifest.tree)
+    .map_err(|error| error.to_string());
+    assert_eq!(
+        (result, fs::read(&real_index).unwrap()),
+        (Ok(format!("sha1:{tree}")), original),
+        "index capture must succeed under index.lock without changing real index bytes"
+    );
+}
+
+#[test]
+fn fixture_git_ignores_ambient_global_excludes() {
+    let dir = repo();
+    fs::write(dir.path().join("ambient.ts"), "export {};\n").unwrap();
+    git(dir.path(), &["add", "-A"]);
+    assert_eq!(
+        git(dir.path(), &["ls-files", "ambient.ts"]),
+        "ambient.ts",
+        "fixture Git must stage TypeScript files despite ambient global excludes"
+    );
 }

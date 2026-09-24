@@ -5,6 +5,11 @@ use std::{
     process::{Command, Stdio},
 };
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CALLS: std::cell::RefCell<Option<Vec<Vec<String>>>> = const { std::cell::RefCell::new(None) };
+}
+
 pub(crate) fn run(
     repo: &Path,
     args: &[&str],
@@ -25,7 +30,15 @@ pub(crate) fn run_stream(
     index: Option<&Path>,
     input: Option<&mut dyn Read>,
 ) -> Result<Vec<u8>, SnapshotError> {
+    #[cfg(test)]
+    CALLS.with_borrow_mut(|calls| {
+        if let Some(calls) = calls {
+            calls.push(args.iter().map(|arg| (*arg).to_owned()).collect());
+        }
+    });
     let mut command = Command::new("git");
+    #[cfg(test)]
+    crate::tests::neutralize_git_environment(&mut command);
     command
         .arg("-C")
         .arg(repo)
@@ -54,16 +67,22 @@ pub(crate) fn run_stream(
         command.env("GIT_INDEX_FILE", index);
     }
     let mut child = command.spawn()?;
-    let written = if let Some(input) = input {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| SnapshotError::new("snapshot-io", "missing Git stdin"))?;
-        io::copy(input, &mut stdin).map(|_| ())
-    } else {
-        Ok(())
-    };
-    let output = child.wait_with_output()?;
+    let stdin = child.stdin.take();
+    // Read is not necessarily Send. Keep the borrowed input on this thread
+    // while a scoped worker drains both output pipes and waits for Git.
+    let (written, output) = std::thread::scope(|scope| {
+        let output = scope.spawn(move || child.wait_with_output());
+        let written = if let Some(input) = input {
+            match stdin {
+                Some(mut stdin) => io::copy(input, &mut stdin).map(|_| ()),
+                None => Err(io::Error::other("missing Git stdin")),
+            }
+        } else {
+            Ok(())
+        };
+        (written, output.join())
+    });
+    let output = output.map_err(|_| io::Error::other("Git output reader panicked"))??;
     if !output.status.success() {
         return Err(SnapshotError::new(
             "git-failed",

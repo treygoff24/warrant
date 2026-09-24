@@ -15,6 +15,7 @@ use warrant_core::{
 pub(crate) fn capture(repo: &Path, config: &SnapshotConfig) -> Result<Snapshot, SnapshotError> {
     git::check_index(repo)?;
     let root = PathBuf::from(git::text(repo, &["rev-parse", "--show-toplevel"], None)?);
+    let configured_ignores = configured_ignores(&root)?;
     let ignored = paths(&git::run(
         &root,
         &[
@@ -45,13 +46,23 @@ pub(crate) fn capture(repo: &Path, config: &SnapshotConfig) -> Result<Snapshot, 
         }
         crate::links::classify(&mut snapshot)?;
     }
+    for entry in &mut snapshot.entries {
+        if captured.undeclared.contains(&entry.path) {
+            entry.reason = "undeclared-nested-repository".into();
+        }
+    }
     snapshot.object_paths = captured.carried;
     snapshot.file_mode = file_mode;
     snapshot.manifest.kind = SnapshotKind::Worktree;
     snapshot.manifest.capture.kind = captured.kind.into();
     snapshot.manifest.excluded.ignored_files = Some(ignored.len() as u64);
     snapshot.manifest.excluded.ignored_count_reason = None;
-    snapshot.manifest.capture.manifest_digest = Some(ignore_digest(&root, &snapshot, &ignored)?);
+    snapshot.manifest.capture.manifest_digest = Some(ignore_digest(
+        &root,
+        &snapshot,
+        &ignored,
+        &configured_ignores,
+    )?);
     for path in ignored {
         snapshot.entries.push(InventoryEntry {
             path,
@@ -76,7 +87,28 @@ pub(crate) struct CapturedTree {
     pub id: String,
     carried: BTreeSet<String>,
     oversize: BTreeSet<String>,
+    undeclared: BTreeSet<String>,
     kind: &'static str,
+}
+
+pub(crate) fn index_tree(repo: &Path) -> Result<String, SnapshotError> {
+    let temporary = TemporaryIndex::new()?;
+    let index = temporary.0.join("index");
+    let source = git::text(
+        repo,
+        &["rev-parse", "--path-format=absolute", "--git-path", "index"],
+        None,
+    )?;
+    match fs::copy(source, &index) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            git::run(repo, &["read-tree", "--empty"], Some(&index), None)?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    // write-tree may lock and refresh the cache-tree extension even with
+    // GIT_OPTIONAL_LOCKS=0. Only the private copy may be changed.
+    git::text(repo, &["write-tree"], Some(&index))
 }
 
 pub(crate) fn tree(
@@ -89,6 +121,7 @@ pub(crate) fn tree(
             id,
             carried: BTreeSet::new(),
             oversize: BTreeSet::new(),
+            undeclared: BTreeSet::new(),
             kind: "native-worktree",
         }),
         None => portable(repo, file_mode, config),
@@ -107,6 +140,7 @@ fn portable(
     let mut files = BTreeMap::new();
     let mut carried = BTreeSet::new();
     let mut oversize = BTreeSet::new();
+    let mut undeclared = BTreeSet::new();
     for record in tracked.split(|b| *b == 0).filter(|r| !r.is_empty()) {
         let record = std::str::from_utf8(record)
             .map_err(|_| SnapshotError::new("unsupported-path", "non-UTF-8 path"))?;
@@ -117,7 +151,7 @@ fn portable(
         if fields.len() != 4 {
             return Err(SnapshotError::new("invalid-index", "invalid entry"));
         }
-        let carry = fields[0] == "S" || fields[1] == "160000";
+        let carry = fields[0] == "S";
         if carry {
             carried.insert(path.to_owned());
         }
@@ -132,7 +166,9 @@ fn portable(
         None,
         None,
     )?)? {
-        files.entry(path).or_insert(None);
+        files
+            .entry(path.trim_end_matches('/').to_owned())
+            .or_insert(None);
     }
     let mut index_info = Vec::new();
     for (path, indexed) in files {
@@ -146,6 +182,28 @@ fn portable(
                 oversize.insert(path.clone());
             }
             (mode.clone(), oid.clone())
+        } else if fs::symlink_metadata(repo.join(&path)).is_ok_and(|metadata| metadata.is_dir()) {
+            let submodule = repo.join(&path);
+            match &indexed {
+                Some((mode, oid, _)) if mode == "160000" => {
+                    // Empty directories retain the recorded gitlink. Local metadata
+                    // prevents rev-parse from discovering the parent repository.
+                    let oid = if submodule.join(".git").try_exists()? {
+                        git::text(&submodule, &["rev-parse", "--verify", "HEAD"], None)?
+                    } else {
+                        oid.clone()
+                    };
+                    (mode.clone(), oid)
+                }
+                None if submodule.join(".git").try_exists()? => {
+                    undeclared.insert(path.clone());
+                    (
+                        "160000".into(),
+                        git::text(&submodule, &["rev-parse", "--verify", "HEAD"], None)?,
+                    )
+                }
+                _ => continue,
+            }
         } else {
             // A tracked deletion is absent, not a read failure; all other errors fail closed.
             match fs::symlink_metadata(repo.join(&path)) {
@@ -199,6 +257,7 @@ fn portable(
         id: git::text(repo, &["write-tree"], Some(&index))?,
         carried,
         oversize,
+        undeclared,
         kind: "temporary-index",
     })
 }
@@ -248,7 +307,7 @@ pub(crate) fn read_bytes(
     })
 }
 
-/// All source-byte reads, including symlink payloads and ignore inputs, pass here.
+/// Source-byte reads, including symlink payloads and repository ignore inputs, pass here.
 /// Symlink payloads are read without following them; non-directory ancestors fail closed.
 fn read<T>(
     repo: &Path,
@@ -269,7 +328,11 @@ fn read<T>(
     if let Some(ancestors) = relative.parent() {
         for part in ancestors.components() {
             parent.push(part);
-            if !fs::symlink_metadata(&parent)?.is_dir() {
+            let metadata = fs::symlink_metadata(&parent)?;
+            if metadata.file_type().is_symlink() {
+                return Err(SnapshotError::new("unsupported-path", path));
+            }
+            if !metadata.is_dir() {
                 return Err(SnapshotError::new("snapshot-changed", path));
             }
         }
@@ -287,7 +350,7 @@ fn read<T>(
     #[cfg(unix)]
     let executable = {
         use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
+        metadata.permissions().mode() & 0o100 != 0
     };
     #[cfg(not(unix))]
     let executable = false;
@@ -312,6 +375,7 @@ fn ignore_digest(
     repo: &Path,
     snapshot: &Snapshot,
     ignored: &BTreeSet<String>,
+    configured_ignores: &[(&str, Vec<u8>)],
 ) -> Result<String, SnapshotError> {
     let mut digest = Sha256::new();
     hash_field(&mut digest, snapshot.manifest.tree.as_bytes());
@@ -336,6 +400,22 @@ fn ignore_digest(
             hash_field(&mut digest, &bytes);
         }
     }
+    for (label, bytes) in configured_ignores {
+        hash_field(&mut digest, label.as_bytes());
+        hash_field(&mut digest, bytes);
+    }
+    for path in ignored {
+        hash_field(&mut digest, path.as_bytes());
+    }
+    let hex: String = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Ok(format!("sha256:{hex}"))
+}
+fn configured_ignores(repo: &Path) -> Result<Vec<(&'static str, Vec<u8>)>, SnapshotError> {
+    let mut inputs = Vec::new();
     let exclude = git::text(
         repo,
         &[
@@ -370,32 +450,36 @@ fn ignore_digest(
             } else {
                 repo.join(path)
             };
-            if path.exists() {
-                // Git follows explicitly configured ignore files, unlike source symlinks.
-                let path = fs::canonicalize(path)?;
-                let parent = path
-                    .parent()
-                    .ok_or_else(|| SnapshotError::new("unsupported-path", label))?;
-                let name = path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .ok_or_else(|| SnapshotError::new("unsupported-path", label))?;
-                let (_, bytes) = read_bytes(parent, name, None)?;
-                hash_field(&mut digest, label.as_bytes());
-                hash_field(&mut digest, &bytes);
+            let mut file = match fs::File::open(&path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(ignore_error(label, &path, error)),
+            };
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)
+                .map_err(|error| ignore_error(label, &path, error))?;
+            // Preserve regular-file digests; an empty device such as /dev/null
+            // contributes nothing, just like an absent configured file.
+            if !bytes.is_empty()
+                || file
+                    .metadata()
+                    .map_err(|error| ignore_error(label, &path, error))?
+                    .is_file()
+            {
+                inputs.push((label, bytes));
             }
         }
     }
-    for path in ignored {
-        hash_field(&mut digest, path.as_bytes());
-    }
-    let hex: String = digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    Ok(format!("sha256:{hex}"))
+    Ok(inputs)
 }
+
+fn ignore_error(label: &str, path: &Path, error: std::io::Error) -> SnapshotError {
+    SnapshotError::new(
+        "snapshot-io",
+        format!("{label} {}: {error}", path.display()),
+    )
+}
+
 fn hash_field(digest: &mut Sha256, bytes: &[u8]) {
     digest.update((bytes.len() as u64).to_be_bytes());
     digest.update(bytes);

@@ -1304,3 +1304,40 @@ fn unborn_nested_repository_is_recorded_without_descending() {
         "an unborn nested repository must be recorded without a blob or descendant entries even though Git refuses staging"
     );
 }
+
+#[test]
+fn unborn_repositories_created_during_capture_force_retakes() {
+    let results: Vec<_> = [false, true]
+        .into_iter()
+        .map(|repeat| {
+            let dir = repo();
+            let mut attempts = 0;
+            let result = capture(
+                dir.path(),
+                SnapshotKind::Worktree,
+                None,
+                &SnapshotConfig::default(),
+                |s| {
+                    attempts += 1;
+                    if attempts == 1 || repeat {
+                        let nested = dir.path().join(format!("nested-{attempts}"));
+                        fs::create_dir(&nested).unwrap();
+                        git(&nested, &["init", "-q"]);
+                    }
+                    Ok(s.entries()
+                        .iter()
+                        .filter(|entry| entry.reason == "undeclared-nested-repository")
+                        .count())
+                },
+            )
+            .map(|(_, count)| count)
+            .map_err(|error| error.document.code);
+            (result, attempts)
+        })
+        .collect();
+    assert_eq!(
+        results,
+        vec![(Ok(1), 2), (Err("snapshot-unstable".into()), 2)],
+        "unborn repository changes must retake once and refuse repeated changes"
+    );
+}

@@ -64,6 +64,7 @@ pub struct Snapshot {
     entries: Vec<InventoryEntry>,
     modes: BTreeMap<String, String>,
     object_paths: BTreeSet<String>,
+    captured_tree: Option<worktree::CapturedTree>,
     file_mode: bool,
 }
 impl Snapshot {
@@ -138,8 +139,8 @@ pub fn capture<T>(
                         snapshot.read(&entry.path)?;
                     }
                 }
-                let tree = worktree::tree(&snapshot.repo, snapshot.file_mode, config)?.id;
-                if snapshot.manifest.tree != format!("{}:{tree}", snapshot.manifest.object_format) {
+                let tree = worktree::tree(&snapshot.repo, snapshot.file_mode, config)?;
+                if snapshot.captured_tree.as_ref() != Some(&tree) {
                     return Err(SnapshotError::new(
                         "snapshot-changed",
                         "worktree tree changed",
@@ -248,6 +249,7 @@ fn capture_once(
         entries: Vec::new(),
         modes: BTreeMap::new(),
         object_paths: BTreeSet::new(),
+        captured_tree: None,
         file_mode: true,
         manifest: SnapshotManifest {
             schema_version: "warrant.snapshot/1".into(),

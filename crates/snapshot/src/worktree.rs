@@ -51,11 +51,11 @@ pub(crate) fn capture(repo: &Path, config: &SnapshotConfig) -> Result<Snapshot, 
             entry.reason = "undeclared-nested-repository".into();
         }
     }
-    for path in captured.unborn {
+    for path in &captured.unborn {
         snapshot.manifest.excluded.submodules += 1;
         snapshot.modes.insert(path.clone(), "160000".into());
         snapshot.entries.push(InventoryEntry {
-            path,
+            path: path.clone(),
             blob: None,
             class: InventoryClass::Submodule,
             language: None,
@@ -69,7 +69,7 @@ pub(crate) fn capture(repo: &Path, config: &SnapshotConfig) -> Result<Snapshot, 
             vendored_from: None,
         });
     }
-    snapshot.object_paths = captured.carried;
+    snapshot.object_paths = captured.carried.clone();
     snapshot.file_mode = file_mode;
     snapshot.manifest.kind = SnapshotKind::Worktree;
     snapshot.manifest.capture.kind = captured.kind.into();
@@ -98,9 +98,11 @@ pub(crate) fn capture(repo: &Path, config: &SnapshotConfig) -> Result<Snapshot, 
         });
     }
     snapshot.entries.sort_by(|a, b| a.path.cmp(&b.path));
+    snapshot.captured_tree = Some(captured);
     Ok(snapshot)
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct CapturedTree {
     pub id: String,
     carried: BTreeSet<String>,

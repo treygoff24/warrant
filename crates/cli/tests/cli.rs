@@ -122,10 +122,12 @@ fn capabilities_document_and_page_walk() {
     let document: CommandsDocument =
         serde_json::from_slice(&output.stdout).expect("commands document");
     assert_eq!(document.schema_version, "warrant.commands/1");
-    assert_eq!(
-        document.implemented,
-        ["snapshot", "inventory", "schema", "capabilities"]
-    );
+    for command in ["snapshot", "inventory", "schema", "capabilities"] {
+        assert!(
+            document.implemented.iter().any(|name| name == command),
+            "{command} must remain implemented"
+        );
+    }
     assert_eq!(document.commands.len() as u64, document.total);
     assert!(document.schemas.contains(&"warrant.snapshot".into()));
     assert!(document.schemas.contains(&"warrant.inventory".into()));

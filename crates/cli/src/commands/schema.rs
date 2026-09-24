@@ -13,7 +13,10 @@ pub fn run(args: Args, _format: Option<Format>) -> crate::error::Result<()> {
         CommandError::evaluation(
             "not-implemented",
             error.to_string(),
-            Some("run `warrant capabilities` to inspect implemented schemas".into()),
+            Some(
+                "run `warrant capabilities` and read `schemas` for the implemented schema names"
+                    .into(),
+            ),
         )
     })?;
     let bytes = warrant_core::schema::canonical_bytes(&schema)

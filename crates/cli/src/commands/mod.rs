@@ -14,6 +14,7 @@ pub mod inventory;
 pub mod judgment;
 pub mod map;
 pub mod model;
+mod page;
 pub mod policy;
 pub mod propose;
 pub mod query;

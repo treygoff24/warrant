@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CommandsDocument",
+  "description": "The command and schema capabilities exposed by this executable.",
+  "type": "object",
+  "properties": {
+    "adapters": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CommandRecord"
+      }
+    },
+    "implemented": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "next_cursor": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "schemas": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "total": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "truncated": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "commands",
+    "implemented",
+    "adapters",
+    "schemas",
+    "truncated",
+    "total"
+  ],
+  "$defs": {
+    "CommandRecord": {
+      "description": "One registered CLI command.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/CommandStatus"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "status"
+      ]
+    },
+    "CommandStatus": {
+      "description": "Implementation state of a registered CLI command.",
+      "type": "string",
+      "enum": [
+        "implemented",
+        "stub"
+      ]
+    }
+  }
+}

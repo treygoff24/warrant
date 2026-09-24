@@ -221,6 +221,12 @@ pub struct InventoryDocument {
     pub schema_version: String,
     pub entries: Vec<InventoryEntry>,
     pub summary: InventorySummary,
+    #[serde(default)]
+    pub truncated: bool,
+    #[serde(default)]
+    pub total: u64,
+    #[serde(default)]
+    pub next_cursor: Option<u64>,
 }
 
 /// One unsupported construct and its explicit treatment.
@@ -248,6 +254,36 @@ pub struct CapabilityReport {
     pub supports: Vec<String>,
     pub unsupported: Vec<UnsupportedCapability>,
     pub limits: String,
+}
+
+/// Implementation state of a registered CLI command.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CommandStatus {
+    Implemented,
+    Stub,
+}
+
+/// One registered CLI command.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommandRecord {
+    pub name: String,
+    pub status: CommandStatus,
+}
+
+/// The command and schema capabilities exposed by this executable.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommandsDocument {
+    pub schema_version: String,
+    pub commands: Vec<CommandRecord>,
+    pub implemented: Vec<String>,
+    pub adapters: Vec<String>,
+    pub schemas: Vec<String>,
+    pub truncated: bool,
+    pub total: u64,
+    pub next_cursor: Option<u64>,
 }
 
 /// A bounded source location relevant to an error.

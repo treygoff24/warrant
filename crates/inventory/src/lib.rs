@@ -340,8 +340,11 @@ pub fn build(
     let summary = summarize(&entries, unit_aliases, generated_absent);
     let document = InventoryDocument {
         schema_version: "warrant.inventory/1".into(),
+        total: entries.len() as u64,
         entries,
         summary,
+        truncated: false,
+        next_cursor: None,
     };
     let digest = inventory_digest(&document)?;
     Ok(BuiltInventory {

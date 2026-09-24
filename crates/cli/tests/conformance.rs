@@ -4,6 +4,7 @@ use std::{
     os::unix::fs::symlink,
     path::{Path, PathBuf},
     process::{Command, Output},
+    sync::OnceLock,
 };
 
 use serde::Deserialize;
@@ -290,13 +291,14 @@ fn apply_setup(repository: &Path, temporary: &Path, setup: &Setup) {
                 "submodule fixture",
             ],
         );
-        let output = Command::new("git")
+        let mut command = Command::new("git");
+        command
             .args(["-c", "protocol.file.allow=always", "submodule", "add", "-q"])
             .arg(&source)
             .arg(path)
-            .current_dir(repository)
-            .output()
-            .expect("add local submodule");
+            .current_dir(repository);
+        neutralize_git_environment(&mut command);
+        let output = command.output().expect("add local submodule");
         assert!(
             output.status.success(),
             "git submodule add: {}",
@@ -314,12 +316,13 @@ fn write_file(root: &Path, path: &str, contents: &[u8]) {
 }
 
 fn run_cli(repository: &Path, cache: &Path, args: &[String]) -> Observation {
-    let output = Command::new(env!("CARGO_BIN_EXE_warrant"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_warrant"));
+    command
         .args(args)
         .current_dir(repository)
-        .env("XDG_CACHE_HOME", cache.join("cache"))
-        .output()
-        .expect("run warrant");
+        .env("XDG_CACHE_HOME", cache.join("cache"));
+    neutralize_git_environment(&mut command);
+    let output = command.output().expect("run warrant");
     let mut observation = output_observation(output);
     let format = git(repository, &["rev-parse", "--show-object-format"]);
     observation.index_tree = Some(format!("{format}:{}", git(repository, &["write-tree"])));
@@ -647,13 +650,10 @@ fn sort_json(values: &mut [Value]) {
 }
 
 fn git(repository: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(repository)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .output()
-        .expect("run git");
+    let mut command = Command::new("git");
+    command.args(args).current_dir(repository);
+    neutralize_git_environment(&mut command);
+    let output = command.output().expect("run git");
     assert!(
         output.status.success(),
         "git {args:?}: {}",
@@ -663,4 +663,27 @@ fn git(repository: &Path, args: &[&str]) -> String {
         .expect("git UTF-8")
         .trim()
         .to_owned()
+}
+
+fn neutralize_git_environment(command: &mut Command) {
+    static EMPTY_EXCLUDES: OnceLock<tempfile::NamedTempFile> = OnceLock::new();
+    let excludes = EMPTY_EXCLUDES
+        .get_or_init(|| tempfile::NamedTempFile::new().expect("create empty Git excludes file"));
+
+    command
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.excludesFile")
+        .env("GIT_CONFIG_VALUE_0", excludes.path());
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ] {
+        command.env_remove(name);
+    }
 }

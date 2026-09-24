@@ -9,21 +9,15 @@
     "edges": [
       [
         "index.ts",
-        "dynamic_import",
+        "import",
         false,
-        "dynamic-nonliteral",
+        "package-path-not-exported",
         null,
         null,
         null
       ]
     ],
-    "unsupported": [
-      [
-        "index.ts",
-        "dynamic-import-nonliteral",
-        "dynamic-nonliteral"
-      ]
-    ],
+    "unsupported": [],
     "tables": {
       "analysis_inputs": [
         [

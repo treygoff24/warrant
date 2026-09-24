@@ -9,10 +9,28 @@
     "edges": [
       [
         "index.ts",
+        "import",
+        false,
+        null,
+        "esm.ts",
+        "value",
+        null
+      ],
+      [
+        "other.cts",
+        "import",
+        false,
+        null,
+        "cjs.ts",
+        "value",
+        null
+      ],
+      [
+        "other.cts",
         "dynamic_import",
         false,
         null,
-        "dep.ts",
+        "esm.ts",
         null,
         null
       ]
@@ -21,7 +39,7 @@
     "tables": {
       "analysis_inputs": [
         [
-          1,
+          3,
           0
         ]
       ]

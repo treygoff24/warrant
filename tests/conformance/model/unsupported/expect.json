@@ -18,6 +18,14 @@
         "ts-export-assignment",
         "not-observed"
       ]
-    ]
+    ],
+    "tables": {
+      "analysis_inputs": [
+        [
+          0,
+          0
+        ]
+      ]
+    }
   }
 }

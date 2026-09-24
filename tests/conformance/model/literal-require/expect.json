@@ -11,9 +11,20 @@
         "index.ts",
         "require",
         false,
-        "resolution-pending"
+        null,
+        "dep.ts",
+        null,
+        null
       ]
     ],
-    "unsupported": []
+    "unsupported": [],
+    "tables": {
+      "analysis_inputs": [
+        [
+          1,
+          0
+        ]
+      ]
+    }
   }
 }

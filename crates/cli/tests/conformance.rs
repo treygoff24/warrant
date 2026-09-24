@@ -101,10 +101,22 @@ struct ErrorExpect {
     reason_contains: Option<String>,
 }
 
+type ModelEdgeExpect = (
+    String,
+    String,
+    bool,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ModelExpect {
-    edges: Vec<(String, String, bool, String)>,
+    edges: Vec<ModelEdgeExpect>,
+    #[serde(default)]
+    tables: BTreeMap<String, Vec<Vec<Value>>>,
     unsupported: Vec<(String, String, String)>,
 }
 
@@ -183,6 +195,32 @@ fn snapshot_conformance() {
 #[test]
 fn model_conformance() {
     run_area("model");
+}
+
+#[test]
+fn model_capabilities_remain_unqualified() {
+    let output = Command::new(env!("CARGO_BIN_EXE_warrant"))
+        .args(["model", "--capabilities"])
+        .output()
+        .expect("capability report");
+    assert!(output.status.success());
+    let report: Value = serde_json::from_slice(&output.stdout).expect("capability JSON");
+    assert_eq!(report["resolution_authority"], "unqualified");
+    assert_eq!(report["resolution_modes_qualified"], json!([]));
+    assert_eq!(report["instruments"]["oxc_resolver"], "11.24.3");
+    for claim in [
+        "tsconfig-paths",
+        "package-exports",
+        "package-imports",
+        "project-references",
+    ] {
+        assert!(
+            report["supports"]
+                .as_array()
+                .expect("supports")
+                .contains(&json!(claim))
+        );
+    }
 }
 
 #[test]
@@ -454,6 +492,13 @@ fn run_area(area: &str) {
             "unowned-source-positive",
         ],
         "model" => &[
+            "paths-alias",
+            "package-conditions",
+            "package-imports",
+            "project-references",
+            "no-export-condition",
+            "baseurl-ts6",
+            "cycle",
             "dynamic-literal",
             "dynamic-nonliteral",
             "esm-import",
@@ -1095,15 +1140,25 @@ fn check_model(expected: &ModelExpect, actual: &Value) -> Result<(), String> {
     }
     let mut edges = Vec::new();
     for row in actual["edges"]["rows"].as_array().ok_or("missing edges")? {
-        if row[4] != 0 || !row[5].is_null() || !row[6].is_null() || !row[7].is_null() {
-            return Err(format!(
-                "model edge must remain unresolved without a target: {row}"
-            ));
+        if (row[4] == 0
+            && (row[3].is_null() || !row[5].is_null() || !row[6].is_null() || !row[7].is_null()))
+            || (row[4] == 1 && (!row[3].is_null() || (row[5].is_null() && row[7].is_null())))
+            || (row[4] != 0 && row[4] != 1)
+        {
+            return Err(format!("inconsistent resolution outcome: {row}"));
         }
         if row[2] != 0 && row[2] != 1 {
             return Err(format!("invalid type_only flag: {row}"));
         }
-        edges.push(json!([row[0], row[1], row[2] == 1, row[3]]));
+        edges.push(json!([
+            row[0],
+            row[1],
+            row[2] == 1,
+            row[3],
+            row[5],
+            row[6],
+            row[7]
+        ]));
     }
     let mut wanted_edges = serde_json::to_value(&expected.edges)
         .map_err(|error| error.to_string())?
@@ -1132,6 +1187,11 @@ fn check_model(expected: &ModelExpect, actual: &Value) -> Result<(), String> {
         return Err(format!(
             "model unsupported rows were {unsupported:?}, expected {wanted_unsupported:?}"
         ));
+    }
+    for (name, wanted) in &expected.tables {
+        if actual[name]["truncated"] != false || actual[name]["rows"] != json!(wanted) {
+            return Err(format!("model {name} differs: {}", actual[name]));
+        }
     }
     Ok(())
 }

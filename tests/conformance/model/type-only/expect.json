@@ -11,21 +11,38 @@
         "index.ts",
         "import",
         true,
-        "resolution-pending"
+        null,
+        "dep.ts",
+        "Shape",
+        null
       ],
       [
         "index.ts",
         "import",
         true,
-        "resolution-pending"
+        null,
+        "dep.ts",
+        "Other",
+        null
       ],
       [
         "index.ts",
         "import",
         false,
-        "resolution-pending"
+        null,
+        "dep.ts",
+        "foo",
+        null
       ]
     ],
-    "unsupported": []
+    "unsupported": [],
+    "tables": {
+      "analysis_inputs": [
+        [
+          3,
+          0
+        ]
+      ]
+    }
   }
 }

@@ -6,10 +6,14 @@ use pretty_assertions::assert_eq;
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 use warrant_core::manifest::WarrantManifest;
-use warrant_core::nouns::{InventoryClass, InventoryEntry, SnapshotKind, SnapshotManifest};
+use warrant_core::nouns::{
+    GeneratedAbsent, GeneratedDrift, InventoryClass, InventoryEntry, InventorySummary,
+    SnapshotKind, SnapshotManifest,
+};
 use warrant_inventory::{
-    BuildConfig, BuiltInventory, CapturedSnapshot, ClassRule, GeneratedIssueCode, InventoryError,
-    ModuleSelector, ReadError, build, discover_units, verify_generated,
+    BuildConfig, BuiltInventory, CapturedSnapshot, ClassRule, GeneratedIssue, GeneratedIssueCode,
+    InventoryError, ModuleSelector, ReadError, build, discover_units, record_verification,
+    verify_generated,
 };
 
 fn write(root: &Path, path: &str, contents: &str) {
@@ -1439,15 +1443,32 @@ fn completeness_counts_equal_entries_and_digest_is_stable() {
         None,
     ));
 
-    let first =
-        build_on_disk(root.path(), &listing, &empty_manifest(), &config).expect("first inventory");
+    // A declared generated file the snapshot lacks is listed with reason
+    // `generated-absent`; like the ignored entry, it is not a file the snapshot holds.
+    let manifest = manifest(
+        "  unknown: report\n  generated:\n    - files: [\"gen/missing.ts\"]\n      producer: \"true\"",
+    );
+    let first = build_on_disk(root.path(), &listing, &manifest, &config).expect("first inventory");
     let second =
-        build_on_disk(root.path(), &listing, &empty_manifest(), &config).expect("second inventory");
+        build_on_disk(root.path(), &listing, &manifest, &config).expect("second inventory");
+    assert!(
+        first
+            .document
+            .entries
+            .iter()
+            .any(|entry| entry.path == "gen/missing.ts" && entry.reason == "generated-absent"),
+        "the absent generated entry must be listed"
+    );
+    // Spec 5.5: `by_class` breaks down exactly the files counted, so it sums to `files`
+    // and has no ignored or absent-generated rows.
     let counted: u64 = first.document.summary.by_class.values().sum();
-    assert_eq!(counted, first.document.entries.len() as u64);
-    // The ignored entry is listed and classed, but it is outside the snapshot.
-    assert_eq!(first.document.summary.by_class["ignored"], 1);
-    assert_eq!(first.document.summary.files, counted - 1);
+    assert_eq!(counted, first.document.summary.files);
+    assert_eq!(
+        first.document.summary.files,
+        first.document.entries.len() as u64 - 2
+    );
+    assert_eq!(first.document.summary.by_class.get("ignored"), None);
+    assert_eq!(first.document.summary.by_class.get("generated"), None);
     assert_eq!(first.document.summary.unowned_source, ["src/unowned.ts"]);
     assert_eq!(first.document.summary.unknown, ["mystery.xyz"]);
     assert_eq!(first.document.summary.submodules[0].path, "external");
@@ -1570,11 +1591,7 @@ fn ignored_count_is_unknown_outside_the_worktree() {
         )
         .expect("inventory");
         assert_eq!(built.document.summary.ignored_files, expected, "{kind:?}");
-        assert_eq!(
-            built.document.snapshot.as_ref(),
-            Some(&snapshot),
-            "{kind:?}"
-        );
+        assert_eq!(built.document.snapshot, snapshot, "{kind:?}");
     }
 }
 
@@ -1661,4 +1678,50 @@ fn generated_provenance_keeps_undeclared_and_empty_inputs_apart() {
     };
     assert_eq!(inputs("gen/undeclared.ts"), None);
     assert_eq!(inputs("gen/none.ts"), Some(Vec::new()));
+}
+
+/// B25: verification's absences join discovery's rows unless a discovery row for the
+/// same producer already covers the path; drift is recorded as the verified result.
+#[test]
+fn verification_absences_join_discovery_rows_without_duplicates() {
+    let absent = |declaration: &str, producer: &str| GeneratedAbsent {
+        declaration: declaration.into(),
+        producer: producer.into(),
+    };
+    let issue = |code, path: &str, producer: &str| GeneratedIssue {
+        code,
+        path: path.into(),
+        producer: producer.into(),
+    };
+    let mut summary = InventorySummary {
+        generated_absent: vec![absent("out/*.js", "build"), absent("lit.ts", "lit")],
+        ..InventorySummary::default()
+    };
+    record_verification(
+        &mut summary,
+        vec![
+            issue(GeneratedIssueCode::GeneratedAbsent, "gen/b.ts", "gen"),
+            issue(GeneratedIssueCode::GeneratedAbsent, "lit.ts", "lit"),
+            issue(GeneratedIssueCode::GeneratedAbsent, "out/a.js", "build"),
+            issue(GeneratedIssueCode::GeneratedAbsent, "out/c.js", "other"),
+            issue(GeneratedIssueCode::GeneratedDrift, "gen/a.ts", "gen"),
+        ],
+    )
+    .expect("record verification");
+    assert_eq!(
+        summary.generated_absent,
+        [
+            absent("out/*.js", "build"),
+            absent("lit.ts", "lit"),
+            absent("gen/b.ts", "gen"),
+            absent("out/c.js", "other"),
+        ]
+    );
+    assert_eq!(
+        summary.generated_drift,
+        Some(vec![GeneratedDrift {
+            path: "gen/a.ts".into(),
+            producer: "gen".into(),
+        }])
+    );
 }

@@ -143,7 +143,14 @@ def observe(binary, member, corpus_dir, destination):
         assert inventory["total"] > 0 and not inventory["truncated"], (
             "empty or truncated inventory"
         )
-        assert sum(inventory["summary"]["by_class"].values()) == inventory["total"]
+        # Spec 5.5: by_class breaks down the files the snapshot holds. The listing also
+        # carries each ignored path, and corpus/warrant.yaml declares no generated files,
+        # so the worktree listing is exactly files plus ignored files.
+        summary = inventory["summary"]
+        assert sum(summary["by_class"].values()) == summary["files"], "by_class does not sum to files"
+        assert inventory["total"] == summary["files"] + summary["ignored_files"], (
+            "total is not files plus ignored files"
+        )
         # The unowned-source count returns at W2.1 with CLI module selectors;
         # until then it only restates by_class.source for corpus/warrant.yaml.
         return {

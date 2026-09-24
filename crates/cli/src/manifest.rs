@@ -151,11 +151,38 @@ fn git_ok(root: &Path, args: &[&str], location: &str) -> crate::error::Result<Ve
             "manifest-io",
             format!(
                 "{location}: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
+                git_reason(root, &String::from_utf8_lossy(&output.stderr))
             ),
             None,
         ))
     }
+}
+
+/// Git's stderr as one reason line (spec 12.1) that names no absolute path: the
+/// repository root is dropped, and a Git directory outside it (a linked worktree's
+/// main checkout) becomes `<git-dir>`.
+fn git_reason(root: &Path, stderr: &str) -> String {
+    let mut text = stderr.to_owned();
+    let common = repository::git_in(
+        root,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .ok()
+    .filter(|output| output.status.success())
+    .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    .filter(|common| !common.is_empty() && !Path::new(common).starts_with(root));
+    if let Some(common) = common {
+        text = text.replace(&common, "<git-dir>");
+    }
+    let root = root.to_string_lossy();
+    text = text
+        .replace(&format!("{root}/"), "")
+        .replace(root.as_ref(), ".");
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn parse(text: &str, location: String) -> crate::error::Result<WarrantManifest> {

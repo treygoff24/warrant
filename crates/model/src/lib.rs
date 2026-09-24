@@ -596,7 +596,7 @@ fn canonical_digest(connection: &Connection) -> Result<String> {
     let mut dump = Vec::with_capacity(TABLES.len());
     for (table, order) in TABLES {
         let sql = if *table == "meta" {
-            "SELECT * FROM meta WHERE key != 'model_digest' AND key NOT LIKE '%_at' ORDER BY key"
+            "SELECT * FROM meta WHERE key != 'model_digest' AND substr(key, -3) != '_at' ORDER BY key"
                 .to_owned()
         } else {
             format!("SELECT * FROM {table} ORDER BY {order}")

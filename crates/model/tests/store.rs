@@ -468,3 +468,15 @@ fn conflicting_capabilities_are_rejected_in_both_orders() {
         );
     }
 }
+
+fn meta_digest(key: &str, value: &str) -> String {
+    let temp = TempDir::new().unwrap();
+    let mut builder = ModelBuilder::create(temp.path().join("meta.sqlite")).unwrap();
+    builder.write_meta(key, value).unwrap();
+    builder.finish().unwrap()
+}
+
+#[test]
+fn digest_includes_meta_keys_ending_in_at_without_an_underscore() {
+    assert_ne!(meta_digest("format", "one"), meta_digest("format", "two"));
+}

@@ -516,6 +516,84 @@ fn process_group_interrupt_during_capture_exits_130() {
     }
 }
 
+/// B30 (spec 3.6): a signal recorded after the blocked document is on its way still
+/// exits 130. The document is larger than a pipe buffer, so once the first byte has been
+/// read, warrant is certainly still inside the document write when the group signal
+/// arrives; a signal during capture would not bind the post-write check.
+#[cfg(unix)]
+#[test]
+fn interrupt_during_blocked_document_write_exits_130() {
+    use std::{io::Read, os::unix::process::CommandExt, process::Stdio};
+    use wait_timeout::ChildExt;
+
+    let repository = repository();
+    let root = repository.path();
+    for index in 0..700 {
+        let path = root.join(format!("src/module_{index:04}.ts"));
+        fs::create_dir_all(path.parent().expect("parent")).expect("source directory");
+        fs::write(path, format!("export const value{index} = {index};\n")).expect("source");
+    }
+    fs::create_dir_all(root.join("gen")).expect("generated directory");
+    fs::write(root.join("gen/out.txt"), "committed\n").expect("generated output");
+    fs::create_dir_all(root.join("warrant")).expect("manifest directory");
+    fs::write(
+        root.join("warrant/warrant.yaml"),
+        "schema_version: warrant.manifest/1\ninventory:\n  generated:\n    - files: [\"gen/out.txt\"]\n      producer: \"mkdir -p gen && echo drifted > gen/out.txt\"\n      reproducible: true\n",
+    )
+    .expect("manifest");
+    git(root, &["add", "--all"]);
+    commit(root, "drifting producer");
+
+    let cache = tempfile::tempdir().expect("temp cache");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_warrant"));
+    neutralize_git_environment(&mut command);
+    let mut child = command
+        .args(["inventory", "--verify-generated"])
+        .current_dir(root)
+        .env("XDG_CACHE_HOME", cache.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .expect("start warrant");
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let mut first = [0_u8; 1];
+    stdout.read_exact(&mut first).expect("document started");
+    let group = nix::unistd::Pid::from_raw(i32::try_from(child.id()).expect("pid fits i32"));
+    nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGINT)
+        .expect("signal the warrant process group");
+    let mut rest = Vec::new();
+    stdout.read_to_end(&mut rest).expect("read document");
+    let status = child
+        .wait_timeout(std::time::Duration::from_secs(30))
+        .expect("wait for warrant")
+        .expect("warrant exited");
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("piped stderr")
+        .read_to_string(&mut stderr)
+        .expect("read stderr");
+    // Precondition: the document outgrew the pipe, so the write was still in progress.
+    assert!(
+        rest.len() > 2 * 65_536,
+        "document too small: {}",
+        rest.len() + 1
+    );
+    let mut document = first.to_vec();
+    document.extend(rest);
+    let document: serde_json::Value =
+        serde_json::from_slice(&document).expect("inventory document");
+    assert_eq!(
+        document["summary"]["generated_drift"][0]["path"],
+        "gen/out.txt"
+    );
+    assert_eq!(status.code(), Some(130), "{stderr}");
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).expect("cancellation");
+    assert_eq!(error["code"], "cancelled");
+}
+
 #[cfg(unix)]
 #[test]
 fn broken_pipe_is_not_an_internal_failure() {

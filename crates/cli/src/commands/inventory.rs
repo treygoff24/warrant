@@ -105,6 +105,8 @@ pub fn run(args: Args, format: Option<Format>) -> crate::error::Result<()> {
     document.next_cursor = page.next_cursor;
     output::document(&document, format)?;
     if blocked {
+        // A signal recorded while the document was written outranks the verdict.
+        cancel::check()?;
         output::exit_blocked();
     }
     Ok(())

@@ -4,7 +4,9 @@ use tempfile::TempDir;
 use warrant_core::{manifest::SnapshotConfig, nouns::SnapshotKind};
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    neutralize_git_environment(&mut command);
+    let output = command
         .arg("-C")
         .arg(repo)
         .args([
@@ -23,6 +25,26 @@ fn git(repo: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+pub(crate) fn neutralize_git_environment(command: &mut Command) {
+    static EMPTY_CONFIG: std::sync::OnceLock<tempfile::NamedTempFile> = std::sync::OnceLock::new();
+    let config = EMPTY_CONFIG.get_or_init(|| tempfile::NamedTempFile::new().unwrap());
+    command
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", config.path());
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_COUNT",
+    ] {
+        command.env_remove(name);
+    }
 }
 
 fn repo() -> TempDir {
@@ -1203,5 +1225,17 @@ fn index_capture_succeeds_with_a_locked_unchanged_real_index() {
         (result, fs::read(&real_index).unwrap()),
         (Ok(format!("sha1:{tree}")), original),
         "index capture must succeed under index.lock without changing real index bytes"
+    );
+}
+
+#[test]
+fn fixture_git_ignores_ambient_global_excludes() {
+    let dir = repo();
+    fs::write(dir.path().join("ambient.ts"), "export {};\n").unwrap();
+    git(dir.path(), &["add", "-A"]);
+    assert_eq!(
+        git(dir.path(), &["ls-files", "ambient.ts"]),
+        "ambient.ts",
+        "fixture Git must stage TypeScript files despite ambient global excludes"
     );
 }

@@ -37,6 +37,8 @@ pub(crate) fn run_stream(
         }
     });
     let mut command = Command::new("git");
+    #[cfg(test)]
+    crate::tests::neutralize_git_environment(&mut command);
     command
         .arg("-C")
         .arg(repo)

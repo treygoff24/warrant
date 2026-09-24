@@ -167,6 +167,46 @@ fn base_url_lookup_is_removed_from_ts6_but_still_anchors_paths() {
 }
 
 #[test]
+fn declared_ts5_ranges_preserve_base_url_lookup() {
+    ts5_ranges_preserve_base_url_lookup(false);
+}
+
+#[test]
+fn installed_ts5_ranges_preserve_base_url_lookup() {
+    ts5_ranges_preserve_base_url_lookup(true);
+}
+
+fn ts5_ranges_preserve_base_url_lookup(installed: bool) {
+    for version in [
+        ">=5.0.0", ">5", "<=5.6.0", "<5.9.0", "=5.6.0", "v5.6.0", "^5.6.0", "~5.6.0",
+    ] {
+        let (path, package) = if installed {
+            (
+                "node_modules/typescript/package.json",
+                format!(r#"{{"version":"{version}"}}"#),
+            )
+        } else {
+            (
+                "package.json",
+                format!(r#"{{"devDependencies":{{"typescript":"{version}"}}}}"#),
+            )
+        };
+        let (_, reports) = resolve(&[
+            (path, &package),
+            (
+                "tsconfig.json",
+                r#"{"compilerOptions":{"baseUrl":"src","paths":{"@leaf":["leaf"]}}}"#,
+            ),
+            ("index.ts", "import '@leaf'; import 'leaf';"),
+            ("src/leaf.ts", "export const value = 1;"),
+        ]);
+        for edge in &reports[0].edges {
+            assert_eq!(edge.to_file, Some(4), "{version}: {edge:?}");
+        }
+    }
+}
+
+#[test]
 fn project_references_select_the_referenced_config_not_the_solution() {
     let (_, reports) = resolve(&[
         (

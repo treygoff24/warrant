@@ -35,7 +35,12 @@ impl FileSystem for CapturedFiles {
         if self.0.contains_key(path) {
             return Ok(FileMetadata::new(true, false, false));
         }
-        if self.0.keys().any(|file| file.starts_with(path)) {
+        if self
+            .0
+            .range(path.to_path_buf()..)
+            .next()
+            .is_some_and(|(file, _)| file.starts_with(path))
+        {
             return Ok(FileMetadata::new(false, true, false));
         }
         Err(io::ErrorKind::NotFound.into())
@@ -278,7 +283,7 @@ fn legacy_typescript(path: &Path, packages: &BTreeMap<PathBuf, serde_json::Value
             });
         if let Some(version) = installed.or(declared) {
             return version
-                .trim_start_matches(['^', '~'])
+                .trim_start_matches(['>', '<', '=', 'v', '^', '~'])
                 .split('.')
                 .next()
                 .and_then(|major| major.parse::<u64>().ok())

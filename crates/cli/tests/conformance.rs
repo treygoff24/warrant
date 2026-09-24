@@ -207,7 +207,14 @@ fn model_capabilities_remain_unqualified() {
     let report: Value = serde_json::from_slice(&output.stdout).expect("capability JSON");
     assert_eq!(report["resolution_authority"], "unqualified");
     assert_eq!(report["resolution_modes_qualified"], json!([]));
-    assert_eq!(report["instruments"]["oxc_resolver"], "11.24.3");
+    let workspace_manifest =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml"))
+            .expect("workspace manifest");
+    let resolver_pin = workspace_manifest
+        .lines()
+        .find_map(|line| line.strip_prefix("oxc_resolver = \"=")?.strip_suffix('"'))
+        .expect("exact workspace oxc_resolver pin");
+    assert_eq!(report["instruments"]["oxc_resolver"], resolver_pin);
     for claim in [
         "tsconfig-paths",
         "package-exports",
